@@ -1,0 +1,19 @@
+import 'package:flutter/material.dart';
+
+/// Lớp đại diện cho một vật thể AI phát hiện được
+class Recognition {
+  final int id;           // Số thứ tự của lớp (VD: 0 cho 'người')
+  final String label;     // Tên của vật thể (VD: 'Người đi bộ')
+  final double score;     // Độ tự tin của AI (từ 0.0 đến 1.0)
+  final Rect location;    // Toạ độ của khung chữ nhật (Bounding Box) bao quanh vật
+
+  Recognition(this.id, this.label, this.score, this.location);
+
+  /// Helper: Tính xem cái khung này chiếm bao nhiêu % diện tích màn hình
+  /// Hàm này RẤT QUAN TRỌNG để làm F2 (Đánh giá mức độ nguy hiểm)
+  double getAreaRatio(double screenWidth, double screenHeight) {
+    double boxArea = location.width * location.height;
+    double screenArea = screenWidth * screenHeight;
+    return boxArea / screenArea;
+  }
+}
