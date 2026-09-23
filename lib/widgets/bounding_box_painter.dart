@@ -1,70 +1,80 @@
 import 'package:flutter/material.dart';
-import '../models/Recognition.dart';
+import '../models/scene_info.dart';
 
+/// Vẽ khung vật thể (màu theo mức nguy hiểm) + lưới 3 cột free-space.
+/// Phục vụ người nhìn kém, người đi cùng và demo.
 class BoundingBoxPainter extends CustomPainter {
-  final List<Recognition> recognitions;
+  final SceneAssessment scene;
 
-  BoundingBoxPainter(this.recognitions);
+  /// Chủ thể của cảnh báo hiện tại (VD 'track:12') — vật này được tô đậm
+  final String? alertSubject;
+  final AlertLevel? alertLevel;
+
+  BoundingBoxPainter(this.scene, {this.alertSubject, this.alertLevel});
+
+  static Color colorOf(AlertLevel? level) => switch (level) {
+        AlertLevel.danger => Colors.redAccent,
+        AlertLevel.caution => Colors.orangeAccent,
+        _ => Colors.lightGreenAccent,
+      };
 
   @override
   void paint(Canvas canvas, Size size) {
-    // 1. Cọ vẽ khung chữ nhật (Màu đỏ, nét viền)
-    final boxPaint = Paint()
-      ..color = Colors.redAccent
-      ..style = PaintingStyle.stroke
-      ..strokeWidth = 3.0;
+    _paintColumns(canvas, size);
 
-    // 2. Cọ vẽ nền cho chữ (Màu đỏ, tô kín)
-    final textBackgroundPaint = Paint()
-      ..color = Colors.redAccent
-      ..style = PaintingStyle.fill;
-
-    // Lặp qua tất cả các vật thể AI nhận diện được
-    for (var recognition in recognitions) {
-      // Tọa độ thật của vật thể trên màn hình
-      final rect = recognition.location;
+    for (final o in scene.objects) {
+      final isAlert = 'track:${o.track.id}' == alertSubject;
+      final color = isAlert
+          ? colorOf(alertLevel)
+          : (o.isRelevant ? Colors.lightBlueAccent : Colors.white54);
+      final rect = o.track.box;
 
       // --- Vẽ Khung Chữ Nhật ---
-      canvas.drawRect(rect, boxPaint);
-
-      // --- Vẽ Nhãn (Tên vật + Độ tự tin) ---
-      // Chuẩn bị nội dung chữ
-      final textSpan = TextSpan(
-        text: '${recognition.label} ${(recognition.score * 100).toStringAsFixed(0)}%',
-        style: const TextStyle(
-          color: Colors.white,
-          fontSize: 14.0,
-          fontWeight: FontWeight.bold,
-        ),
+      canvas.drawRect(
+        rect,
+        Paint()
+          ..color = color
+          ..style = PaintingStyle.stroke
+          ..strokeWidth = isAlert ? 5.0 : 3.0,
       );
 
+      // --- Vẽ Nhãn (Tên vật + khoảng cách + tới gần) ---
       final textPainter = TextPainter(
-        text: textSpan,
+        text: TextSpan(
+          text: '${o.label} · ${o.distance.vi}${o.approaching ? ' ↑' : ''}',
+          style: const TextStyle(color: Colors.black, fontSize: 14.0, fontWeight: FontWeight.bold),
+        ),
         textDirection: TextDirection.ltr,
-      );
-      textPainter.layout();
+      )..layout(maxWidth: size.width);
 
-      // Vẽ nền đỏ lót dưới chữ cho dễ nhìn
-      final textBackgroundRect = Rect.fromLTWH(
-        rect.left,
-        rect.top - textPainter.height, // Đẩy nền lên trên mí của khung
-        textPainter.width + 8,         // Rộng hơn chữ một xíu
-        textPainter.height + 4,
+      final labelTop = (rect.top - textPainter.height - 4).clamp(0.0, size.height);
+      canvas.drawRect(
+        Rect.fromLTWH(rect.left, labelTop, textPainter.width + 8, textPainter.height + 4),
+        Paint()..color = color,
       );
-      canvas.drawRect(textBackgroundRect, textBackgroundPaint);
-
-      // Vẽ chữ đè lên trên nền
-      textPainter.paint(
-        canvas,
-        Offset(rect.left + 4, rect.top - textPainter.height + 2),
-      );
+      textPainter.paint(canvas, Offset(rect.left + 4, labelTop + 2));
     }
   }
 
-  // Hàm này quyết định xem có cần vẽ lại khung không
-  // True = Luôn vẽ lại mỗi khi có dữ liệu recognition mới
-  @override
-  bool shouldRepaint(covariant BoundingBoxPainter oldDelegate) {
-    return true; 
+  /// Tô mờ cột bị chắn, viền nhẹ 2 đường chia cột
+  void _paintColumns(Canvas canvas, Size size) {
+    final colW = size.width / 3;
+    for (int c = 0; c < 3; c++) {
+      final load = scene.columnLoad[c];
+      if (load < 1.0) continue;
+      canvas.drawRect(
+        Rect.fromLTWH(c * colW, 0, colW, size.height),
+        Paint()..color = (load >= 2 ? Colors.red : Colors.orange).withValues(alpha: 0.12),
+      );
+    }
+    final line = Paint()
+      ..color = Colors.white24
+      ..strokeWidth = 1;
+    for (int c = 1; c < 3; c++) {
+      canvas.drawLine(Offset(c * colW, 0), Offset(c * colW, size.height), line);
+    }
   }
+
+  @override
+  bool shouldRepaint(covariant BoundingBoxPainter oldDelegate) => true;
 }

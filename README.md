@@ -4,6 +4,28 @@
 
 ---
 
+## 🧭 Chức Năng (theo `SMART-EYE-CHUC-NANG-TONG-HOP.md`)
+
+| | Chức năng | Cài đặt trong code |
+|---|---|---|
+| F1 🔴 | Nhìn & nhận diện | YOLOv8n INT8 + TFLite on-device (`detector_service.dart`) |
+| F2 🔴 | Cảnh báo + chỉ hướng | Tracker IoU/centroid (CN5), rules engine (CN4), free-space 3 cột (CN6), khoảng cách theo % chiều cao box (CN7) |
+| F3 🟠 | Mô tả + nói ra | Caption template (CN8), flutter_tts tiếng Việt (CN9), Speech Manager ưu tiên/barge-in/dedupe (CN10) — mặc định **chỉ mô tả khi được hỏi** |
+| F4 🟡 | Lưu lịch sử | Event log JSONL (CN11), ảnh ghi nhớ thumbnail + GPS (CN12), recap template (CN13), tự dọn: tối đa 20 chuyến / 30 ngày / 40 ảnh mỗi chuyến |
+
+**Nguyên tắc "nói ít, đúng lúc":** mỗi frame chỉ chọn 1 cảnh báo quan trọng nhất; vật phải xuất hiện ≥ 3 frame mới được báo;
+cùng 1 vật chỉ nhắc lại sau 6 giây (nguy hiểm) / 10 giây (chú ý) trừ khi mức nguy hiểm tăng; cảnh báo nguy hiểm ngắt lời mọi câu khác;
+khi vật rất gần ngay trước mặt luôn nói **"Dừng lại"** và chỉ nêu phía trống, không ra lệnh rẽ.
+
+### Cách dùng trên màn hình chính
+- **Chạm 2 lần vào màn hình** hoặc nút **Xung quanh**: nghe mô tả xung quanh (F3 on-demand).
+- **Giữ lâu vào màn hình** hoặc nút **Tóm tắt**: nghe tóm tắt chuyến đi hiện tại.
+- Nút **Lịch sử**: danh sách chuyến đi, nghe tóm tắt, xem ảnh ghi nhớ, nghe lại toàn bộ.
+- Chip **Đầy đủ / Yên lặng**: chế độ yên lặng chỉ báo khi nguy hiểm.
+- Chip **Mô tả khi hỏi / Tự mô tả**: bật tự mô tả tần suất thấp (~45 giây, chỉ khi không có cảnh báo gần đây).
+
+---
+
 ## 📋 Cấu Trúc Dự Án
 
 ```
@@ -13,13 +35,29 @@ smart_eye/
 │   └── 📁 labels/coco.txt             # 80 nhãn vật thể chuẩn COCO
 ├── 📁 lib/
 │   ├── 📄 main.dart                    # Khởi tạo ứng dụng & danh sách Camera
-│   ├── 📁 models/Recognition.dart      # Data model vật thể nhận diện
-│   ├── 📁 utils/image_utils.dart       # Converter YUV420 → RGB → Float32 & Xoay ảnh
+│   ├── 📁 models/
+│   │   ├── Recognition.dart            # Kết quả nhận diện 1 frame
+│   │   ├── tracked_object.dart         # Vật được theo dõi qua nhiều frame
+│   │   ├── scene_info.dart             # Vị trí, khoảng cách, mức cảnh báo, kết quả đánh giá
+│   │   └── trip.dart                   # Sự kiện & tóm tắt chuyến đi
+│   ├── 📁 utils/
+│   │   ├── image_utils.dart            # YUV420 → RGB → Float32, xoay ảnh, thumbnail JPEG
+│   │   └── label_catalog.dart          # Nhãn tiếng Việt + phân loại nguy hiểm
 │   ├── 📁 services/
-│   │   ├── detector_service.dart       # YOLOv8 TFLite Engine & NMS & Dequantization
-│   │   └── tts_service.dart            # Text-To-Speech đọc tiếng Việt chống lặp
-│   ├── 📁 widgets/bounding_box_painter.dart # Cọ vẽ khung đỏ & nhãn vật thể
-│   └── 📁 screens/camera_screen.dart   # Màn hình chính & xử lý luồng Camera
+│   │   ├── detector_service.dart       # F1: YOLOv8 TFLite Engine & NMS & Dequantization
+│   │   ├── object_tracker.dart         # F2/CN5: Tracker IoU + centroid
+│   │   ├── hazard_engine.dart          # F2/CN4+CN6+CN7: Rules, free-space, khoảng cách
+│   │   ├── caption_builder.dart        # F3/CN8 + F4/CN13: Câu mô tả & recap
+│   │   ├── tts_service.dart            # F3/CN9: flutter_tts tiếng Việt
+│   │   ├── speech_manager.dart         # F3/CN10: Ưu tiên, barge-in, dedupe
+│   │   ├── history_service.dart        # F4/CN11+CN12: Lưu JSONL + ảnh, tự dọn dẹp
+│   │   └── location_service.dart       # F4: GPS, quãng đường
+│   ├── 📁 widgets/bounding_box_painter.dart # Khung màu theo mức nguy hiểm + lưới 3 cột
+│   └── 📁 screens/
+│       ├── camera_screen.dart          # Màn hình chính & pipeline mỗi frame
+│       ├── history_screen.dart         # Danh sách chuyến đi
+│       └── trip_detail_screen.dart     # Dòng thời gian, ảnh ghi nhớ, nghe lại
+├── 📁 test/logic_test.dart             # Unit test tracker / rules / caption / recap
 └── 📄 pubspec.yaml                     # Khai báo thư viện & assets
 ```
 
@@ -78,23 +116,61 @@ flutter run
 ### 💡 Các Tiện Ích Hỗ Trợ Test Trên Màn Hình App:
 
 - **🧪 Nút `Test UI` (Góc dưới bên phải)**:
-  - Bấm nút này để kích hoạt chế độ **Giả lập Cảnh báo**.
-  - Hệ thống sẽ tự động vẽ một khung chữ nhật màu đỏ (xe ô tô 92%) và đọc câu thoại cảnh báo Tiếng Việt ra loa mà **không cần kết nối bất kỳ camera nào**.
-- **🔄 Nút `Xoay AI: 90°`**:
-  - Khi dùng Webcam máy tính hoặc iVCam hình ảnh bị nghiêng/nằm ngang, bấm nút này để xoay góc nhận diện AI (`0°` $\rightarrow$ `90°` $\rightarrow$ `180°` $\rightarrow$ `270°`) giúp AI đọc đúng vật thể.
+  - Bấm nút này để kích hoạt chế độ **Giả lập** (lặp mỗi 8 giây, chạy qua đúng pipeline tracker → rules → giọng nói):
+    1. Xe máy phía trước to dần → *"Dừng lại! Xe máy đang tới gần phía trước!"*
+    2. Ghế ở giữa cách ~2m, người sát bên trái → *"Cẩn thận, ghế phía trước, cách khoảng 2 mét. Đi chếch sang phải."*
+  - Không cần camera — nút cũng có ở màn hình loading nếu camera lỗi.
+- **🔄 Xoay màn hình**: app tự xoay theo hướng điện thoại — preview, khung vật thể, 3 cột free-space và ảnh đưa vào AI xoay cùng nhau (tính từ góc cảm biến camera + hướng máy), không cần bấm nút.
 
 ---
 
 ## ⚙️ Thông Số Kỹ Thuật AI & Cấu Hình
 
 - **Model AI**: YOLOv8 Nano (`yolov8n_int8.tflite`) - Kích thước ~3.5MB.
-- **Tập dữ liệu**: COCO Dataset (80 lớp vật thể).
-- **Input resolution**: $640 \times 640$ pixels.
+- **Tập dữ liệu**: COCO Dataset (80 lớp vật thể) — `assets/labels/coco.txt` khớp đúng tên nhãn nhúng trong model.
+- **Input**: 320×320, layout **NCHW** `[1, 3, 320, 320]`, float32 — app **tự đọc** kích thước/layout/kiểu từ model, đổi model khác (640, NHWC, int8) không cần sửa code.
+- **Ngưỡng confidence**: 0.25 (mặc định Ultralytics), chọn theo kết quả đo trên COCO128 bên dưới.
 - **Yêu cầu Android**: SDK Minimum 21 (Android 5.0 trở lên).
 - **Thư viện chính**:
   - `camera`: Truy cập luồng camera real-time.
   - `tflite_flutter`: Chạy mô hình TensorFLow Lite với gia tốc phần cứng.
   - `flutter_tts`: Chuyển văn bản thành giọng nói tiếng Việt.
+  - `path_provider` + `image`: Lưu lịch sử & ảnh ghi nhớ on-device.
+  - `geolocator`: GPS cho quãng đường chuyến đi (không bắt buộc — từ chối quyền vẫn chạy được).
+
+### Chạy unit test
+```bash
+flutter test
+```
+
+### Đánh giá model trên COCO (COCO128)
+```bash
+pip install ai-edge-litert pillow numpy
+python tool/eval_coco.py
+```
+Script tự tải COCO128 (128 ảnh COCO có nhãn chuẩn, ~7MB) và chạy đúng pipeline của app. Kết quả với model hiện tại:
+
+| Ngưỡng conf | Precision | Recall | Box sai | Recall vật lớn (≥5% khung) |
+|---|---|---|---|---|
+| 0.15 (cũ) | 0.71 | 0.39 | 149 | 0.73 |
+| **0.25 (mới)** | **0.83** | 0.34 | **64** | **0.72** |
+| 0.35 | 0.88 | 0.29 | 35 | 0.66 |
+
+Recall tổng thấp vì COCO có nhiều vật rất nhỏ và model chạy ở 320px; với vật lớn (thứ quan trọng khi đi đường) recall ~0.72.
+
+### Lưu ý về model hiện tại & cách export lại (không bắt buộc)
+- Model do Ultralytics ≥ 8.4 export lưu trọng số **ngoài flatbuffer** (buffer offset) → runtime TFLite trên Android
+  báo `Input tensor N lacks data`. Đã xử lý bằng `python tool/inline_tflite_buffers.py <file.tflite>` (output giống hệt 100%).
+  **Mỗi lần thay model mới phải chạy lại script này.**
+- Model INT8 hiện tại bị hiệu chỉnh bằng 8 ảnh nên điểm tin cậy bị chặn trần ở 0.50 → đôi khi 2 lớp hoà điểm và app chọn nhầm lớp
+  (~4% số phát hiện trên COCO128). Muốn tốt hơn thì export bản FP32. Export TFLite của Ultralytics chỉ chạy trên Linux/macOS,
+  cách nhanh nhất là **Google Colab** (miễn phí, ~5 phút):
+  ```python
+  !pip install -q ultralytics
+  from ultralytics import YOLO
+  YOLO('yolov8n.pt').export(format='tflite', imgsz=320)   # tải file *_float32.tflite về
+  ```
+  Sau đó chép vào `assets/models/yolov8n_int8.tflite` (hoặc đổi `_modelPath`), chạy `tool/inline_tflite_buffers.py`, rồi `python tool/eval_coco.py` để so sánh.
 
 ---
 

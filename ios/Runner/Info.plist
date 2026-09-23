@@ -2,6 +2,10 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
+	<key>NSCameraUsageDescription</key>
+	<string>Smart Eye dùng camera để nhận diện vật cản phía trước.</string>
+	<key>NSLocationWhenInUseUsageDescription</key>
+	<string>Smart Eye dùng vị trí để lưu lịch sử và quãng đường chuyến đi.</string>
 	<key>CADisableMinimumFrameDurationOnPhone</key>
 	<true/>
 	<key>CFBundleDevelopmentRegion</key>
