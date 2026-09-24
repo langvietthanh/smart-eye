@@ -1,9 +1,8 @@
 import 'dart:math';
 import 'dart:typed_data';
 
-import 'frame_data.dart';
 
-/// 1 vật model tìm thấy — toạ độ chuẩn hoá [0..1] trên TOÀN khung ảnh đã xoay
+/// 1 vật model tìm thấy — toạ độ chuẩn hoá [0..1] trên khung ảnh đã xoay
 class RawDetection {
   final int classId;
   final double score;
@@ -49,7 +48,6 @@ class YoloDecoder {
     double confThreshold = 0.25,
     double iouThreshold = 0.45,
     double crossClassIou = 0.8,
-    CropRect crop = CropRect.full,
     int maxDetections = 20,
   }) {
     final transposed = shape[1] > shape[2];
@@ -104,10 +102,10 @@ class YoloDecoder {
         w /= inputSize;
         h /= inputSize;
       }
-      final l = crop.left + (cx - w / 2).clamp(0.0, 1.0) * crop.width;
-      final t = crop.top + (cy - h / 2).clamp(0.0, 1.0) * crop.height;
-      final r = crop.left + (cx + w / 2).clamp(0.0, 1.0) * crop.width;
-      final b = crop.top + (cy + h / 2).clamp(0.0, 1.0) * crop.height;
+      final l = (cx - w / 2).clamp(0.0, 1.0);
+      final t = (cy - h / 2).clamp(0.0, 1.0);
+      final r = (cx + w / 2).clamp(0.0, 1.0);
+      final b = (cy + h / 2).clamp(0.0, 1.0);
       if (r <= l || b <= t) continue;
       candidates.add(RawDetection(bestCls[i], s, l, t, r, b));
     }
@@ -184,13 +182,4 @@ class YoloDecoder {
     return covered(a, b) && covered(b, a);
   }
 
-  /// Box chạm mép vùng cắt (không phải mép khung) → vật bị cắt dở, kích thước sai → nên bỏ,
-  /// khung đầy đủ sẽ thấy vật đó trọn vẹn.
-  static bool touchesCropEdge(RawDetection d, CropRect crop, {double margin = 0.01}) {
-    if (crop.isFull) return false;
-    return (crop.left > 0 && d.left <= crop.left + margin) ||
-        (crop.top > 0 && d.top <= crop.top + margin) ||
-        (crop.right < 1 && d.right >= crop.right - margin) ||
-        (crop.bottom < 1 && d.bottom >= crop.bottom - margin);
-  }
 }

@@ -13,7 +13,7 @@
 | F3 🟠 | Mô tả + nói ra | Caption template (CN8), flutter_tts tiếng Việt (CN9), Speech Manager ưu tiên/barge-in/dedupe (CN10) — mặc định **chỉ mô tả khi được hỏi** |
 | F4 🟡 | Lưu lịch sử | Event log JSONL (CN11), ảnh ghi nhớ thumbnail + GPS (CN12), recap template (CN13), tự dọn: tối đa 20 chuyến / 30 ngày / 40 ảnh mỗi chuyến |
 
-**Nguyên tắc "nói ít, đúng lúc":** mỗi frame chỉ chọn 1 cảnh báo quan trọng nhất; vật phải xuất hiện ≥ 3 frame mới được báo;
+**Nguyên tắc "nói ít, đúng lúc":** mỗi frame chỉ chọn 1 cảnh báo quan trọng nhất; vật xa phải xuất hiện ≥ 2 lần quét mới được báo (lọc báo nhầm), **vật gần + điểm cao báo ngay từ lần quét đầu**;
 cùng 1 vật chỉ nhắc lại sau 6 giây (nguy hiểm) / 10 giây (chú ý) trừ khi mức nguy hiểm tăng; cảnh báo nguy hiểm ngắt lời mọi câu khác;
 khi vật rất gần ngay trước mặt luôn nói **"Dừng lại"** và chỉ nêu phía trống, không ra lệnh rẽ.
 
@@ -44,7 +44,7 @@ smart_eye/
 │   │   ├── 📁 detection/
 │   │   │   ├── detector_worker.dart    # Isolate AI: tự chọn CPU/GPU, tiền xử lý → model → giải mã
 │   │   │   ├── yolo_decoder.dart       # Giải mã YOLO chỉ các lớp liên quan + NMS
-│   │   │   ├── scan_scheduler.dart     # Nhịp quét thích ứng + vùng hành lang
+│   │   │   ├── scan_scheduler.dart     # Nhịp quét: liên tục / tiết kiệm khi cảnh đứng yên
 │   │   │   ├── frame_data.dart         # Bản sao frame gửi sang isolate, vùng cắt
 │   │   │   └── model_metadata.dart     # Đọc tên lớp / kích thước ảnh nhúng trong model
 │   │   ├── object_tracker.dart         # F2/CN5: Tracker IoU + centroid (biết vùng nào được quét)
@@ -53,7 +53,7 @@ smart_eye/
 │   │   ├── tts_service.dart / speech_manager.dart  # F3/CN9+CN10: giọng nói, ưu tiên, barge-in, dedupe
 │   │   ├── history_service.dart        # F4/CN11+CN12: Lưu JSONL + ảnh, tự dọn dẹp
 │   │   └── location_service.dart       # F4: GPS, quãng đường
-│   ├── 📁 widgets/bounding_box_painter.dart # Khung màu theo mức nguy hiểm + lưới 3 cột + vùng hành lang (debug)
+│   ├── 📁 widgets/bounding_box_painter.dart # Khung màu theo mức nguy hiểm + lưới 3 cột
 │   └── 📁 screens/                     # camera_screen, history_screen, trip_detail_screen
 ├── 📁 training/                        # Quy trình train model có thêm cầu thang, cột điện... (xem training/README.md)
 ├── 📁 tool/
@@ -190,8 +190,8 @@ flutter test
 
 ```
 Camera (~30 fps) ─► Bộ điều phối nhịp quét ─(chỉ gửi khi cần)─► Isolate AI (luồng riêng)
-   luồng UI            chọn vùng: toàn khung / hành lang           tiền xử lý → model (CPU/GPU tự chọn)
-                       chọn nhịp: cảnh báo / thường / tiết kiệm    → giải mã (chỉ lớp liên quan) → NMS
+   luồng UI            máy rảnh là quét; đứng yên thì giãn ra        tiền xử lý → model (CPU/GPU tự chọn)
+                                                                  → giải mã (chỉ lớp liên quan) → NMS
         ◄──────────── danh sách vật (toạ độ chuẩn hoá) + thời gian từng bước ◄───────┘
 ```
 
@@ -200,12 +200,12 @@ Camera (~30 fps) ─► Bộ điều phối nhịp quét ─(chỉ gửi khi c�
 | **Isolate AI riêng** | Luồng UI chỉ còn copy frame (~1 ms) → giao diện, nút bấm, giọng nói không giật |
 | **Tự chọn CPU / GPU** (Android) · **CPU / Metal / CoreML** (iOS) | Lúc khởi động đo tốc độ từng cách, kiểm tra kết quả giống CPU, chọn cách nhanh nhất; GPU lỗi giữa chừng tự chuyển về CPU |
 | **Chỉ xét lớp liên quan tới đi lại** | Bỏ cốc, dĩa, bàn chải… → giải mã ít phép tính hơn ~3 lần (15/80 lớp), **nhầm lớp giảm từ 17 → 2** trên COCO128 |
-| **Nhịp quét thích ứng** | *Cảnh báo*: quét liên tục · *Thường*: 5 lần/giây · *Tiết kiệm*: 1 lần/giây khi cảnh đứng yên 3 s và không có vật — đỡ nóng máy, tốn pin |
-| **Vùng hành lang** | Xen kẽ quét toàn khung với 1 vùng vuông phía trước (phóng to ~1,7–2,5 lần) → thấy cột, biển báo ở xa sớm hơn; tracker không coi vật ngoài vùng là "mất dấu" |
+| **Quét liên tục, độ trễ thấp** | Máy rảnh là quét ngay (GPU ~11 lần/giây trên Samsung A05). *Tiết kiệm*: cảnh đứng yên 3 s và không có vật → 1 lần/giây, nhưng luồng camera vẫn so độ sáng **từng frame** — có chuyển động là quét ngay |
+| **Vật gần báo ngay** | Vật cao ≥ 45% khung và điểm ≥ 0.4 được xác nhận ngay lần quét đầu (không chờ lần 2) — tiết kiệm 100–200 ms khi vật đang sát người |
 | **Không cấp phát theo từng pixel** | Tiền xử lý không tạo đối tượng tạm cho mỗi điểm ảnh (bản cũ tạo ~100 000 đối tượng / frame) |
 
 **Dòng chẩn đoán** (góc dưới màn hình) — ví dụ minh hoạ, số thật tuỳ máy:
-`GPU · 62ms (ảnh 18 · AI 41 · đọc 3) · 4.8 lần/s · Thường · hành lang` / `2 vật · max người 50%`
+`GPU · 62ms (ảnh 18 · AI 41) · 4.8 lần/s · Thường` / `2 vật · max người 50%`
 = cách chạy · tổng thời gian (tiền xử lý · model · giải mã) · số lần quét mỗi giây · chế độ · vùng vừa quét.
 Log `[Scan N] ...` mỗi 20 lần quét cho số liệu chi tiết (xem bằng `flutter run` hoặc Logcat).
 

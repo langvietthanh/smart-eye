@@ -1,14 +1,10 @@
 import 'dart:io';
 import 'dart:typed_data';
-import 'dart:ui';
 
 import 'package:flutter_test/flutter_test.dart';
-import 'package:smart_eye/models/Recognition.dart';
-import 'package:smart_eye/services/detection/frame_data.dart';
 import 'package:smart_eye/services/detection/model_metadata.dart';
 import 'package:smart_eye/services/detection/scan_scheduler.dart';
 import 'package:smart_eye/services/detection/yolo_decoder.dart';
-import 'package:smart_eye/services/object_tracker.dart';
 
 /// Output giả dạng YOLOv8 `[1, 4 + numClasses, anchors]` (theo cột: channel-major)
 Float32List fakeOutput(int numClasses, List<({double cx, double cy, double w, double h, int cls, double score})> boxes,
@@ -62,19 +58,6 @@ void main() {
       expect(r.detections.map((d) => '${d.classId}:${d.score.toStringAsFixed(2)}').toList(), ['0:0.90', '1:0.60']);
     });
 
-    test('vùng cắt: toạ độ đổi về khung đầy đủ; box chạm mép vùng cắt bị đánh dấu', () {
-      const crop = CropRect(0.2, 0.3, 0.6, 0.4);
-      final out = fakeOutput(1, [
-        (cx: 0.5, cy: 0.5, w: 0.5, h: 0.5, cls: 0, score: 0.9),
-        (cx: 0.05, cy: 0.5, w: 0.1, h: 0.2, cls: 0, score: 0.8), // chạm mép trái vùng cắt
-      ]);
-      final r = YoloDecoder.decode(output: out, shape: const [1, 5, 8], classIds: [0], inputSize: 320, crop: crop);
-      final center = r.detections.firstWhere((d) => d.score > 0.85);
-      expect(center.left, closeTo(0.2 + 0.25 * 0.6, 1e-6));
-      expect(center.top, closeTo(0.3 + 0.25 * 0.4, 1e-6));
-      expect(YoloDecoder.touchesCropEdge(center, crop), isFalse);
-      expect(YoloDecoder.touchesCropEdge(r.detections.firstWhere((d) => d.score < 0.85), crop), isTrue);
-    });
 
     test('output chuyển vị [1, anchors, 4 + lớp] cũng đọc được', () {
       const anchors = 8, channels = 5;
@@ -132,35 +115,24 @@ void main() {
     final t0 = DateTime(2026);
     DateTime at(int ms) => t0.add(Duration(milliseconds: ms));
 
-    test('chỉ 1 lần quét tại một thời điểm, giãn cách 200 ms khi đi bình thường', () {
+    test('chỉ 1 lần quét tại một thời điểm; máy rảnh là quét ngay (chỉ nghỉ 30 ms)', () {
       final s = ScanScheduler();
-      expect(s.nextScan(at(0), frameWidth: 480, frameHeight: 720), isNotNull);
-      expect(s.nextScan(at(10), frameWidth: 480, frameHeight: 720), isNull); // đang bận
-      s.onResult(at(50), motion: 0.1, hazard: false, relevantObjects: true);
-      expect(s.nextScan(at(100), frameWidth: 480, frameHeight: 720), isNull); // chưa đủ 200 ms
-      expect(s.nextScan(at(210), frameWidth: 480, frameHeight: 720), isNotNull);
+      expect(s.shouldScan(at(0)), isTrue);
+      expect(s.shouldScan(at(10)), isFalse); // đang bận
+      s.onResult(at(80), motion: 0.1, hazard: false, relevantObjects: true);
+      expect(s.shouldScan(at(81)), isTrue); // đã ≥ 30 ms từ lần gửi trước
     });
 
-    test('xen kẽ toàn khung / hành lang khi đi bình thường', () {
-      final s = ScanScheduler();
-      final regions = <bool>[];
-      for (var i = 0; i < 4; i++) {
-        regions.add(s.nextScan(at(i * 300), frameWidth: 480, frameHeight: 720)!.isFull);
-        s.onResult(at(i * 300 + 50), motion: 0.1, hazard: false, relevantObjects: true);
-      }
-      expect(regions, [true, false, true, false]);
-    });
 
-    test('có nguy hiểm → quét liên tục, chỉ toàn khung; hết nguy hiểm 2 giây → về bình thường', () {
+    test('có nguy hiểm → chế độ cảnh báo; hết nguy hiểm 2 giây → về bình thường', () {
       final s = ScanScheduler();
-      s.nextScan(at(0), frameWidth: 480, frameHeight: 720);
+      s.shouldScan(at(0));
       s.onResult(at(50), motion: 0.1, hazard: true, relevantObjects: true);
       expect(s.mode, ScanMode.alert);
-      expect(s.nextScan(at(60), frameWidth: 480, frameHeight: 720), isNull); // vẫn nghỉ ≥ 100 ms cho GPU vẽ màn hình
-      expect(s.nextScan(at(101), frameWidth: 480, frameHeight: 720)!.isFull, isTrue); // nhanh hơn 200 ms, luôn toàn khung
+      expect(s.shouldScan(at(51)), isTrue); // quét tiếp ngay
       s.onResult(at(100), motion: 0.1, hazard: false, relevantObjects: true);
       expect(s.mode, ScanMode.alert); // còn giữ
-      s.nextScan(at(2200), frameWidth: 480, frameHeight: 720);
+      s.shouldScan(at(2200));
       s.onResult(at(2200), motion: 0.1, hazard: false, relevantObjects: true);
       expect(s.mode, ScanMode.normal);
     });
@@ -168,49 +140,14 @@ void main() {
     test('cảnh đứng yên 3 giây, không có vật → tiết kiệm; người dùng hỏi → quét ngay', () {
       final s = ScanScheduler();
       for (var ms = 0; ms <= 3200; ms += 400) {
-        s.nextScan(at(ms), frameWidth: 480, frameHeight: 720);
+        s.shouldScan(at(ms));
         s.onResult(at(ms + 10), motion: 0.001, hazard: false, relevantObjects: false);
       }
       expect(s.mode, ScanMode.idle);
-      expect(s.nextScan(at(3500), frameWidth: 480, frameHeight: 720), isNull); // chưa đủ 1 giây
+      expect(s.shouldScan(at(3500)), isFalse); // chưa đủ 1 giây
       s.wakeUp();
-      expect(s.nextScan(at(3501), frameWidth: 480, frameHeight: 720), isNotNull);
+      expect(s.shouldScan(at(3501)), isTrue);
     });
   });
 
-  group('ObjectTracker với vùng quét', () {
-    test('vật vắt qua mép vùng hành lang không bị tính là mất (không chớp tắt)', () {
-      final tracker = ObjectTracker();
-      const frame = Size(400, 800);
-      final t0 = DateTime(2026);
-      // Ô tô rộng, tâm nằm trong vùng hành lang nhưng 2 bên tràn ra ngoài
-      final car = [Recognition(2, 'xe ô tô', 0.9, const Rect.fromLTWH(40, 250, 320, 180), labelEn: 'car')];
-      for (var i = 0; i < 3; i++) {
-        tracker.update(car, frame, t0);
-      }
-      const corridor = Rect.fromLTWH(80, 200, 240, 240);
-      for (var i = 0; i < 8; i++) {
-        expect(tracker.update([], frame, t0, coverage: corridor), hasLength(1));
-      }
-    });
-
-    test('vật ngoài vùng hành lang không bị tính là mất dấu', () {
-      final tracker = ObjectTracker();
-      const frame = Size(400, 800);
-      final t0 = DateTime(2026);
-      final side = [Recognition(0, 'người', 0.9, const Rect.fromLTWH(10, 400, 60, 300), labelEn: 'person')];
-      for (var i = 0; i < 3; i++) {
-        tracker.update(side, frame, t0);
-      }
-      const corridor = Rect.fromLTWH(80, 200, 240, 240);
-      for (var i = 0; i < 8; i++) {
-        expect(tracker.update([], frame, t0, coverage: corridor), hasLength(1));
-      }
-      // Quét toàn khung mà không thấy → mất dần như bình thường
-      for (var i = 0; i < 6; i++) {
-        tracker.update([], frame, t0);
-      }
-      expect(tracker.update([], frame, t0), isEmpty);
-    });
-  });
 }

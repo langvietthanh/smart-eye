@@ -95,16 +95,16 @@ class DetectorService {
       .toList();
 
   /// Quét 1 frame ở isolate AI. Phần chạy trên luồng UI chỉ là copy frame (~1 ms).
-  Future<DetectionBatch> detect(CameraImage image, {required int rotation, CropRect crop = CropRect.full}) async {
+  Future<DetectionBatch> detect(CameraImage image, {required int rotation}) async {
     final worker = _worker;
     if (worker == null) throw StateError('Model chưa nạp');
-    final batch = await worker.detect(FramePacket.fromCameraImage(image), rotation: rotation, crop: crop);
+    final batch = await worker.detect(FramePacket.fromCameraImage(image), rotation: rotation);
     lastBatch = batch;
     if (batch.error != null) debugPrint('Detector: ${batch.error}');
     if (++_scanCount % 20 == 0) {
       debugPrint('[Scan $_scanCount] ${batch.backend}${batch.verifying ? ' (đối chiếu CPU)' : ''} ${batch.totalMs.toStringAsFixed(1)}ms '
           '(ảnh ${batch.prepMs.toStringAsFixed(1)} · AI ${batch.inferMs.toStringAsFixed(1)} · '
-          'đọc ${batch.parseMs.toStringAsFixed(1)}) · ${batch.crop.isFull ? 'toàn khung' : 'hành lang'} · '
+          'đọc ${batch.parseMs.toStringAsFixed(1)}) · '
           'motion ${batch.motion.toStringAsFixed(3)} · ${batch.detections.length} vật · '
           'max ${labelOf(batch.maxClassId)} ${(batch.maxScore * 100).toStringAsFixed(0)}%');
     }

@@ -6,7 +6,7 @@ import '../services/detection/frame_data.dart';
 /// Nhận 1 mẫu RGB đã lấy từ frame — [index] là vị trí mẫu theo thứ tự hàng rồi cột
 typedef _SampleSink = void Function(int index, int r, int g, int b);
 
-/// Các tiện ích xử lý ảnh: lấy mẫu trực tiếp frame camera → RGB đã xoay (+ cắt vùng) →
+/// Các tiện ích xử lý ảnh: lấy mẫu trực tiếp frame camera → RGB đã xoay →
 /// tensor float32 / JPEG / chữ ký độ sáng. Hỗ trợ 3 định dạng frame:
 /// - YUV_420_888 3 lớp (Android)
 /// - BGRA8888 1 lớp (iOS — app xin định dạng này trên iOS)
@@ -35,19 +35,18 @@ class ImageUtils {
           ? (width: height, height: width)
           : (width: width, height: height);
 
-  /// Chuyển frame thành tensor float32 [0..1] kích thước [size]×[size] từ vùng [crop] của ảnh đã xoay.
+  /// Chuyển frame thành tensor float32 [0..1] kích thước [size]×[size] (toàn bộ ảnh đã xoay).
   /// Layout theo model: [channelsFirst] = NCHW `[1, 3, S, S]`, ngược lại NHWC `[1, S, S, 3]`.
   static Float32List? toInputTensor(
     FrameData frame, {
     required int size,
     required bool channelsFirst,
     int rotationDegrees = 0,
-    CropRect crop = CropRect.full,
   }) {
     final plane = size * size;
     final out = Float32List(3 * plane);
     const k = 1 / 255.0;
-    final ok = _sample(frame, rotationDegrees, crop, size, size, channelsFirst
+    final ok = _sample(frame, rotationDegrees, size, size, channelsFirst
         ? (i, r, g, b) {
             out[i] = r * k;
             out[plane + i] = g * k;
@@ -64,7 +63,7 @@ class ImageUtils {
   /// "Chữ ký" độ sáng [grid]×[grid] của toàn khung — so 2 chữ ký để biết cảnh có thay đổi không
   static Uint8List? lumaSignature(FrameData frame, {int rotationDegrees = 0, int grid = 16}) {
     final sig = Uint8List(grid * grid);
-    final ok = _sample(frame, rotationDegrees, CropRect.full, grid, grid,
+    final ok = _sample(frame, rotationDegrees, grid, grid,
         (i, r, g, b) => sig[i] = (r * 77 + g * 150 + b * 29) >> 8);
     return ok ? sig : null;
   }
@@ -87,7 +86,7 @@ class ImageUtils {
       final outW = (rot.width * scale).round();
       final outH = (rot.height * scale).round();
       final thumb = img.Image(width: outW, height: outH);
-      final ok = _sample(frame, rotationDegrees, CropRect.full, outW, outH,
+      final ok = _sample(frame, rotationDegrees, outW, outH,
           (i, r, g, b) => thumb.setPixelRgb(i % outW, i ~/ outW, r, g, b));
       return ok ? img.encodeJpg(thumb, quality: 70) : null;
     } catch (_) {
@@ -109,12 +108,11 @@ class ImageUtils {
   // Lõi lấy mẫu — không cấp phát bộ nhớ theo từng pixel
   // ---------------------------------------------------------------------------
 
-  /// Lấy mẫu lưới [outW]×[outH] (láng giềng gần nhất) trên vùng [crop] của ảnh đã xoay,
+  /// Lấy mẫu lưới [outW]×[outH] (láng giềng gần nhất) trên toàn bộ ảnh đã xoay,
   /// đổi sang RGB và đẩy vào [sink]. Trả về false nếu định dạng frame không hỗ trợ.
   static bool _sample(
     FrameData f,
     int rotation,
-    CropRect crop,
     int outW,
     int outH,
     _SampleSink sink,
@@ -136,12 +134,12 @@ class ImageUtils {
     // Toạ độ trên ảnh đã xoay cho từng cột / hàng đầu ra — tính 1 lần
     final colRx = Int32List(outW);
     for (var x = 0; x < outW; x++) {
-      colRx[x] = ((crop.left + (x + 0.5) * crop.width / outW) * rot.width).floor().clamp(0, rot.width - 1);
+      colRx[x] = ((x + 0.5) / outW * rot.width).floor().clamp(0, rot.width - 1);
     }
 
     var index = 0;
     for (var y = 0; y < outH; y++) {
-      final ry = ((crop.top + (y + 0.5) * crop.height / outH) * rot.height).floor().clamp(0, rot.height - 1);
+      final ry = ((y + 0.5) / outH * rot.height).floor().clamp(0, rot.height - 1);
       for (var x = 0; x < outW; x++) {
         final rx = colRx[x];
         int sx, sy;

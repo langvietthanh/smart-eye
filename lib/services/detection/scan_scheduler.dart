@@ -1,14 +1,13 @@
-import 'frame_data.dart';
-
 /// Chế độ nhịp quét
 enum ScanMode {
-  /// Vừa có cảnh báo / vật đang tới gần → quét nhanh nhất có thể, luôn quét toàn khung
+  /// Vừa có cảnh báo / vật đang tới gần → quét liên tục
   alert,
 
-  /// Đi lại bình thường → ~5 lần/giây, xen kẽ toàn khung và vùng hành lang phía trước
+  /// Đi lại bình thường → quét liên tục (máy rảnh là quét: GPU ~11 lần/giây)
   normal,
 
-  /// Cảnh đứng yên, không có vật liên quan → 1 lần/giây để tiết kiệm pin, đỡ nóng máy
+  /// Cảnh đứng yên, không có vật liên quan → 1 lần/giây cho đỡ tốn pin, NHƯNG luồng camera vẫn so độ sáng
+  /// từng frame — có chuyển động là quét ngay (xem [ScanScheduler.wakeUp])
   idle,
 }
 
@@ -20,18 +19,14 @@ extension ScanModeText on ScanMode {
       };
 }
 
-/// Quyết định KHI NÀO quét và quét VÙNG NÀO — thay cho việc quét mọi frame camera (30 fps).
+/// Quyết định KHI NÀO quét.
 ///
-/// Đi bộ ~1,4 m/s: quét 5 lần/giây → mỗi lần cách nhau ~0,3 m, đủ an toàn; quét nhanh hơn chỉ tốn pin.
-/// Vùng "hành lang" (vuông, giữa khung, phía trước) được phóng to khi đưa vào model → vật ở xa
-/// trên lối đi (cột điện, biển báo cách 5–10 m) to gấp ~1,7 lần (ngang) và ~2,5 lần (dọc, khung dọc 480×720)
-/// so với quét toàn khung → phát hiện sớm hơn.
+/// Với tình huống nguy hiểm, độ trễ quan trọng hơn pin: máy rảnh là quét ngay (chỉ nghỉ [minGap] cho
+/// GPU còn thời gian vẽ màn hình). Chỉ khi cảnh đứng yên hẳn mới giãn ra 1 lần/giây — và luồng camera
+/// vẫn theo dõi chuyển động từng frame để "đánh thức" ngay khi có gì thay đổi.
 class ScanScheduler {
-  static const Duration normalInterval = Duration(milliseconds: 200);
-
-  /// Có nguy hiểm vẫn nghỉ tối thiểu 100 ms giữa 2 lần quét (≤ 10 lần/giây) — GPU còn thời gian vẽ
-  /// màn hình (GPU máy tầm trung vừa chạy AI liên tục vừa vẽ camera dễ làm hình giật / nhấp nháy)
-  static const Duration alertInterval = Duration(milliseconds: 100);
+  /// Nghỉ tối thiểu giữa 2 lần quét — đủ để GPU vẽ 1–2 khung hình camera
+  static const Duration minGap = Duration(milliseconds: 30);
   static const Duration idleInterval = Duration(milliseconds: 1000);
 
   /// Giữ chế độ cảnh báo thêm bao lâu sau lần cuối có nguy hiểm (hysteresis)
@@ -43,14 +38,9 @@ class ScanScheduler {
   /// Ngưỡng thay đổi cảnh (0..1) coi như đứng yên
   static const double stillThreshold = 0.02;
 
-  bool corridorEnabled;
-
-  ScanScheduler({this.corridorEnabled = true});
-
   DateTime _lastDispatch = DateTime.fromMillisecondsSinceEpoch(0);
   DateTime _lastHazard = DateTime.fromMillisecondsSinceEpoch(0);
   DateTime? _stillSince;
-  bool _lastWasCorridor = true; // → lần đầu quét toàn khung
   bool _inFlight = false;
 
   ScanMode _mode = ScanMode.normal;
@@ -60,20 +50,16 @@ class ScanScheduler {
   bool get inFlight => _inFlight;
 
   Duration get interval => switch (_mode) {
-        ScanMode.alert => alertInterval,
-        ScanMode.normal => normalInterval,
+        ScanMode.alert || ScanMode.normal => minGap,
         ScanMode.idle => idleInterval,
       };
 
-  /// Frame camera vừa tới: có nên quét không. Nếu có, trả về vùng cần quét và đánh dấu đang bận.
-  CropRect? nextScan(DateTime now, {required int frameWidth, required int frameHeight}) {
-    if (_inFlight || now.difference(_lastDispatch) < interval) return null;
+  /// Frame camera vừa tới: có nên quét không. Nếu có thì đánh dấu đang bận.
+  bool shouldScan(DateTime now) {
+    if (_inFlight || now.difference(_lastDispatch) < interval) return false;
     _inFlight = true;
     _lastDispatch = now;
-
-    final useCorridor = corridorEnabled && _mode == ScanMode.normal && !_lastWasCorridor;
-    _lastWasCorridor = useCorridor;
-    return useCorridor ? CropRect.corridor(frameWidth: frameWidth, frameHeight: frameHeight) : CropRect.full;
+    return true;
   }
 
   /// Báo kết quả lần quét để cập nhật chế độ.
@@ -110,7 +96,6 @@ class ScanScheduler {
   void reset() {
     _inFlight = false;
     _stillSince = null;
-    _lastWasCorridor = true;
     _mode = ScanMode.normal;
     _lastDispatch = DateTime.fromMillisecondsSinceEpoch(0);
   }

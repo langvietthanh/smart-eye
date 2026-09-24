@@ -59,37 +59,3 @@ class FramePacket {
       );
 }
 
-/// Vùng cắt trên ảnh ĐÃ XOAY, toạ độ chuẩn hoá [0..1]
-class CropRect {
-  final double left;
-  final double top;
-  final double width;
-  final double height;
-
-  const CropRect(this.left, this.top, this.width, this.height);
-
-  static const full = CropRect(0, 0, 1, 1);
-
-  bool get isFull => left == 0 && top == 0 && width == 1 && height == 1;
-  double get right => left + width;
-  double get bottom => top + height;
-
-  /// Vùng "hành lang" phía trước: hình VUÔNG (để ảnh không bị méo khi đưa vào model),
-  /// cạnh = [fraction] × cạnh ngắn của khung, tâm ngang giữa khung, tâm dọc ở [centerY]
-  /// (hơi trên giữa — nơi đường đi phía xa xuất hiện khi điện thoại đeo trước ngực).
-  factory CropRect.corridor({
-    required int frameWidth,
-    required int frameHeight,
-    double fraction = 0.6,
-    double centerY = 0.45,
-  }) {
-    final side = fraction * (frameWidth < frameHeight ? frameWidth : frameHeight);
-    final w = side / frameWidth;
-    final h = side / frameHeight;
-    final top = (centerY - h / 2).clamp(0.0, 1.0 - h);
-    return CropRect((1 - w) / 2, top, w, h);
-  }
-
-  @override
-  String toString() => 'CropRect($left, $top, $width, $height)';
-}

@@ -32,7 +32,6 @@ class DetectionBatch {
   final List<RawDetection> detections;
   final double maxScore;
   final int maxClassId;
-  final CropRect crop;
   final String backend;
 
   /// Thời gian từng bước (ms): tiền xử lý / chạy model / đọc kết quả
@@ -51,7 +50,6 @@ class DetectionBatch {
     required this.detections,
     required this.maxScore,
     required this.maxClassId,
-    required this.crop,
     required this.backend,
     required this.prepMs,
     required this.inferMs,
@@ -119,8 +117,8 @@ class DetectorWorker {
   }
 
   /// Quét 1 frame. [packet] bị "tiêu thụ" (chuyển quyền sở hữu sang isolate AI).
-  Future<DetectionBatch> detect(FramePacket packet, {required int rotation, CropRect crop = CropRect.full}) async =>
-      (await _call(_Detect(packet, rotation, crop))) as DetectionBatch;
+  Future<DetectionBatch> detect(FramePacket packet, {required int rotation}) async =>
+      (await _call(_Detect(packet, rotation))) as DetectionBatch;
 
   /// Ảnh thumbnail JPEG của frame vừa quét gần nhất (cho ảnh ghi nhớ — CN12)
   Future<Uint8List?> thumbnail() async => (await _call(const _Thumbnail())) as Uint8List?;
@@ -172,8 +170,7 @@ class _Reply {
 class _Detect {
   final FramePacket packet;
   final int rotation;
-  final CropRect crop;
-  const _Detect(this.packet, this.rotation, this.crop);
+  const _Detect(this.packet, this.rotation);
 }
 
 class _Thumbnail {
@@ -410,10 +407,9 @@ class _Engine {
       size: inputSize,
       channelsFirst: channelsFirst,
       rotationDegrees: request.rotation,
-      crop: request.crop,
     );
     if (pixels == null) {
-      return _empty(request.crop, motion, sw.elapsedMicroseconds / 1000, 'định dạng frame không hỗ trợ');
+      return _empty(motion, sw.elapsedMicroseconds / 1000, 'định dạng frame không hỗ trợ');
     }
     final input = _toInputBytes(pixels);
     final prepMs = sw.elapsedMicroseconds / 1000;
@@ -423,7 +419,7 @@ class _Engine {
       runner.interpreter.runInference([input]);
     } catch (e) {
       // Cách tăng tốc lỗi giữa chừng → chuyển hẳn về CPU và thử lại 1 lần
-      if (runner.backend == 'cpu') return _empty(request.crop, motion, prepMs, '$e');
+      if (runner.backend == 'cpu') return _empty(motion, prepMs, '$e');
       error = 'Lỗi ${runner.backend}, chuyển về CPU: $e';
       runner.close();
       runner = _createRunner(modelBytes, 'cpu');
@@ -431,14 +427,14 @@ class _Engine {
     }
     final inferMs = sw.elapsedMicroseconds / 1000 - prepMs;
 
-    var decoded = _decode(runner, request.crop);
+    var decoded = _decode(runner);
 
     // Vài frame đầu: chạy thêm CPU trên CÙNG ảnh, danh sách vật lệch → bỏ cách tăng tốc
     final verifier = _verifier;
     final verifying = verifier != null;
     if (verifier != null) {
       verifier.interpreter.runInference([input]);
-      final reference = _decode(verifier, request.crop);
+      final reference = _decode(verifier);
       if (!YoloDecoder.sameDetections(reference.detections, decoded.detections)) {
         error = '${runner.backend} cho kết quả lệch CPU trên ảnh thật → chuyển về CPU';
         runner.close();
@@ -453,16 +449,13 @@ class _Engine {
         }
       }
     }
-    final detections = request.crop.isFull
-        ? decoded.detections
-        : decoded.detections.where((d) => !YoloDecoder.touchesCropEdge(d, request.crop)).toList();
+    final detections = decoded.detections;
     final parseMs = sw.elapsedMicroseconds / 1000 - prepMs - inferMs;
 
     return DetectionBatch(
       detections: detections,
       maxScore: decoded.maxScore,
       maxClassId: decoded.maxClassId,
-      crop: request.crop,
       backend: runner.backend,
       prepMs: prepMs,
       inferMs: inferMs,
@@ -473,21 +466,19 @@ class _Engine {
     );
   }
 
-  DecodeResult _decode(_Runner r, CropRect crop) => YoloDecoder.decode(
+  DecodeResult _decode(_Runner r) => YoloDecoder.decode(
         output: _readOutput(r.interpreter.getOutputTensor(0)),
         shape: outputShape,
         classIds: classIds,
         inputSize: inputSize,
         confThreshold: conf,
         iouThreshold: iou,
-        crop: crop,
       );
 
-  DetectionBatch _empty(CropRect crop, double motion, double prepMs, String error) => DetectionBatch(
+  DetectionBatch _empty(double motion, double prepMs, String error) => DetectionBatch(
         detections: const [],
         maxScore: 0,
         maxClassId: -1,
-        crop: crop,
         backend: runner.backend,
         prepMs: prepMs,
         inferMs: 0,

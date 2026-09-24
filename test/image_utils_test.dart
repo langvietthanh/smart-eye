@@ -31,7 +31,7 @@ FrameData nv12Gray() => FrameData(width: 2, height: 2, planes: [
       PlaneData(Uint8List.fromList([128, 128]), 2),
     ]);
 
-/// Frame xám 4×4 giá trị Y = 10 × (vị trí + 1) — để thử cắt vùng
+/// Frame xám 4×4 giá trị Y = 10 × (vị trí + 1)
 FrameData gray4x4() => FrameData(width: 4, height: 4, planes: [
       PlaneData(Uint8List.fromList(List.generate(16, (i) => 10 * (i + 1))), 4, 1),
       PlaneData(Uint8List.fromList([128, 128, 128, 128]), 2, 1),
@@ -40,8 +40,8 @@ FrameData gray4x4() => FrameData(width: 4, height: 4, planes: [
 
 List<int> toBytes(Iterable<double> v) => v.map((e) => (e * 255).round()).toList();
 
-Float32List tensor(FrameData f, {int size = 2, bool nchw = true, int rotation = 0, CropRect crop = CropRect.full}) =>
-    ImageUtils.toInputTensor(f, size: size, channelsFirst: nchw, rotationDegrees: rotation, crop: crop)!;
+Float32List tensor(FrameData f, {int size = 2, bool nchw = true, int rotation = 0}) =>
+    ImageUtils.toInputTensor(f, size: size, channelsFirst: nchw, rotationDegrees: rotation)!;
 
 void main() {
   group('Định dạng frame', () {
@@ -96,22 +96,6 @@ void main() {
     });
   });
 
-  group('Cắt vùng (ROI)', () {
-    test('cắt góc dưới phải 2×2 của ảnh 4×4', () {
-      final out = tensor(gray4x4(), crop: const CropRect(0.5, 0.5, 0.5, 0.5));
-      // Hàng 2: 110 120, hàng 3: 150 160
-      expect(toBytes(out.sublist(0, 4)), [110, 120, 150, 160]);
-    });
-
-    test('vùng hành lang là hình vuông trên ảnh thật, nằm giữa theo chiều ngang', () {
-      final c = CropRect.corridor(frameWidth: 480, frameHeight: 720);
-      expect(c.width * 480, closeTo(c.height * 720, 0.001)); // vuông tính theo pixel
-      expect(c.width * 480, closeTo(288, 0.001)); // 60% cạnh ngắn
-      expect(c.left + c.width / 2, closeTo(0.5, 1e-9));
-      expect(c.top, greaterThanOrEqualTo(0));
-      expect(c.bottom, lessThanOrEqualTo(1));
-    });
-  });
 
   group('Chữ ký độ sáng (phát hiện cảnh đứng yên)', () {
     test('cùng ảnh → 0, ảnh khác → > 0', () {

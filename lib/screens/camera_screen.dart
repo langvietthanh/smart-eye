@@ -40,14 +40,14 @@ class _CameraScreenState extends State<CameraScreen> with WidgetsBindingObserver
   CameraController? _controller;
   final ScanScheduler _scheduler = ScanScheduler();
 
+  /// Frame mốc khi đang ở chế độ tiết kiệm — so với từng frame mới để phát hiện chuyển động
+  Uint8List? _idleSignature;
+
   /// Thời điểm các lần quét trong 3 giây gần nhất — tính số lần quét/giây cho dòng chẩn đoán
   final List<DateTime> _scanStats = [];
 
   /// 10 lần quét gần nhất — dòng chẩn đoán hiển thị số TRUNG BÌNH để không nhảy liên tục
   final List<DetectionBatch> _recentBatches = [];
-
-  /// Lần quét toàn khung gần nhất — "max ..." chỉ lấy từ đây (lần quét hành lang chỉ thấy 1 phần cảnh)
-  DetectionBatch? _lastFullBatch;
 
   /// Dòng chẩn đoán đã tính sẵn — chỉ làm mới 2 lần/giây cho dễ đọc
   String _diagText = '';
@@ -225,37 +225,49 @@ class _CameraScreenState extends State<CameraScreen> with WidgetsBindingObserver
   /// Luồng UI chỉ copy frame (~1 ms), phần nặng chạy ở isolate AI.
   void _onCameraFrame(CameraImage image) {
     if (!_modelLoaded || _isMockTest || _paused || _screenWidth == 0) return;
-    final rotation = _rotationDegrees;
-    final rot = ImageUtils.rotatedSize(image.width, image.height, rotation);
-    final crop = _scheduler.nextScan(DateTime.now(), frameWidth: rot.width, frameHeight: rot.height);
-    if (crop == null) return;
-    _scan(image, rotation, crop);
+    if (_scheduler.mode == ScanMode.idle) _watchForMotion(image);
+    if (!_scheduler.shouldScan(DateTime.now())) {
+      return;
+    }
+    _idleSignature = null;
+    _scan(image, _rotationDegrees);
   }
 
-  Future<void> _scan(CameraImage image, int rotation, CropRect crop) async {
+  /// Chế độ tiết kiệm: so độ sáng 16×16 điểm của từng frame (~0,1 ms, không copy ảnh) với frame mốc —
+  /// có chuyển động (VD bàn tay, xe lao vào khung) là quét ngay, không phải chờ hết 1 giây.
+  void _watchForMotion(CameraImage image) {
+    final frame = FrameData(
+      width: image.width,
+      height: image.height,
+      planes: [for (final p in image.planes) PlaneData(p.bytes, p.bytesPerRow, p.bytesPerPixel)],
+    );
+    final signature = ImageUtils.lumaSignature(frame, rotationDegrees: _rotationDegrees);
+    if (signature == null) return;
+    final reference = _idleSignature;
+    if (reference == null) {
+      _idleSignature = signature;
+    } else if (ImageUtils.signatureDiff(signature, reference) > ScanScheduler.stillThreshold * 1.5) {
+      _scheduler.wakeUp();
+    }
+  }
+
+  Future<void> _scan(CameraImage image, int rotation) async {
     try {
       // detect() copy frame ngay (trước lần await đầu tiên) → an toàn dù buffer camera bị tái sử dụng
-      final batch = await _detector.detect(image, rotation: rotation, crop: crop);
+      final batch = await _detector.detect(image, rotation: rotation);
       if (!mounted || _paused || _isMockTest) {
         _scheduler.onFailed();
         return;
       }
       final screen = Size(_screenWidth, _screenHeight);
-      _runPipeline(
-        _detector.toRecognitions(batch, screen),
-        coverage: crop.isFull
-            ? null
-            : Rect.fromLTWH(crop.left * screen.width, crop.top * screen.height, crop.width * screen.width,
-                crop.height * screen.height),
-        fromCamera: true,
-      );
+      _runPipeline(_detector.toRecognitions(batch, screen), fromCamera: true);
       final now = DateTime.now();
       _scanStats
         ..add(now)
         ..removeWhere((t) => now.difference(t) > const Duration(seconds: 3));
       _recentBatches.add(batch);
       if (_recentBatches.length > 10) _recentBatches.removeAt(0);
-      if (batch.crop.isFull) _lastFullBatch = batch;
+
       _scheduler.onResult(
         now,
         motion: batch.motion,
@@ -268,12 +280,11 @@ class _CameraScreenState extends State<CameraScreen> with WidgetsBindingObserver
     }
   }
 
-  /// [coverage]: vùng màn hình lần quét này nhìn thấy (null = toàn khung).
   /// [fromCamera]: kết quả từ camera thật (có ảnh ghi nhớ) — false khi giả lập.
-  void _runPipeline(List<Recognition> detections, {Rect? coverage, bool fromCamera = false}) {
+  void _runPipeline(List<Recognition> detections, {bool fromCamera = false}) {
     final now = DateTime.now();
     final frame = Size(_screenWidth, _screenHeight);
-    final tracks = _tracker.update(detections, frame, now, coverage: coverage);
+    final tracks = _tracker.update(detections, frame, now);
     final scene = _engine.assess(tracks, frame);
     setState(() => _scene = scene);
 
@@ -670,15 +681,6 @@ class _CameraScreenState extends State<CameraScreen> with WidgetsBindingObserver
                             color: Colors.indigo.withValues(alpha: 0.8),
                             onTap: _switchingBackend ? () {} : _cycleBackend,
                           ),
-                          _smallButton(
-                            icon: Icons.crop_free,
-                            label: 'Hành lang: ${_scheduler.corridorEnabled ? 'bật' : 'tắt'}',
-                            color: Colors.teal.withValues(alpha: 0.8),
-                            onTap: () => setState(() {
-                              _scheduler.corridorEnabled = !_scheduler.corridorEnabled;
-                              _tracker.reset();
-                            }),
-                          ),
                         ],
                         if (kDebugMode)
                           _smallButton(
@@ -784,13 +786,12 @@ class _CameraScreenState extends State<CameraScreen> with WidgetsBindingObserver
     if (batches.isEmpty) return _diagText = _modelLoaded ? 'Đang chờ frame...' : 'Đang nạp AI...';
     double avg(double Function(DetectionBatch) f) => batches.map(f).reduce((a, b) => a + b) / batches.length;
     final last = batches.last;
-    final full = _lastFullBatch;
     final rate = _scanStats.length / 3;
     return _diagText = '${last.backend.toUpperCase()}${last.verifying ? ' (đối chiếu CPU)' : ''} · '
         '${avg((b) => b.totalMs).round()}ms (ảnh ${avg((b) => b.prepMs).round()} · AI ${avg((b) => b.inferMs).round()}) · '
         '${rate.toStringAsFixed(1)} lần/s · ${_scheduler.mode.vi}\n'
         '${_scene.objects.length} vật'
-        '${full == null ? '' : ' · max ${_detector.labelOf(full.maxClassId)} ${(full.maxScore * 100).round()}%'}';
+        ' · max ${_detector.labelOf(last.maxClassId)} ${(last.maxScore * 100).round()}%';
   }
 
   static String _backendLabel(String b) => switch (b) {
@@ -817,7 +818,6 @@ class _CameraScreenState extends State<CameraScreen> with WidgetsBindingObserver
       await _detector.reload();
     }
     _recentBatches.clear();
-    _lastFullBatch = null;
     _scheduler.reset();
     _tracker.reset();
     if (mounted) {
