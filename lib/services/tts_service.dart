@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:io';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_tts/flutter_tts.dart';
 
@@ -19,11 +20,35 @@ class TTSService {
   // chỉ tin completion/cancel khi câu hiện tại đã thực sự bắt đầu đọc.
   bool _started = false;
 
+  /// Máy có giọng đọc tiếng Việt không — false thì UI phải nhắc người dùng cài thêm
+  bool vietnameseAvailable = true;
+
   /// Khởi tạo và cấu hình Giọng đọc Tiếng Việt
   Future<void> init() async {
     if (_initialized) return;
+
+    if (Platform.isIOS) {
+      // Mặc định iOS tắt tiếng TTS khi gạt nút im lặng → cảnh báo nguy hiểm sẽ câm.
+      // playback: luôn phát; duckOthers: nhạc/podcast đang phát tự nhỏ lại khi có cảnh báo.
+      await _flutterTts.setSharedInstance(true);
+      await _flutterTts.setIosAudioCategory(
+        IosTextToSpeechAudioCategory.playback,
+        [
+          IosTextToSpeechAudioCategoryOptions.duckOthers,
+          IosTextToSpeechAudioCategoryOptions.interruptSpokenAudioAndMixWithOthers,
+        ],
+        IosTextToSpeechAudioMode.voicePrompt,
+      );
+    }
+
+    try {
+      vietnameseAvailable = await _flutterTts.isLanguageAvailable("vi-VN") == true;
+    } catch (e) {
+      debugPrint('Không kiểm tra được giọng tiếng Việt: $e');
+    }
     await _flutterTts.setLanguage("vi-VN"); // Tiếng Việt
-    await _flutterTts.setSpeechRate(0.6);   // Nhanh vừa đủ để câu cảnh báo ngắn gọn
+    // Thang tốc độ khác nhau: iOS 0.5 = bình thường, Android 1.0 = bình thường
+    await _flutterTts.setSpeechRate(Platform.isIOS ? 0.5 : 0.6);
     await _flutterTts.setVolume(1.0);       // Âm lượng tối đa
     await _flutterTts.setPitch(1.0);        // Tông giọng bình thường
 

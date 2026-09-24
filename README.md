@@ -124,6 +124,45 @@ flutter run
 
 ---
 
+## 🍎 Chạy Trên iPhone Từ Máy Windows
+
+Apple không cho build app iOS trên Windows → build trên máy macOS của **GitHub Actions** (miễn phí vì repo public),
+rồi cài từ Windows bằng **Sideloadly**.
+
+### Bước 1: Lấy file `.ipa`
+1. Push code lên `main` hoặc nhánh `feature/**` → workflow **"iOS build (IPA chưa ký)"** tự chạy (~10–15 phút).
+   Muốn chạy tay: tab **Actions** → chọn workflow → **Run workflow**.
+2. Mở lần chạy thành công → mục **Artifacts** → tải `smart-eye-ios-unsigned` (giải nén ra `smart-eye-unsigned.ipa`).
+
+### Bước 2: Cài lên iPhone (Windows)
+1. Cài **iTunes bản tải từ trang Apple** (không dùng bản Microsoft Store) để Windows nhận iPhone.
+2. Cài **Sideloadly**, cắm iPhone, bấm **Tin cậy** trên iPhone.
+3. Kéo file `.ipa` vào Sideloadly → nhập Apple ID → **Start**. Sideloadly ký và cài app.
+
+### Bước 3: Trên iPhone (lần đầu)
+1. **Bật Chế độ nhà phát triển** (iOS 16+): *Cài đặt → Quyền riêng tư & Bảo mật* → kéo xuống cuối, mục BẢO MẬT →
+   **Chế độ nhà phát triển** → bật → máy khởi động lại → bấm **Bật** và nhập mật mã.
+   Mục này chỉ xuất hiện **sau khi** đã cài app ở bước 2.
+2. **Tin cậy nhà phát triển**: *Cài đặt → Cài đặt chung → Quản lý VPN & thiết bị* → chọn Apple ID → **Tin cậy**.
+3. Mở app, cho phép **Camera** (và Vị trí nếu muốn lưu quãng đường).
+
+### Lưu ý
+- Apple ID miễn phí: app **hết hạn sau 7 ngày** → cắm máy, cài lại bằng Sideloadly.
+- Bản cài là **release**: không có hot reload/log trực tiếp → phát triển & debug trên Android, iPhone để kiểm tra theo mốc.
+- App phải **để mở trên màn hình** (iOS không cho chạy camera ở nền). App tự giữ màn hình sáng khi đang quét.
+- Cảnh báo **vẫn đọc khi gạt nút im lặng**; nhạc đang phát tự nhỏ lại khi có cảnh báo.
+- Nếu app báo **thiếu giọng tiếng Việt**: *Cài đặt → Trợ năng → Nội dung được đọc → Giọng nói → Tiếng Việt*.
+
+### Danh sách kiểm tra trên iPhone
+- [ ] Dòng thông số dưới màn hình có số ms và "max …%" thay đổi theo cảnh (AI đang chạy)
+- [ ] Hướng camera vào người / ô tô → hiện khung, hình đứng thẳng
+- [ ] Gạt nút im lặng → vẫn nghe cảnh báo
+- [ ] Xoay ngang / dọc → khung vật vẫn khớp hình
+- [ ] Để yên 1 phút → màn hình không tự khoá
+- [ ] Chạm 2 lần → nghe mô tả xung quanh
+
+---
+
 ## ⚙️ Thông Số Kỹ Thuật AI & Cấu Hình
 
 - **Model AI**: YOLOv8 Nano (`yolov8n_int8.tflite`) - Kích thước ~3.5MB.

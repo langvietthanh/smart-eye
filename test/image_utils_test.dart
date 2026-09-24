@@ -25,6 +25,41 @@ CameraImage grayImage() {
 
 List<int> toBytes(Iterable<double> v) => v.map((e) => (e * 255).round()).toList();
 
+Map<String, dynamic> _plane(List<int> bytes, int bytesPerRow, {int? bytesPerPixel}) =>
+    {'bytes': Uint8List.fromList(bytes), 'bytesPerRow': bytesPerRow, 'bytesPerPixel': bytesPerPixel};
+
+/// Frame BGRA 2×2 của iOS, mỗi hàng có 4 byte đệm (bytesPerRow = 12 > 2 × 4):
+///   (0,0)=đỏ  (1,0)=xanh lá
+///   (0,1)=xanh dương  (1,1)=trắng
+CameraImage bgraImage() {
+  // ignore: deprecated_member_use
+  return CameraImage.fromPlatformData({
+    'format': 1111970369, // kCVPixelFormatType_32BGRA
+    'width': 2,
+    'height': 2,
+    'planes': [
+      _plane([
+        0, 0, 255, 255, /**/ 0, 255, 0, 255, /**/ 9, 9, 9, 9, // hàng 0 + đệm
+        255, 0, 0, 255, /**/ 255, 255, 255, 255, /**/ 9, 9, 9, 9, // hàng 1 + đệm
+      ], 12),
+    ],
+  });
+}
+
+/// Frame NV12 2×2 (iOS yuv420): lớp Y + lớp UV xen kẽ, bytesPerPixel = null như trên iOS
+CameraImage nv12GrayImage() {
+  // ignore: deprecated_member_use
+  return CameraImage.fromPlatformData({
+    'format': 875704438, // kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange
+    'width': 2,
+    'height': 2,
+    'planes': [
+      _plane([10, 20, 30, 40], 2),
+      _plane([128, 128], 2),
+    ],
+  });
+}
+
 void main() {
   test('NCHW: 3 mặt phẳng R, G, B liên tiếp', () {
     final out = ImageUtils.cameraImageToFloat32(grayImage(), size: 2, channelsFirst: true, rotationDegrees: 0)!;
@@ -42,6 +77,29 @@ void main() {
     final out = ImageUtils.cameraImageToFloat32(grayImage(), size: 2, channelsFirst: true, rotationDegrees: 90)!;
     // Ảnh sau khi xoay:  30 10 / 40 20
     expect(toBytes(out.sublist(0, 4)), [30, 10, 40, 20]);
+  });
+
+  test('BGRA (iOS): đúng thứ tự kênh, bỏ qua byte đệm cuối hàng', () {
+    final out = ImageUtils.cameraImageToFloat32(bgraImage(), size: 2, channelsFirst: true, rotationDegrees: 0)!;
+    expect(toBytes(out.sublist(0, 4)), [255, 0, 0, 255]); // R
+    expect(toBytes(out.sublist(4, 8)), [0, 255, 0, 255]); // G
+    expect(toBytes(out.sublist(8, 12)), [0, 0, 255, 255]); // B
+  });
+
+  test('NV12 (iOS yuv420): đọc lớp UV xen kẽ', () {
+    final out = ImageUtils.cameraImageToFloat32(nv12GrayImage(), size: 2, channelsFirst: true, rotationDegrees: 0)!;
+    expect(toBytes(out.sublist(0, 4)), [10, 20, 30, 40]);
+  });
+
+  test('góc xoay frame: iOS luôn 0 (plugin đã xoay sẵn), Android bù theo hướng máy', () {
+    int rot({required bool ios, int device = 0, bool front = false}) => ImageUtils.frameRotation(
+        isIOS: ios, sensorOrientation: 90, deviceDegrees: device, frontCamera: front);
+    expect(rot(ios: true), 0);
+    expect(rot(ios: true, device: 90), 0);
+    expect(rot(ios: false), 90); // Android cầm dọc
+    expect(rot(ios: false, device: 90), 0); // Android landscapeLeft
+    expect(rot(ios: false, device: 270), 180); // Android landscapeRight
+    expect(rot(ios: false, front: true), 90);
   });
 
   test('xoay 180° và 270°', () {
