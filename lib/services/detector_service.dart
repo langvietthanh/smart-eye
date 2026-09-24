@@ -69,6 +69,7 @@ class DetectorService {
     debugPrint('Lớp: ${_labels.length} (xét ${_classIds.length}) · input ${info.inputSize} '
         '${info.channelsFirst ? 'NCHW' : 'NHWC'} · output ${info.outputShape}');
     debugPrint('Backend: ${info.backend} · benchmark ms: ${info.benchmark}');
+    info.rejected.forEach((backend, reason) => debugPrint('Không dùng $backend: $reason'));
   }
 
   /// Đường dẫn model đang dùng

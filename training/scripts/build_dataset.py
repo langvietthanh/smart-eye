@@ -15,6 +15,8 @@ Cách dùng:
         --out datasets/smart_eye
 
     Nguồn dạng `DIR@names.yaml` dùng file tên lớp riêng; `DIR@coco80` dùng 80 lớp COCO.
+    Thêm `#train` / `#val` ở cuối để ép cả nguồn vào 1 tập, VD `datasets/bpid#val`.
+    Tên lớp tự đọc từ data.yaml / dataset.yaml, hoặc classes.txt / notes.json (Label Studio export YOLO).
 """
 from __future__ import annotations
 
@@ -42,11 +44,23 @@ def find_names(src: Path, override: str | None) -> list[str]:
     for cand in ['data.yaml', 'dataset.yaml', 'data.yml']:
         if (src / cand).exists():
             return read_names(src / cand)
+    # Label Studio (export YOLO): classes.txt mỗi dòng 1 tên, hoặc notes.json {"categories": [{id, name}]}
+    for classes_txt in [src / 'classes.txt', *src.glob('*/classes.txt')]:
+        if classes_txt.exists():
+            names = [l.strip() for l in classes_txt.read_text(encoding='utf-8').splitlines() if l.strip()]
+            if names:
+                return names
+    for notes in [src / 'notes.json', *src.glob('*/notes.json')]:
+        if notes.exists():
+            cats = json.loads(notes.read_text(encoding='utf-8')).get('categories', [])
+            if cats:
+                return [c['name'] for c in sorted(cats, key=lambda c: c['id'])]
     for y in src.glob('*.y*ml'):
         with open(y, encoding='utf-8') as f:
             if 'names' in (yaml.safe_load(f) or {}):
                 return read_names(y)
-    raise SystemExit(f'Không tìm thấy data.yaml có "names" trong {src} — dùng cú pháp {src}@names.yaml')
+    raise SystemExit(f'Không tìm thấy tên lớp (data.yaml / classes.txt / notes.json) trong {src} — '
+                     f'dùng cú pháp {src}@names.yaml')
 
 
 def parse_label_line(line: str) -> tuple[int, float, float, float, float] | None:
@@ -103,6 +117,9 @@ def main() -> None:
     negatives: dict[str, list[tuple[Path, str]]] = {'train': [], 'val': []}
 
     for si, spec in enumerate(args.source):
+        spec, _, forced_split = spec.partition('#')
+        if forced_split not in ('', 'train', 'val'):
+            raise SystemExit(f'Sau dấu # chỉ được train hoặc val: {spec}#{forced_split}')
         path, _, override = spec.partition('@')
         src = Path(path)
         names = find_names(src, override or None)
@@ -111,7 +128,7 @@ def main() -> None:
         print(f'[{tag}] {src} — {len(names)} lớp, đổi được {sum(v is not None for v in to_dst.values())}')
 
         for img in sorted(p for p in src.rglob('*') if p.suffix.lower() in IMAGE_EXTS):
-            split = split_of(img, src, args.val_ratio)
+            split = forced_split or split_of(img, src, args.val_ratio)
             lines = []
             lbl = label_path_for(img)
             if lbl.exists():

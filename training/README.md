@@ -9,6 +9,7 @@ scripts/
   fetch_coco_subset.py  ← tải 1 phần COCO (giữ người, xe...)
   auto_label.py         ← gán nhãn tự động bằng YOLO-World (người sửa lại)
   build_dataset.py      ← gộp mọi nguồn dữ liệu theo classes.yaml
+  fetch_mendeley.py     ← tải dataset từ Mendeley Data (VD BPID — ổ gà)
 smart_eye_train.ipynb   ← notebook Colab chạy trọn quy trình
 ```
 
@@ -25,7 +26,24 @@ File nghiệp vụ nói giá trị lớn nhất là vật **ở tầm ngực / c
 **Thêm / bớt lớp:** sửa `classes.yaml` **và** `lib/utils/label_catalog.dart` (tên tiếng Việt + nhóm nguy hiểm).
 `flutter test` có test so khớp 2 file — lệch là báo lỗi ngay.
 
-## 2. Thu thập ảnh
+## 2. Nguồn dữ liệu
+
+| Dataset | Lớp | Quy mô | Giấy phép | Dùng làm | Đã kiểm tra |
+|---|---|---|---|---|---|
+| COCO 2017 (một phần) | người, xe, ghế, biển báo... | ~6800 ảnh | CC BY 4.0 | train + val | `fetch_coco_subset.py` |
+| [BPID — Bandung Pothole Image Dataset](https://data.mendeley.com/datasets/rgymy6dwdd/1) | `pothole` | 161 ảnh, 263 ổ gà (trung vị box 2,9% ảnh), nắng / râm / ướt / đêm | **CC BY 4.0** | **val** (tác giả thiết kế làm tập kiểm tra độc lập) | Nhãn YOLO sạch, 0 dòng lỗi · `fetch_mendeley.py rgymy6dwdd` |
+| Roboflow Universe | tuỳ dataset | — | xem từng dataset | train | bước 3 notebook |
+| **Ảnh nhóm tự chụp** | mọi lớp | càng nhiều càng tốt | của nhóm | train + val | quan trọng nhất |
+
+**Ghi nguồn (bắt buộc với CC BY 4.0)** — đưa vào báo cáo / slide khi dùng model train với dữ liệu này:
+- Jamaludin, S. U. (2026). *Bandung Pothole Image Dataset (BPID)* (Version 1). Mendeley Data. https://doi.org/10.17632/rgymy6dwdd.1
+- Lin, T.-Y. et al. (2014). *Microsoft COCO: Common Objects in Context*. ECCV.
+
+Lưu ý BPID: ảnh ổ gà trên **đường** ở Indonesia (theo mô tả của tác giả) — góc chụp có thể khác điện thoại đeo trước
+ngực đi trên vỉa hè Việt Nam. Tác giả thiết kế dataset làm tập kiểm tra độc lập, nên mặc định dùng để **kiểm tra** model
+có hiểu "ổ gà" ở nơi khác không; dữ liệu train ổ gà chính vẫn nên là Roboflow + ảnh nhóm tự chụp.
+
+## 3. Thu thập ảnh
 
 Dataset trên mạng chủ yếu là đường phố nước ngoài → **ảnh vỉa hè Việt Nam do nhóm tự chụp là quan trọng nhất**.
 
@@ -38,7 +56,7 @@ Dataset trên mạng chủ yếu là đường phố nước ngoài → **ảnh 
 **Quyền riêng tư:** ảnh đường phố có mặt người, biển số xe → chỉ lưu trên Drive riêng của nhóm, **không công khai
 dataset**; nếu cần chia sẻ, làm mờ mặt / biển số trước.
 
-## 3. Quy tắc gán nhãn (cả nhóm phải khoanh giống nhau)
+## 4. Quy tắc gán nhãn (cả nhóm phải khoanh giống nhau)
 
 | Lớp | Khoanh gì | Không khoanh |
 |---|---|---|
@@ -61,7 +79,7 @@ Quy tắc chung: khoanh **sát mép vật**; vật bị che ≥ 70% hoặc quá 
 **Công cụ:** [CVAT](https://www.cvat.ai), [Label Studio](https://labelstud.io) hoặc [Roboflow](https://roboflow.com) —
 export định dạng **YOLO**. Dùng `auto_label.py` (bước 4a trong notebook) để có box sẵn rồi sửa lại, nhanh hơn ~3–5 lần.
 
-## 4. Train trên Colab
+## 5. Train trên Colab
 
 1. Mở `smart_eye_train.ipynb` bằng Google Colab (*File → Upload notebook*, hoặc mở từ GitHub).
 2. *Runtime → Change runtime type → T4 GPU*.
@@ -76,7 +94,7 @@ pip install ultralytics pyyaml
 python training/scripts/build_dataset.py --source tool/coco128@coco80 --out datasets/test
 ```
 
-## 5. Tiêu chí nhận model mới
+## 6. Tiêu chí nhận model mới
 
 Trước khi thay model trong app, chạy `python tool/eval_model.py --model <file mới> --data <data.yaml>` và so với
 model cũ (`python tool/eval_model.py --data <data.yaml>`):
@@ -85,7 +103,7 @@ model cũ (`python tool/eval_model.py --data <data.yaml>`):
 - Các lớp COCO (người, xe...): recall vật lớn **không giảm quá 0.05** so với model cũ.
 - Chạy thật trên điện thoại: thời gian "AI" trên dòng chẩn đoán không tăng quá 20%.
 
-## 6. Đưa model vào app
+## 7. Đưa model vào app
 
 Đổi tên file thành **`smart_eye.tflite`**, chép vào `assets/models/`, chạy lại app. App tự ưu tiên file này,
 đọc tên lớp từ metadata trong model (không cần sửa `coco.txt`). Log khởi động:

@@ -20,7 +20,11 @@ class WorkerInfo {
   /// Thời gian chạy model trung bình (ms) của từng cách đã thử lúc khởi động; -1 = lỗi / cho kết quả sai
   final Map<String, double> benchmark;
 
-  const WorkerInfo(this.backend, this.inputSize, this.channelsFirst, this.outputShape, this.benchmark);
+  /// Lý do cách chạy bị loại (VD GPU không hỗ trợ op, kết quả lệch CPU...)
+  final Map<String, String> rejected;
+
+  const WorkerInfo(this.backend, this.inputSize, this.channelsFirst, this.outputShape, this.benchmark,
+      [this.rejected = const {}]);
 }
 
 /// Kết quả 1 lần quét
@@ -251,7 +255,8 @@ class _Engine {
     _readShapes(runner.interpreter);
   }
 
-  WorkerInfo get info => WorkerInfo(runner.backend, _info.inputSize, _info.channelsFirst, _info.outputShape, _info.benchmark);
+  WorkerInfo get info =>
+      WorkerInfo(runner.backend, _info.inputSize, _info.channelsFirst, _info.outputShape, _info.benchmark, _info.rejected);
 
   static _Engine create(_Init init) {
     final bytes = init.model.materialize().asUint8List();
@@ -262,6 +267,7 @@ class _Engine {
 
     // Đo từng cách chạy trên cùng 1 input thử; cách tăng tốc phải cho kết quả giống CPU
     final bench = <String, double>{};
+    final rejected = <String, String>{};
     _Runner? best;
     double bestMs = double.infinity;
     Float32List? reference;
@@ -272,8 +278,12 @@ class _Engine {
         final result = _benchmark(r.interpreter);
         if (reference == null) {
           reference = result.output;
-        } else if (!_similar(reference, result.output)) {
-          throw StateError('kết quả khác CPU');
+        } else {
+          final diff = _difference(reference, result.output);
+          if (diff.max >= 0.05 || diff.mean >= 0.005) {
+            throw StateError('kết quả lệch CPU: max ${diff.max.toStringAsFixed(4)}, '
+                'trung bình ${diff.mean.toStringAsFixed(5)} (${result.ms.toStringAsFixed(0)} ms)');
+          }
         }
         bench[backend] = result.ms;
         // Cách tăng tốc phải nhanh hơn CPU ≥ 15% mới đáng dùng (CPU ổn định hơn)
@@ -287,6 +297,7 @@ class _Engine {
         }
       } catch (e) {
         bench[backend] = -1;
+        rejected[backend] = '$e';
         r?.close();
       }
     }
@@ -300,6 +311,7 @@ class _Engine {
       nchw,
       best.interpreter.getOutputTensor(0).shape,
       bench,
+      rejected,
     );
     return _Engine._(bytes, init.classIds, init.conf, init.iou, best, info);
   }
@@ -354,15 +366,15 @@ class _Engine {
     return (ms: ms, output: Float32List.fromList(_readOutput(interpreter.getOutputTensor(0))));
   }
 
-  static bool _similar(Float32List a, Float32List b) {
-    if (a.length != b.length) return false;
+  static ({double max, double mean}) _difference(Float32List a, Float32List b) {
+    if (a.length != b.length) return (max: double.infinity, mean: double.infinity);
     var maxDiff = 0.0, sum = 0.0;
     for (var i = 0; i < a.length; i++) {
       final d = (a[i] - b[i]).abs();
       sum += d;
       if (d > maxDiff) maxDiff = d;
     }
-    return maxDiff < 0.05 && sum / a.length < 0.005;
+    return (max: maxDiff, mean: sum / a.length);
   }
 
   void _readShapes(Interpreter interpreter) {
