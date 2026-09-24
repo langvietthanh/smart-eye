@@ -1,7 +1,10 @@
 import 'dart:async';
+import 'dart:io';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:camera/camera.dart';
+import 'package:wakelock_plus/wakelock_plus.dart';
 import '../main.dart';
 import '../models/Recognition.dart';
 import '../models/scene_info.dart';
@@ -59,18 +62,25 @@ class _CameraScreenState extends State<CameraScreen> with WidgetsBindingObserver
     DeviceOrientation.landscapeRight: 270,
   };
 
-  /// Góc cần xoay ảnh camera để AI thấy thế giới đứng thẳng — tự tính theo góc cảm biến + hướng
-  /// điện thoại (công thức mẫu của Google ML Kit). Xoay điện thoại thì preview, khung vật, 3 cột
-  /// và ảnh đưa vào AI cùng xoay theo màn hình, không cần bấm nút.
+  /// Góc cần xoay ảnh camera để AI thấy thế giới đứng thẳng — tự tính theo nền tảng, góc cảm biến
+  /// và hướng điện thoại (xem [ImageUtils.frameRotation]). Xoay điện thoại thì preview, khung vật,
+  /// 3 cột và ảnh đưa vào AI cùng xoay theo màn hình, không cần bấm nút.
   int get _rotationDegrees {
     final controller = _controller;
     final camera = controller?.description ?? (cameras.isNotEmpty ? cameras.first : null);
     if (camera == null) return 90;
-    final device = _deviceDegrees[controller?.value.deviceOrientation ?? DeviceOrientation.portraitUp]!;
-    return camera.lensDirection == CameraLensDirection.front
-        ? (camera.sensorOrientation + device) % 360
-        : (camera.sensorOrientation - device + 360) % 360;
+    final auto = ImageUtils.frameRotation(
+      isIOS: Platform.isIOS,
+      sensorOrientation: camera.sensorOrientation,
+      deviceDegrees: _deviceDegrees[controller?.value.deviceOrientation ?? DeviceOrientation.portraitUp]!,
+      frontCamera: camera.lensDirection == CameraLensDirection.front,
+    );
+    return (auto + _debugRotationOffset) % 360;
   }
+
+  /// Chỉ dùng khi debug: webcam của máy ảo Android hay báo sai góc cảm biến → hình bị nghiêng.
+  /// Xoay bù cả preview lẫn ảnh vào AI để chúng luôn khớp nhau. Bản release luôn = 0.
+  int _debugRotationOffset = 0;
 
   bool _paused = false;          // Tạm dừng nhận diện (khi mở lịch sử)
   bool _autoDescribe = false;    // F3 mặc định on-demand
@@ -137,7 +147,8 @@ class _CameraScreenState extends State<CameraScreen> with WidgetsBindingObserver
       cameras.first,
       ResolutionPreset.medium,
       enableAudio: false,
-      imageFormatGroup: ImageFormatGroup.yuv420,
+      // iOS: BGRA 1 lớp (định dạng camera plugin khuyên dùng cho AI trên iOS); Android: YUV_420_888
+      imageFormatGroup: Platform.isIOS ? ImageFormatGroup.bgra8888 : ImageFormatGroup.yuv420,
     );
     _controller = controller;
 
@@ -146,6 +157,8 @@ class _CameraScreenState extends State<CameraScreen> with WidgetsBindingObserver
       if (!mounted || _controller != controller) return;
       setState(() => _statusText = 'Camera sẵn sàng!');
       await controller.startImageStream(_onCameraFrame);
+      // Màn hình tự khoá = app dừng = mất cảnh báo → giữ sáng suốt lúc đang quét
+      unawaited(WakelockPlus.enable());
       if (!_greeted) {
         _greeted = true;
         _speech.say(
@@ -376,6 +389,7 @@ class _CameraScreenState extends State<CameraScreen> with WidgetsBindingObserver
     WidgetsBinding.instance.removeObserver(this);
     _mockTimer?.cancel();
     _describeFallback?.cancel();
+    unawaited(WakelockPlus.disable());
     _controller?.dispose();
     _detector.dispose();
     _speech.stopAll();
@@ -469,7 +483,7 @@ class _CameraScreenState extends State<CameraScreen> with WidgetsBindingObserver
               onLongPress: _speakRecap,
               // Chế độ Test: KHÔNG hiện camera thật để không ai nhầm khung giả lập là kết quả nhận diện
               child: cameraReady && !_isMockTest
-                  ? CameraPreview(controller)
+                  ? RotatedBox(quarterTurns: _debugRotationOffset ~/ 90, child: CameraPreview(controller))
                   : const ColoredBox(color: Color(0xFF1A1A2E)),
             ),
           ),
@@ -529,6 +543,10 @@ class _CameraScreenState extends State<CameraScreen> with WidgetsBindingObserver
                       ],
                     ),
                     const SizedBox(height: 8),
+                    if (!_speech.vietnameseAvailable) ...[
+                      _voiceMissingBanner(),
+                      const SizedBox(height: 8),
+                    ],
                     ExcludeSemantics(
                       // Màu theo mức của CHÍNH câu đang nói — không lấy theo cảnh báo của frame hiện tại
                       child: ValueListenableBuilder<SpokenLine?>(
@@ -591,6 +609,19 @@ class _CameraScreenState extends State<CameraScreen> with WidgetsBindingObserver
                           ),
                         ),
                         const SizedBox(width: 8),
+                        if (kDebugMode) ...[
+                          _smallButton(
+                            icon: Icons.screen_rotation,
+                            label: 'Bù xoay $_debugRotationOffset°',
+                            color: Colors.blueGrey.withValues(alpha: 0.8),
+                            onTap: () => setState(() {
+                              _debugRotationOffset = (_debugRotationOffset + 90) % 360;
+                              _tracker.reset();
+                              _scene = SceneAssessment.empty;
+                            }),
+                          ),
+                          const SizedBox(width: 8),
+                        ],
                         _smallButton(
                           icon: Icons.bug_report,
                           label: _isMockTest ? 'Tắt Test' : '🧪 Test UI',
@@ -667,6 +698,21 @@ class _CameraScreenState extends State<CameraScreen> with WidgetsBindingObserver
             ],
           ),
         ),
+      ),
+    );
+  }
+
+  /// Máy chưa có giọng tiếng Việt → TTS sẽ đọc bằng giọng mặc định, khó nghe → hướng dẫn cài
+  Widget _voiceMissingBanner() {
+    final path = Platform.isIOS
+        ? 'Cài đặt → Trợ năng → Nội dung được đọc → Giọng nói → Tiếng Việt'
+        : 'Cài đặt → Quản lý chung → Chuyển văn bản thành giọng nói → tải gói Tiếng Việt';
+    return Container(
+      padding: const EdgeInsets.all(10),
+      decoration: BoxDecoration(color: Colors.amber, borderRadius: BorderRadius.circular(12)),
+      child: Text(
+        'Máy chưa có giọng đọc tiếng Việt. Vào: $path',
+        style: const TextStyle(color: Colors.black, fontWeight: FontWeight.bold),
       ),
     );
   }

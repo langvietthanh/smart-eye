@@ -66,6 +66,9 @@ class SpeechManager {
 
   Future<void> init() => _tts.init();
 
+  /// Máy có giọng đọc tiếng Việt không (kiểm tra lúc [init])
+  bool get vietnameseAvailable => _tts.vietnameseAvailable;
+
   bool get isBusy => _current != null || _queue.isNotEmpty;
 
   /// Câu này có được nhận không (không bị tắt tiếng, không trùng, chưa có câu cùng chủ thể đang chờ)

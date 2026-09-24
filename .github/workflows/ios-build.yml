@@ -1,0 +1,44 @@
+# Build app iOS trên máy macOS của GitHub (miễn phí cho repo public) → file .ipa CHƯA KÝ.
+# Trên Windows: tải artifact về, dùng Sideloadly ký bằng Apple ID và cài lên iPhone (xem README).
+name: iOS build (IPA chưa ký)
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main, 'feature/**']
+    paths-ignore: ['**.md', 'tool/**']
+
+jobs:
+  build-ios:
+    runs-on: macos-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          flutter-version: 3.47.2 # cùng bản với máy dev (pubspec cần Dart ≥ 3.13.2)
+          cache: true
+
+      - name: Cài thư viện
+        run: flutter pub get
+
+      - name: Unit test
+        run: flutter test
+
+      - name: Build iOS (release, không ký)
+        run: flutter build ios --release --no-codesign
+
+      - name: Đóng gói IPA
+        run: |
+          mkdir -p Payload
+          cp -R build/ios/iphoneos/Runner.app Payload/
+          zip -qr smart-eye-unsigned.ipa Payload
+          ls -lh smart-eye-unsigned.ipa
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: smart-eye-ios-unsigned
+          path: smart-eye-unsigned.ipa
+          retention-days: 14
