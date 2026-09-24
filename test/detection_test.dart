@@ -85,6 +85,29 @@ void main() {
     });
   });
 
+  group('So sánh CPU / GPU', () {
+    test('lệch toạ độ ở ô điểm ~0 được bỏ qua, lệch ở ô có vật thì bị bắt', () {
+      final cpu = fakeOutput(1, [(cx: 0.5, cy: 0.5, w: 0.2, h: 0.2, cls: 0, score: 0.9)]);
+      final gpu = Float32List.fromList(cpu);
+      gpu[1] = 0.9; // anchor 1 (điểm 0): toạ độ lệch 0.9 — không ảnh hưởng kết quả
+      var d = YoloDecoder.compareOutputs(cpu, gpu, const [1, 5, 8], inputSize: 320);
+      expect(d.boxMax, 0);
+      expect(d.confident, 1);
+      gpu[0] = 0.6; // anchor 0 (điểm 0.9): cx lệch 0.1 → bị bắt
+      d = YoloDecoder.compareOutputs(cpu, gpu, const [1, 5, 8], inputSize: 320);
+      expect(d.boxMax, closeTo(0.1, 1e-6));
+    });
+
+    test('danh sách vật: vật chắc chắn phải khớp, vật sát ngưỡng được bỏ qua', () {
+      const car = RawDetection(2, 0.8, 0.1, 0.1, 0.5, 0.5);
+      const carShifted = RawDetection(2, 0.78, 0.11, 0.1, 0.51, 0.5);
+      const weakPerson = RawDetection(0, 0.27, 0.6, 0.6, 0.7, 0.9);
+      expect(YoloDecoder.sameDetections([car, weakPerson], [carShifted]), isTrue);
+      expect(YoloDecoder.sameDetections([car], []), isFalse);
+      expect(YoloDecoder.sameDetections([car], [const RawDetection(7, 0.8, 0.1, 0.1, 0.5, 0.5)]), isFalse);
+    });
+  });
+
   group('ModelMetadata', () {
     test('đọc được tên lớp + kích thước ảnh từ model thật của app', () {
       final bytes = File('assets/models/yolov8n_int8.tflite').readAsBytesSync();

@@ -44,6 +44,9 @@ class DetectionBatch {
   final double motion;
   final String? error;
 
+  /// Đang chạy thêm CPU song song để đối chiếu kết quả cách tăng tốc (vài frame đầu)
+  final bool verifying;
+
   const DetectionBatch({
     required this.detections,
     required this.maxScore,
@@ -55,6 +58,7 @@ class DetectionBatch {
     required this.parseMs,
     required this.motion,
     this.error,
+    this.verifying = false,
   });
 
   double get totalMs => prepMs + inferMs + parseMs;
@@ -247,6 +251,14 @@ class _Engine {
   late final double inputScale;
   late final int inputZeroPoint;
 
+  /// CPU chạy song song vài frame đầu để đối chiếu cách tăng tốc trên ảnh thật (null = không đối chiếu)
+  _Runner? _verifier;
+
+  /// Số frame thật có vật đã khớp CPU; đủ [_verifyFramesNeeded] thì tin hẳn cách tăng tốc
+  int _verifiedFrames = 0;
+  int _verifyBudget = 30; // Tối đa 30 frame (kể cả frame không có vật) rồi thôi đối chiếu
+  static const _verifyFramesNeeded = 3;
+
   FrameData? _lastFrame;
   int _lastRotation = 0;
   Uint8List? _lastSignature;
@@ -269,6 +281,7 @@ class _Engine {
     final bench = <String, double>{};
     final rejected = <String, String>{};
     _Runner? best;
+    _Runner? cpu; // Giữ lại làm "trọng tài" đối chiếu trên frame thật nếu chọn cách tăng tốc
     double bestMs = double.infinity;
     Float32List? reference;
     for (final backend in candidates) {
@@ -276,25 +289,30 @@ class _Engine {
       try {
         r = _createRunner(bytes, backend);
         final result = _benchmark(r.interpreter);
+        final shape = r.interpreter.getOutputTensor(0).shape;
+        final input = r.interpreter.getInputTensor(0).shape;
         if (reference == null) {
           reference = result.output;
         } else {
-          final diff = _difference(reference, result.output);
-          if (diff.max >= 0.05 || diff.mean >= 0.005) {
-            throw StateError('kết quả lệch CPU: max ${diff.max.toStringAsFixed(4)}, '
-                'trung bình ${diff.mean.toStringAsFixed(5)} (${result.ms.toStringAsFixed(0)} ms)');
+          final diff = YoloDecoder.compareOutputs(reference, result.output, shape,
+              inputSize: input[1] == 3 ? input[2] : input[1]);
+          // Điểm tin cậy phải gần như bằng CPU; toạ độ chỉ xét ở ô có điểm đáng kể
+          if (diff.scoreMax >= 0.05 || diff.boxMax >= 0.03) {
+            throw StateError('kết quả lệch CPU: điểm ${diff.scoreMax.toStringAsFixed(4)}, '
+                'toạ độ ${diff.boxMax.toStringAsFixed(4)} ở ${diff.confident} ô (${result.ms.toStringAsFixed(0)} ms)');
           }
         }
         bench[backend] = result.ms;
         // Cách tăng tốc phải nhanh hơn CPU ≥ 15% mới đáng dùng (CPU ổn định hơn)
         final effective = backend == 'cpu' ? result.ms : result.ms / 0.85;
         if (effective < bestMs) {
-          best?.close();
+          if (best != null && best.backend != 'cpu') best.close();
           best = r;
           bestMs = effective;
         } else {
           r.close();
         }
+        if (backend == 'cpu') cpu = r;
       } catch (e) {
         bench[backend] = -1;
         rejected[backend] = '$e';
@@ -302,6 +320,7 @@ class _Engine {
       }
     }
     if (best == null) throw StateError('không chạy được model bằng cách nào: $bench');
+    final verifier = best.backend == 'cpu' ? null : cpu;
 
     final input = best.interpreter.getInputTensor(0).shape;
     final nchw = input[1] == 3;
@@ -313,7 +332,7 @@ class _Engine {
       bench,
       rejected,
     );
-    return _Engine._(bytes, init.classIds, init.conf, init.iou, best, info);
+    return _Engine._(bytes, init.classIds, init.conf, init.iou, best, info).._verifier = verifier;
   }
 
   static _Runner _createRunner(Uint8List bytes, String backend) {
@@ -366,17 +385,6 @@ class _Engine {
     return (ms: ms, output: Float32List.fromList(_readOutput(interpreter.getOutputTensor(0))));
   }
 
-  static ({double max, double mean}) _difference(Float32List a, Float32List b) {
-    if (a.length != b.length) return (max: double.infinity, mean: double.infinity);
-    var maxDiff = 0.0, sum = 0.0;
-    for (var i = 0; i < a.length; i++) {
-      final d = (a[i] - b[i]).abs();
-      sum += d;
-      if (d > maxDiff) maxDiff = d;
-    }
-    return (max: maxDiff, mean: sum / a.length);
-  }
-
   void _readShapes(Interpreter interpreter) {
     final input = interpreter.getInputTensor(0);
     channelsFirst = input.shape[1] == 3;
@@ -423,15 +431,28 @@ class _Engine {
     }
     final inferMs = sw.elapsedMicroseconds / 1000 - prepMs;
 
-    final decoded = YoloDecoder.decode(
-      output: _readOutput(runner.interpreter.getOutputTensor(0)),
-      shape: outputShape,
-      classIds: classIds,
-      inputSize: inputSize,
-      confThreshold: conf,
-      iouThreshold: iou,
-      crop: request.crop,
-    );
+    var decoded = _decode(runner, request.crop);
+
+    // Vài frame đầu: chạy thêm CPU trên CÙNG ảnh, danh sách vật lệch → bỏ cách tăng tốc
+    final verifier = _verifier;
+    final verifying = verifier != null;
+    if (verifier != null) {
+      verifier.interpreter.runInference([input]);
+      final reference = _decode(verifier, request.crop);
+      if (!YoloDecoder.sameDetections(reference.detections, decoded.detections)) {
+        error = '${runner.backend} cho kết quả lệch CPU trên ảnh thật → chuyển về CPU';
+        runner.close();
+        runner = verifier;
+        _verifier = null;
+        decoded = reference;
+      } else {
+        if (reference.detections.isNotEmpty) _verifiedFrames++;
+        if (_verifiedFrames >= _verifyFramesNeeded || --_verifyBudget <= 0) {
+          verifier.close();
+          _verifier = null;
+        }
+      }
+    }
     final detections = request.crop.isFull
         ? decoded.detections
         : decoded.detections.where((d) => !YoloDecoder.touchesCropEdge(d, request.crop)).toList();
@@ -448,8 +469,19 @@ class _Engine {
       parseMs: parseMs,
       motion: motion,
       error: error,
+      verifying: verifying,
     );
   }
+
+  DecodeResult _decode(_Runner r, CropRect crop) => YoloDecoder.decode(
+        output: _readOutput(r.interpreter.getOutputTensor(0)),
+        shape: outputShape,
+        classIds: classIds,
+        inputSize: inputSize,
+        confThreshold: conf,
+        iouThreshold: iou,
+        crop: crop,
+      );
 
   DetectionBatch _empty(CropRect crop, double motion, double prepMs, String error) => DetectionBatch(
         detections: const [],
@@ -506,5 +538,8 @@ class _Engine {
     }
   }
 
-  void close() => runner.close();
+  void close() {
+    runner.close();
+    _verifier?.close();
+  }
 }

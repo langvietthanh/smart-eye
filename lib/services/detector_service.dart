@@ -102,7 +102,7 @@ class DetectorService {
     lastBatch = batch;
     if (batch.error != null) debugPrint('Detector: ${batch.error}');
     if (++_scanCount % 20 == 0) {
-      debugPrint('[Scan $_scanCount] ${batch.backend} ${batch.totalMs.toStringAsFixed(1)}ms '
+      debugPrint('[Scan $_scanCount] ${batch.backend}${batch.verifying ? ' (đối chiếu CPU)' : ''} ${batch.totalMs.toStringAsFixed(1)}ms '
           '(ảnh ${batch.prepMs.toStringAsFixed(1)} · AI ${batch.inferMs.toStringAsFixed(1)} · '
           'đọc ${batch.parseMs.toStringAsFixed(1)}) · ${batch.crop.isFull ? 'toàn khung' : 'hành lang'} · '
           'motion ${batch.motion.toStringAsFixed(3)} · ${batch.detections.length} vật · '

@@ -189,13 +189,18 @@ class _CameraScreenState extends State<CameraScreen> with WidgetsBindingObserver
   void didChangeAppLifecycleState(AppLifecycleState state) {
     final controller = _controller;
     if (state == AppLifecycleState.paused) _history.flush();
-    if (controller == null || !controller.value.isInitialized) return;
 
-    // Camera phải được giải phóng khi app rời màn hình, mở lại khi quay về
-    if (state == AppLifecycleState.inactive) {
-      _controller = null;
-      controller.dispose();
-    } else if (state == AppLifecycleState.resumed) {
+    // Camera phải được giải phóng khi app rời màn hình, mở lại khi quay về.
+    // (Lỗi cũ: kiểm tra `_controller == null` trước → khi quay về luôn thoát sớm, camera không bao giờ mở lại
+    // sau khi kéo thanh thông báo / hiện hộp thoại xin quyền.)
+    if (state == AppLifecycleState.inactive || state == AppLifecycleState.paused) {
+      if (controller != null && controller.value.isInitialized) {
+        _controller = null;
+        controller.dispose();
+      }
+    } else if (state == AppLifecycleState.resumed && _modelLoaded && controller == null && !_hasError) {
+      _scheduler.reset();
+      _tracker.reset();
       _initializeCamera();
     }
   }
@@ -748,7 +753,7 @@ class _CameraScreenState extends State<CameraScreen> with WidgetsBindingObserver
     final info = _detector.info;
     if (b == null || info == null) return _modelLoaded ? 'Đang chờ frame...' : 'Đang nạp AI...';
     final rate = _scanStats.length / 3;
-    return '${info.backend.toUpperCase()} · ${b.totalMs.round()}ms '
+    return '${b.backend.toUpperCase()}${b.verifying ? ' (đối chiếu CPU)' : ''} · ${b.totalMs.round()}ms '
         '(ảnh ${b.prepMs.round()} · AI ${b.inferMs.round()} · đọc ${b.parseMs.round()}) · '
         '${rate.toStringAsFixed(1)} lần/s · ${_scheduler.mode.vi}${b.crop.isFull ? '' : ' · hành lang'}\n'
         '${_scene.objects.length} vật · max ${_detector.labelOf(b.maxClassId)} ${(b.maxScore * 100).round()}%';

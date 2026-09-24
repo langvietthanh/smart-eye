@@ -139,6 +139,51 @@ class YoloDecoder {
     return inter / (a.area + b.area - inter);
   }
 
+  /// So output của 2 cách chạy model (VD CPU và GPU FP16) theo đúng thứ ảnh hưởng tới kết quả:
+  /// - [scoreMax]: lệch lớn nhất của điểm tin cậy ở MỌI ô
+  /// - [boxMax]: lệch lớn nhất của toạ độ (chuẩn hoá) chỉ ở các ô có điểm ≥ [confidentScore] —
+  ///   toạ độ ở ô điểm ~0 (model "không thấy gì") lệch nhiều khi tính FP16 nhưng không bao giờ thành vật
+  static ({double scoreMax, double boxMax, int confident}) compareOutputs(
+    Float32List reference,
+    Float32List other,
+    List<int> shape, {
+    required int inputSize,
+    double confidentScore = 0.1,
+  }) {
+    final transposed = shape[1] > shape[2];
+    final channels = transposed ? shape[2] : shape[1];
+    final anchors = transposed ? shape[1] : shape[2];
+    int idx(int c, int i) => transposed ? i * channels + c : c * anchors + i;
+
+    var scoreMax = 0.0, boxMax = 0.0, confident = 0;
+    for (var i = 0; i < anchors; i++) {
+      var best = 0.0;
+      for (var c = 4; c < channels; c++) {
+        final r = reference[idx(c, i)];
+        scoreMax = max(scoreMax, (r - other[idx(c, i)]).abs());
+        if (r > best) best = r;
+      }
+      if (best < confidentScore) continue;
+      confident++;
+      final pixel = reference[idx(0, i)] > 1.5 || reference[idx(2, i)] > 1.5;
+      for (var c = 0; c < 4; c++) {
+        final d = (reference[idx(c, i)] - other[idx(c, i)]).abs();
+        boxMax = max(boxMax, pixel ? d / inputSize : d);
+      }
+    }
+    return (scoreMax: scoreMax, boxMax: boxMax, confident: confident);
+  }
+
+  /// 2 danh sách vật có "như nhau" không: mọi vật điểm ≥ [solidScore] ở bên này phải có vật cùng lớp,
+  /// IoU ≥ [minIou] ở bên kia (vật điểm sát ngưỡng có thể lúc có lúc không — bỏ qua).
+  static bool sameDetections(List<RawDetection> a, List<RawDetection> b,
+      {double solidScore = 0.35, double minIou = 0.6}) {
+    bool covered(List<RawDetection> from, List<RawDetection> to) => from
+        .where((d) => d.score >= solidScore)
+        .every((d) => to.any((o) => o.classId == d.classId && iouOf(o, d) >= minIou));
+    return covered(a, b) && covered(b, a);
+  }
+
   /// Box chạm mép vùng cắt (không phải mép khung) → vật bị cắt dở, kích thước sai → nên bỏ,
   /// khung đầy đủ sẽ thấy vật đó trọn vẹn.
   static bool touchesCropEdge(RawDetection d, CropRect crop, {double margin = 0.01}) {
