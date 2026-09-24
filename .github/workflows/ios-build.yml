@@ -1,5 +1,7 @@
 # Build app iOS trên máy macOS của GitHub (miễn phí cho repo public) → file .ipa CHƯA KÝ.
-# Trên Windows: tải artifact về, dùng Sideloadly ký bằng Apple ID và cài lên iPhone (xem README).
+# Kết quả được đăng lên mục Releases với link cố định (không cần đăng nhập):
+#   https://github.com/<owner>/<repo>/releases/download/ios-latest-<nhánh>/smart-eye-unsigned.ipa
+# Trên Windows: tải về, dùng Sideloadly ký bằng Apple ID và cài lên iPhone (xem README).
 name: iOS build (IPA chưa ký)
 
 on:
@@ -8,12 +10,20 @@ on:
     branches: [main, 'feature/**']
     paths-ignore: ['**.md', 'tool/**']
 
+# Push mới lên cùng nhánh → huỷ lần build cũ đang chờ/chạy, tránh dồn hàng đợi máy Mac
+concurrency:
+  group: ios-build-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: write # để đăng file lên Releases
+
 jobs:
   build-ios:
-    runs-on: macos-latest
+    runs-on: macos-15
     timeout-minutes: 60
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - uses: subosito/flutter-action@v2
         with:
@@ -37,7 +47,18 @@ jobs:
           zip -qr smart-eye-unsigned.ipa Payload
           ls -lh smart-eye-unsigned.ipa
 
-      - uses: actions/upload-artifact@v4
+      - name: Đăng lên Releases (link tải cố định)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG="ios-latest-${GITHUB_REF_NAME//\//-}"
+          gh release delete "$TAG" --yes --cleanup-tag || true
+          gh release create "$TAG" smart-eye-unsigned.ipa --prerelease --target "$GITHUB_SHA" \
+            --title "iOS mới nhất – $GITHUB_REF_NAME" \
+            --notes "IPA chưa ký từ commit ${GITHUB_SHA::7}. Tải về, cài lên iPhone bằng Sideloadly (xem README mục 🍎)."
+          echo "Link tải: https://github.com/$GITHUB_REPOSITORY/releases/download/$TAG/smart-eye-unsigned.ipa"
+
+      - uses: actions/upload-artifact@v5
         with:
           name: smart-eye-ios-unsigned
           path: smart-eye-unsigned.ipa
