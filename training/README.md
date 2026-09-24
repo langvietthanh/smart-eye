@@ -83,12 +83,13 @@ export định dạng **YOLO**. Dùng `auto_label.py` (bước 4a trong notebook
 
 ## 5. Train trên Colab
 
-1. Mở `smart_eye_train.ipynb` bằng Google Colab (*File → Upload notebook*, hoặc mở từ GitHub).
+1. Mở notebook trên Colab: https://colab.research.google.com/github/langvietthanh/smart-eye/blob/feature/perf-and-classes/training/smart_eye_train.ipynb
+   (sau khi merge vào `main`: đổi `feature/perf-and-classes` thành `main` trong link và trong ô `REPO_BRANCH`).
 2. *Runtime → Change runtime type → T4 GPU*.
 3. Chạy lần lượt từng ô, làm theo hướng dẫn trong notebook. Dữ liệu và kết quả lưu ở `MyDrive/smart_eye`.
 
-Các bước notebook làm: tải COCO subset → tải dataset Roboflow → gán nhãn tự động (tuỳ chọn) → gộp dữ liệu →
-train `yolo11n` ở 320×320 → đánh giá từng lớp → xuất TFLite FP32 → sửa định dạng trọng số → chấm lại như app.
+Các bước notebook làm: tải COCO subset → dataset Roboflow / Mendeley (BPID) / Kaggle (ổ gà) → gán nhãn tự động (tuỳ chọn) →
+gộp dữ liệu → train `yolo11n` ở 320×320 → đánh giá từng lớp → xuất TFLite FP32 → sửa định dạng trọng số → chấm lại như app.
 
 Chạy thử script ở máy (không cần GPU):
 ```bash
