@@ -8,7 +8,7 @@
 
 | | Chức năng | Cài đặt trong code |
 |---|---|---|
-| F1 🔴 | Nhìn & nhận diện | YOLOv8n INT8 + TFLite on-device (`detector_service.dart`) |
+| F1 🔴 | Nhìn & nhận diện | YOLO + TFLite on-device, isolate riêng, tự chọn CPU/GPU, nhịp quét thích ứng (`detector_service.dart`, `detection/`) |
 | F2 🔴 | Cảnh báo + chỉ hướng | Tracker IoU/centroid (CN5), rules engine (CN4), free-space 3 cột (CN6), khoảng cách theo % chiều cao box (CN7) |
 | F3 🟠 | Mô tả + nói ra | Caption template (CN8), flutter_tts tiếng Việt (CN9), Speech Manager ưu tiên/barge-in/dedupe (CN10) — mặc định **chỉ mô tả khi được hỏi** |
 | F4 🟡 | Lưu lịch sử | Event log JSONL (CN11), ảnh ghi nhớ thumbnail + GPS (CN12), recap template (CN13), tự dọn: tối đa 20 chuyến / 30 ngày / 40 ảnh mỗi chuyến |
@@ -31,34 +31,36 @@ khi vật rất gần ngay trước mặt luôn nói **"Dừng lại"** và ch�
 ```
 smart_eye/
 ├── 📁 assets/
-│   ├── 📁 models/yolov8n_int8.tflite   # Model YOLOv8 Quantized INT8
-│   └── 📁 labels/coco.txt             # 80 nhãn vật thể chuẩn COCO
+│   ├── 📁 models/yolov8n_int8.tflite   # Model COCO mặc định (smart_eye.tflite nếu có sẽ được ưu tiên)
+│   └── 📁 labels/coco.txt             # Nhãn dự phòng khi model không có metadata
 ├── 📁 lib/
 │   ├── 📄 main.dart                    # Khởi tạo ứng dụng & danh sách Camera
-│   ├── 📁 models/
-│   │   ├── Recognition.dart            # Kết quả nhận diện 1 frame
-│   │   ├── tracked_object.dart         # Vật được theo dõi qua nhiều frame
-│   │   ├── scene_info.dart             # Vị trí, khoảng cách, mức cảnh báo, kết quả đánh giá
-│   │   └── trip.dart                   # Sự kiện & tóm tắt chuyến đi
+│   ├── 📁 models/                      # Recognition, tracked_object, scene_info, trip
 │   ├── 📁 utils/
-│   │   ├── image_utils.dart            # YUV420 → RGB → Float32, xoay ảnh, thumbnail JPEG
-│   │   └── label_catalog.dart          # Nhãn tiếng Việt + phân loại nguy hiểm
+│   │   ├── image_utils.dart            # Lấy mẫu frame (YUV/BGRA/NV12) → tensor, cắt vùng, JPEG, chữ ký độ sáng
+│   │   └── label_catalog.dart          # Nhãn tiếng Việt + phân loại nguy hiểm (khớp training/classes.yaml)
 │   ├── 📁 services/
-│   │   ├── detector_service.dart       # F1: YOLOv8 TFLite Engine & NMS & Dequantization
-│   │   ├── object_tracker.dart         # F2/CN5: Tracker IoU + centroid
+│   │   ├── detector_service.dart       # F1: nạp model + metadata, điều phối isolate AI
+│   │   ├── 📁 detection/
+│   │   │   ├── detector_worker.dart    # Isolate AI: tự chọn CPU/GPU, tiền xử lý → model → giải mã
+│   │   │   ├── yolo_decoder.dart       # Giải mã YOLO chỉ các lớp liên quan + NMS
+│   │   │   ├── scan_scheduler.dart     # Nhịp quét thích ứng + vùng hành lang
+│   │   │   ├── frame_data.dart         # Bản sao frame gửi sang isolate, vùng cắt
+│   │   │   └── model_metadata.dart     # Đọc tên lớp / kích thước ảnh nhúng trong model
+│   │   ├── object_tracker.dart         # F2/CN5: Tracker IoU + centroid (biết vùng nào được quét)
 │   │   ├── hazard_engine.dart          # F2/CN4+CN6+CN7: Rules, free-space, khoảng cách
 │   │   ├── caption_builder.dart        # F3/CN8 + F4/CN13: Câu mô tả & recap
-│   │   ├── tts_service.dart            # F3/CN9: flutter_tts tiếng Việt
-│   │   ├── speech_manager.dart         # F3/CN10: Ưu tiên, barge-in, dedupe
+│   │   ├── tts_service.dart / speech_manager.dart  # F3/CN9+CN10: giọng nói, ưu tiên, barge-in, dedupe
 │   │   ├── history_service.dart        # F4/CN11+CN12: Lưu JSONL + ảnh, tự dọn dẹp
 │   │   └── location_service.dart       # F4: GPS, quãng đường
-│   ├── 📁 widgets/bounding_box_painter.dart # Khung màu theo mức nguy hiểm + lưới 3 cột
-│   └── 📁 screens/
-│       ├── camera_screen.dart          # Màn hình chính & pipeline mỗi frame
-│       ├── history_screen.dart         # Danh sách chuyến đi
-│       └── trip_detail_screen.dart     # Dòng thời gian, ảnh ghi nhớ, nghe lại
-├── 📁 test/logic_test.dart             # Unit test tracker / rules / caption / recap
-└── 📄 pubspec.yaml                     # Khai báo thư viện & assets
+│   ├── 📁 widgets/bounding_box_painter.dart # Khung màu theo mức nguy hiểm + lưới 3 cột + vùng hành lang (debug)
+│   └── 📁 screens/                     # camera_screen, history_screen, trip_detail_screen
+├── 📁 training/                        # Quy trình train model có thêm cầu thang, cột điện... (xem training/README.md)
+├── 📁 tool/
+│   ├── eval_model.py                   # Đánh giá model bất kỳ trên dataset bất kỳ (mặc định COCO128)
+│   └── inline_tflite_buffers.py        # Sửa định dạng trọng số model cho runtime Android/iOS
+├── 📁 test/                            # Unit test: rules, tracker, xử lý ảnh, giải mã YOLO, nhịp quét, danh sách lớp
+└── 📄 pubspec.yaml
 ```
 
 ---
@@ -184,20 +186,48 @@ rồi cài từ Windows bằng **Sideloadly**.
 flutter test
 ```
 
-### Đánh giá model trên COCO (COCO128)
-```bash
-pip install ai-edge-litert pillow numpy
-python tool/eval_coco.py
+### ⚡ Kiến trúc nhận diện (tối ưu tốc độ)
+
 ```
-Script tự tải COCO128 (128 ảnh COCO có nhãn chuẩn, ~7MB) và chạy đúng pipeline của app. Kết quả với model hiện tại:
+Camera (~30 fps) ─► Bộ điều phối nhịp quét ─(chỉ gửi khi cần)─► Isolate AI (luồng riêng)
+   luồng UI            chọn vùng: toàn khung / hành lang           tiền xử lý → model (CPU/GPU tự chọn)
+                       chọn nhịp: cảnh báo / thường / tiết kiệm    → giải mã (chỉ lớp liên quan) → NMS
+        ◄──────────── danh sách vật (toạ độ chuẩn hoá) + thời gian từng bước ◄───────┘
+```
 
-| Ngưỡng conf | Precision | Recall | Box sai | Recall vật lớn (≥5% khung) |
+| Kỹ thuật | Tác dụng |
+|---|---|
+| **Isolate AI riêng** | Luồng UI chỉ còn copy frame (~1 ms) → giao diện, nút bấm, giọng nói không giật |
+| **Tự chọn CPU / GPU** (Android) · **CPU / Metal / CoreML** (iOS) | Lúc khởi động đo tốc độ từng cách, kiểm tra kết quả giống CPU, chọn cách nhanh nhất; GPU lỗi giữa chừng tự chuyển về CPU |
+| **Chỉ xét lớp liên quan tới đi lại** | Bỏ cốc, dĩa, bàn chải… → giải mã ít phép tính hơn ~3 lần (15/80 lớp), **nhầm lớp giảm từ 17 → 2** trên COCO128 |
+| **Nhịp quét thích ứng** | *Cảnh báo*: quét liên tục · *Thường*: 5 lần/giây · *Tiết kiệm*: 1 lần/giây khi cảnh đứng yên 3 s và không có vật — đỡ nóng máy, tốn pin |
+| **Vùng hành lang** | Xen kẽ quét toàn khung với 1 vùng vuông phía trước (phóng to ~1,7–2,5 lần) → thấy cột, biển báo ở xa sớm hơn; tracker không coi vật ngoài vùng là "mất dấu" |
+| **Không cấp phát theo từng pixel** | Tiền xử lý không tạo đối tượng tạm cho mỗi điểm ảnh (bản cũ tạo ~100 000 đối tượng / frame) |
+
+**Dòng chẩn đoán** (góc dưới màn hình) — ví dụ minh hoạ, số thật tuỳ máy:
+`GPU · 62ms (ảnh 18 · AI 41 · đọc 3) · 4.8 lần/s · Thường · hành lang` / `2 vật · max người 50%`
+= cách chạy · tổng thời gian (tiền xử lý · model · giải mã) · số lần quét mỗi giây · chế độ · vùng vừa quét.
+Log `[Scan N] ...` mỗi 20 lần quét cho số liệu chi tiết (xem bằng `flutter run` hoặc Logcat).
+
+### Đánh giá model (COCO128 hoặc dataset riêng)
+```bash
+pip install ai-edge-litert pillow numpy pyyaml
+python tool/eval_model.py                                          # model của app trên COCO128
+python tool/eval_model.py --model new.tflite --data datasets/smart_eye/data.yaml
+```
+Script tự tải COCO128 (128 ảnh COCO có nhãn chuẩn, ~7MB), chạy đúng pipeline của app, chỉ xét lớp liên quan tới đi lại,
+và in recall theo từng lớp. Kết quả với model hiện tại (15 lớp liên quan):
+
+| Ngưỡng conf | Precision | Recall | Recall vật lớn (≥5% khung) | Nhầm lớp |
 |---|---|---|---|---|
-| 0.15 (cũ) | 0.71 | 0.39 | 149 | 0.73 |
-| **0.25 (mới)** | **0.83** | 0.34 | **64** | **0.72** |
-| 0.35 | 0.88 | 0.29 | 35 | 0.66 |
+| **0.25** | **0.82** | 0.40 | **0.81** | **2** |
 
-Recall tổng thấp vì COCO có nhiều vật rất nhỏ và model chạy ở 320px; với vật lớn (thứ quan trọng khi đi đường) recall ~0.72.
+(Trước khi lọc lớp, cùng ngưỡng 0.25: precision 0.83, recall vật lớn 0.72, nhầm lớp 17.)
+
+### Thêm lớp mới (cầu thang, lan can, ổ gà, cột điện...)
+Model COCO không có các lớp này — cần train thêm. Toàn bộ quy trình (danh sách lớp, cách chụp ảnh, quy tắc gán nhãn,
+gán nhãn tự động, gộp dataset, notebook Google Colab, tiêu chí nhận model) ở **[training/README.md](training/README.md)**.
+Model mới chỉ cần đặt tên `smart_eye.tflite` và chép vào `assets/models/` — app tự dùng, không cần sửa code.
 
 ### Lưu ý về model hiện tại & cách export lại (không bắt buộc)
 - Model do Ultralytics ≥ 8.4 export lưu trọng số **ngoài flatbuffer** (buffer offset) → runtime TFLite trên Android
@@ -211,7 +241,7 @@ Recall tổng thấp vì COCO có nhiều vật rất nhỏ và model chạy ở
   from ultralytics import YOLO
   YOLO('yolov8n.pt').export(format='tflite', imgsz=320)   # tải file *_float32.tflite về
   ```
-  Sau đó chép vào `assets/models/yolov8n_int8.tflite` (hoặc đổi `_modelPath`), chạy `tool/inline_tflite_buffers.py`, rồi `python tool/eval_coco.py` để so sánh.
+  Sau đó đổi tên thành `smart_eye.tflite`, chép vào `assets/models/`, chạy `tool/inline_tflite_buffers.py`, rồi `python tool/eval_model.py --model <file>` để so sánh. Notebook `training/smart_eye_train.ipynb` làm sẵn các bước này.
 
 ---
 

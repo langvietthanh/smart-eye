@@ -1,0 +1,76 @@
+# Danh sách lớp của model Smart Eye — NGUỒN DUY NHẤT cho thứ tự id khi train.
+#
+# Mỗi lớp:
+#   name      tên chuẩn (tiếng Anh, chữ thường) — trùng với tên trong metadata model sau khi train
+#   vi        tên đọc cho người dùng (phải khớp lib/utils/label_catalog.dart — có unit test kiểm tra)
+#   category  nhóm nguy hiểm cho rules engine: person | vehicle | obstacle | animal | groundHazard
+#   priority  1 = tầm ngực/cao, gậy không dò tới (giá trị lớn nhất theo file nghiệp vụ)
+#             2 = dưới chân, gậy dò được nhưng báo sớm vẫn có ích
+#             3 = đã có trong COCO, giữ để model không "quên"
+#   source    coco = lấy từ COCO 2017 | new = cần dataset ngoài / tự thu thập
+#   aliases   tên gọi khác trong các dataset bên ngoài (build_dataset.py tự đổi về `name`)
+#   prompt    câu mô tả tiếng Anh cho YOLO-World khi gán nhãn tự động (auto_label.py)
+#
+# Thêm / bớt lớp: sửa file này → cập nhật label_catalog.dart → chạy lại build_dataset.py rồi train.
+
+classes:
+  # ---------------------------------------------------------------- COCO (giữ lại)
+  - {name: person, vi: người, category: person, priority: 3, source: coco,
+     aliases: [pedestrian, people, human], prompt: person}
+  - {name: bicycle, vi: xe đạp, category: vehicle, priority: 3, source: coco,
+     aliases: [bike], prompt: bicycle}
+  - {name: car, vi: xe ô tô, category: vehicle, priority: 3, source: coco,
+     aliases: [automobile], prompt: car}
+  - {name: motorcycle, vi: xe máy, category: vehicle, priority: 3, source: coco,
+     aliases: [motorbike, scooter, moped], prompt: motorcycle}
+  - {name: bus, vi: xe buýt, category: vehicle, priority: 3, source: coco,
+     aliases: [], prompt: bus}
+  - {name: truck, vi: xe tải, category: vehicle, priority: 3, source: coco,
+     aliases: [lorry], prompt: truck}
+  - {name: dog, vi: chó, category: animal, priority: 3, source: coco,
+     aliases: [], prompt: dog}
+  - {name: bench, vi: ghế băng, category: obstacle, priority: 3, source: coco,
+     aliases: [], prompt: bench}
+  - {name: chair, vi: ghế, category: obstacle, priority: 3, source: coco,
+     aliases: [stool, plastic chair], prompt: chair}
+  - {name: dining table, vi: bàn, category: obstacle, priority: 3, source: coco,
+     aliases: [table, diningtable], prompt: table}
+  - {name: potted plant, vi: chậu cây, category: obstacle, priority: 3, source: coco,
+     aliases: [pottedplant, plant pot, flower pot], prompt: potted plant}
+  - {name: fire hydrant, vi: trụ nước cứu hỏa, category: obstacle, priority: 3, source: coco,
+     aliases: [hydrant], prompt: fire hydrant}
+  - {name: umbrella, vi: ô dù, category: obstacle, priority: 3, source: coco,
+     aliases: [parasol, beach umbrella], prompt: umbrella}
+
+  # ---------------------------------------------------------------- MỚI — tầm ngực / tầm cao
+  - {name: pole, vi: cột, category: obstacle, priority: 1, source: new,
+     aliases: [utility pole, electric pole, power pole, lamp post, street light, streetlight, light pole,
+               sign post, signpost, pillar, post, telephone pole],
+     prompt: utility pole}
+  - {name: traffic sign, vi: biển báo, category: obstacle, priority: 1, source: new,
+     aliases: [sign, road sign, stop sign, signboard, street sign, billboard],
+     prompt: traffic sign}
+  - {name: tree, vi: cây, category: obstacle, priority: 1, source: new,
+     aliases: [tree trunk, trunk], prompt: tree trunk}
+  - {name: branch, vi: cành cây, category: obstacle, priority: 1, source: new,
+     aliases: [tree branch, low branch], prompt: low tree branch}
+  - {name: railing, vi: lan can, category: obstacle, priority: 1, source: new,
+     aliases: [handrail, guardrail, fence, rail], prompt: railing}
+  - {name: barrier, vi: rào chắn, category: obstacle, priority: 1, source: new,
+     aliases: [road barrier, barricade, boom barrier, construction barrier], prompt: barricade}
+  - {name: vendor cart, vi: xe hàng rong, category: obstacle, priority: 1, source: new,
+     aliases: [street vendor cart, food cart, pushcart, cart], prompt: street food cart}
+
+  # ---------------------------------------------------------------- MỚI — dưới chân
+  - {name: stairs, vi: bậc thang, category: groundHazard, priority: 2, source: new,
+     aliases: [staircase, stair, steps, step, stairway], prompt: stairs}
+  - {name: curb, vi: mép vỉa hè, category: groundHazard, priority: 2, source: new,
+     aliases: [kerb, sidewalk edge, curbstone], prompt: curb}
+  - {name: pothole, vi: ổ gà, category: groundHazard, priority: 2, source: new,
+     aliases: [potholes, hole, road hole], prompt: pothole}
+  - {name: manhole, vi: hố ga, category: groundHazard, priority: 2, source: new,
+     aliases: [manhole cover, drain, sewer], prompt: manhole}
+  - {name: bollard, vi: cọc chắn, category: obstacle, priority: 2, source: new,
+     aliases: [bollards, parking meter], prompt: bollard}
+  - {name: traffic cone, vi: cọc giao thông, category: obstacle, priority: 2, source: new,
+     aliases: [cone, safety cone], prompt: traffic cone}

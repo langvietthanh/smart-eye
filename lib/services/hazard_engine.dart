@@ -133,6 +133,8 @@ class HazardEngine {
       case ObjectCategory.groundHazard:
         // Hố ga / bậc thang: gậy có thể dò được nhưng rủi ro cao → báo sớm
         if (!inPath) return near ? AlertLevel.caution : AlertLevel.info;
+        // Mép vỉa hè gặp liên tục → chỉ nhắc chú ý khi đã tới gần, không hô "Dừng lại"
+        if (mildGroundHazards.contains(o.track.labelEn)) return o.distance == DistanceLevel.far ? AlertLevel.info : AlertLevel.caution;
         return o.distance == DistanceLevel.far ? AlertLevel.caution : AlertLevel.danger;
       case ObjectCategory.vehicle:
         if (o.approaching) return inPath ? AlertLevel.danger : AlertLevel.caution;

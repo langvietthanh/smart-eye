@@ -20,8 +20,10 @@ class ObjectTracker {
   int _nextId = 1;
 
   /// Cập nhật tracker với kết quả nhận diện của frame mới.
+  /// [coverage]: vùng (toạ độ màn hình) lần quét này nhìn thấy — khi chỉ quét vùng hành lang,
+  /// vật nằm ngoài vùng đó không bị tính là "mất" (lần quét không nhìn tới chỗ nó). null = toàn khung.
   /// Trả về các vật đã xác nhận (kể cả vừa mất 1–2 frame).
-  List<TrackedObject> update(List<Recognition> detections, Size frame, DateTime now) {
+  List<TrackedObject> update(List<Recognition> detections, Size frame, DateTime now, {Rect? coverage}) {
     final diag = sqrt(frame.width * frame.width + frame.height * frame.height);
 
     // Tất cả cặp (track, detection) cùng lớp có thể ghép, xếp theo độ khớp giảm dần
@@ -57,6 +59,7 @@ class ObjectTracker {
 
     for (int t = 0; t < _tracks.length; t++) {
       if (usedT.contains(t)) continue;
+      if (coverage != null && !coverage.contains(_tracks[t].box.center)) continue; // không được nhìn tới
       _tracks[t].misses++;
       _tracks[t].hits = min(_tracks[t].hits, minHits); // giữ trạng thái đã xác nhận
     }

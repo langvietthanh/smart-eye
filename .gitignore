@@ -49,3 +49,7 @@ app.*.map.json
 docs/
 # Dataset COCO128 tải bởi tool/eval_coco.py
 /tool/coco128/
+
+# Dữ liệu & kết quả train (training/README.md)
+/datasets/
+/runs/
