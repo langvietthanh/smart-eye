@@ -130,6 +130,13 @@ class DetectorService {
   String labelOf(int classId) =>
       classId < 0 || classId >= _labels.length ? '' : (labelVi[_labels[classId]] ?? _labels[classId]);
 
+  /// Nạp lại model với cách chạy khác (nút debug "AI: Tự động / CPU / GPU")
+  Future<void> reload({String preferredBackend = 'auto'}) async {
+    dispose();
+    lastBatch = null;
+    await loadModel(preferredBackend: preferredBackend);
+  }
+
   void dispose() {
     _worker?.dispose();
     _worker = null;

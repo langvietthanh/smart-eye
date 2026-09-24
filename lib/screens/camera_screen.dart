@@ -17,6 +17,7 @@ import '../services/history_service.dart';
 import '../services/location_service.dart';
 import '../services/object_tracker.dart';
 import '../services/speech_manager.dart';
+import '../services/detection/detector_worker.dart';
 import '../services/detection/frame_data.dart';
 import '../services/detection/scan_scheduler.dart';
 import '../utils/image_utils.dart';
@@ -42,8 +43,19 @@ class _CameraScreenState extends State<CameraScreen> with WidgetsBindingObserver
   /// Thời điểm các lần quét trong 3 giây gần nhất — tính số lần quét/giây cho dòng chẩn đoán
   final List<DateTime> _scanStats = [];
 
-  /// Vùng lần quét gần nhất nhìn thấy (null = toàn khung) — vẽ khung "hành lang" khi debug
-  Rect? _lastCoverage;
+  /// 10 lần quét gần nhất — dòng chẩn đoán hiển thị số TRUNG BÌNH để không nhảy liên tục
+  final List<DetectionBatch> _recentBatches = [];
+
+  /// Lần quét toàn khung gần nhất — "max ..." chỉ lấy từ đây (lần quét hành lang chỉ thấy 1 phần cảnh)
+  DetectionBatch? _lastFullBatch;
+
+  /// Dòng chẩn đoán đã tính sẵn — chỉ làm mới 2 lần/giây cho dễ đọc
+  String _diagText = '';
+  DateTime _diagUpdatedAt = DateTime.fromMillisecondsSinceEpoch(0);
+
+  /// Cách chạy AI người dùng chọn ở nút debug: auto / cpu / gpu (iOS: metal)
+  String _backendChoice = 'auto';
+  bool _switchingBackend = false;
 
   // Trạng thái loading
   bool _modelLoaded = false;
@@ -241,6 +253,9 @@ class _CameraScreenState extends State<CameraScreen> with WidgetsBindingObserver
       _scanStats
         ..add(now)
         ..removeWhere((t) => now.difference(t) > const Duration(seconds: 3));
+      _recentBatches.add(batch);
+      if (_recentBatches.length > 10) _recentBatches.removeAt(0);
+      if (batch.crop.isFull) _lastFullBatch = batch;
       _scheduler.onResult(
         now,
         motion: batch.motion,
@@ -260,10 +275,7 @@ class _CameraScreenState extends State<CameraScreen> with WidgetsBindingObserver
     final frame = Size(_screenWidth, _screenHeight);
     final tracks = _tracker.update(detections, frame, now, coverage: coverage);
     final scene = _engine.assess(tracks, frame);
-    setState(() {
-      _scene = scene;
-      _lastCoverage = coverage;
-    });
+    setState(() => _scene = scene);
 
     final alert = scene.alert;
     if (alert != null) {
@@ -544,12 +556,7 @@ class _CameraScreenState extends State<CameraScreen> with WidgetsBindingObserver
           // Layer 2: Bounding boxes + free-space
           IgnorePointer(
             child: CustomPaint(
-              painter: BoundingBoxPainter(
-                _scene,
-                alertSubject: alert?.subject,
-                alertLevel: alert?.level,
-                corridor: kReleaseMode ? null : _lastCoverage,
-              ),
+              painter: BoundingBoxPainter(_scene, alertSubject: alert?.subject, alertLevel: alert?.level),
             ),
           ),
 
@@ -641,19 +648,39 @@ class _CameraScreenState extends State<CameraScreen> with WidgetsBindingObserver
                 child: Column(
                   mainAxisSize: MainAxisSize.min,
                   children: [
-                    Row(
+                    Align(
+                      alignment: Alignment.centerLeft,
+                      child: Text(
+                        _diagnostics,
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(color: Colors.white54, fontSize: 12),
+                      ),
+                    ),
+                    const SizedBox(height: 6),
+                    Wrap(
+                      spacing: 8,
+                      runSpacing: 6,
+                      alignment: WrapAlignment.end,
                       children: [
-                        // Chữ thông số co giãn trong phần còn lại → nút Test luôn đứng yên một chỗ
-                        Expanded(
-                          child: Text(
-                            _diagnostics,
-                            maxLines: 2,
-                            overflow: TextOverflow.ellipsis,
-                            style: const TextStyle(color: Colors.white54, fontSize: 12),
+                        if (!kReleaseMode) ...[
+                          _smallButton(
+                            icon: Icons.memory,
+                            label: _switchingBackend ? 'AI: đang đổi...' : 'AI: ${_backendLabel(_backendChoice)}',
+                            color: Colors.indigo.withValues(alpha: 0.8),
+                            onTap: _switchingBackend ? () {} : _cycleBackend,
                           ),
-                        ),
-                        const SizedBox(width: 8),
-                        if (kDebugMode) ...[
+                          _smallButton(
+                            icon: Icons.crop_free,
+                            label: 'Hành lang: ${_scheduler.corridorEnabled ? 'bật' : 'tắt'}',
+                            color: Colors.teal.withValues(alpha: 0.8),
+                            onTap: () => setState(() {
+                              _scheduler.corridorEnabled = !_scheduler.corridorEnabled;
+                              _tracker.reset();
+                            }),
+                          ),
+                        ],
+                        if (kDebugMode)
                           _smallButton(
                             icon: Icons.screen_rotation,
                             label: 'Bù xoay $_debugRotationOffset°',
@@ -664,8 +691,6 @@ class _CameraScreenState extends State<CameraScreen> with WidgetsBindingObserver
                               _scene = SceneAssessment.empty;
                             }),
                           ),
-                          const SizedBox(width: 8),
-                        ],
                         _smallButton(
                           icon: Icons.bug_report,
                           label: _isMockTest ? 'Tắt Test' : '🧪 Test UI',
@@ -747,16 +772,60 @@ class _CameraScreenState extends State<CameraScreen> with WidgetsBindingObserver
   }
 
   /// Dòng chẩn đoán: cách chạy AI, thời gian từng bước, số lần quét/giây, chế độ, điểm cao nhất
+  /// Số liệu là TRUNG BÌNH 10 lần quét gần nhất, làm mới 2 lần/giây → đọc được, không nhấp nháy.
   String get _diagnostics {
     if (_isMockTest) return 'Giả lập · ${_scene.objects.length} vật';
-    final b = _detector.lastBatch;
-    final info = _detector.info;
-    if (b == null || info == null) return _modelLoaded ? 'Đang chờ frame...' : 'Đang nạp AI...';
+    if (_switchingBackend) return 'Đang đổi cách chạy AI...';
+    final now = DateTime.now();
+    if (now.difference(_diagUpdatedAt) < const Duration(milliseconds: 500) && _diagText.isNotEmpty) return _diagText;
+    _diagUpdatedAt = now;
+
+    final batches = _recentBatches;
+    if (batches.isEmpty) return _diagText = _modelLoaded ? 'Đang chờ frame...' : 'Đang nạp AI...';
+    double avg(double Function(DetectionBatch) f) => batches.map(f).reduce((a, b) => a + b) / batches.length;
+    final last = batches.last;
+    final full = _lastFullBatch;
     final rate = _scanStats.length / 3;
-    return '${b.backend.toUpperCase()}${b.verifying ? ' (đối chiếu CPU)' : ''} · ${b.totalMs.round()}ms '
-        '(ảnh ${b.prepMs.round()} · AI ${b.inferMs.round()} · đọc ${b.parseMs.round()}) · '
-        '${rate.toStringAsFixed(1)} lần/s · ${_scheduler.mode.vi}${b.crop.isFull ? '' : ' · hành lang'}\n'
-        '${_scene.objects.length} vật · max ${_detector.labelOf(b.maxClassId)} ${(b.maxScore * 100).round()}%';
+    return _diagText = '${last.backend.toUpperCase()}${last.verifying ? ' (đối chiếu CPU)' : ''} · '
+        '${avg((b) => b.totalMs).round()}ms (ảnh ${avg((b) => b.prepMs).round()} · AI ${avg((b) => b.inferMs).round()}) · '
+        '${rate.toStringAsFixed(1)} lần/s · ${_scheduler.mode.vi}\n'
+        '${_scene.objects.length} vật'
+        '${full == null ? '' : ' · max ${_detector.labelOf(full.maxClassId)} ${(full.maxScore * 100).round()}%'}';
+  }
+
+  static String _backendLabel(String b) => switch (b) {
+        'cpu' => 'CPU',
+        'gpu' || 'metal' => 'GPU',
+        _ => 'Tự động',
+      };
+
+  /// Nút debug: Tự động → CPU → GPU → Tự động... (nạp lại model với cách chạy đã chọn)
+  Future<void> _cycleBackend() async {
+    final gpu = Platform.isIOS ? 'metal' : 'gpu';
+    final next = switch (_backendChoice) { 'auto' => 'cpu', 'cpu' => gpu, _ => 'auto' };
+    setState(() {
+      _backendChoice = next;
+      _switchingBackend = true;
+      _modelLoaded = false;
+    });
+    try {
+      await _detector.reload(preferredBackend: next);
+    } catch (e) {
+      debugPrint('Không đổi được cách chạy AI ($next): $e');
+      _speech.say('Máy không chạy được AI bằng ${_backendLabel(next)}.', SpeechPriority.description, force: true);
+      _backendChoice = 'auto';
+      await _detector.reload();
+    }
+    _recentBatches.clear();
+    _lastFullBatch = null;
+    _scheduler.reset();
+    _tracker.reset();
+    if (mounted) {
+      setState(() {
+        _switchingBackend = false;
+        _modelLoaded = true;
+      });
+    }
   }
 
   /// Máy chưa có giọng tiếng Việt → TTS sẽ đọc bằng giọng mặc định, khó nghe → hướng dẫn cài

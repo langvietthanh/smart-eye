@@ -28,6 +28,10 @@ extension ScanModeText on ScanMode {
 /// so với quét toàn khung → phát hiện sớm hơn.
 class ScanScheduler {
   static const Duration normalInterval = Duration(milliseconds: 200);
+
+  /// Có nguy hiểm vẫn nghỉ tối thiểu 100 ms giữa 2 lần quét (≤ 10 lần/giây) — GPU còn thời gian vẽ
+  /// màn hình (GPU máy tầm trung vừa chạy AI liên tục vừa vẽ camera dễ làm hình giật / nhấp nháy)
+  static const Duration alertInterval = Duration(milliseconds: 100);
   static const Duration idleInterval = Duration(milliseconds: 1000);
 
   /// Giữ chế độ cảnh báo thêm bao lâu sau lần cuối có nguy hiểm (hysteresis)
@@ -56,7 +60,7 @@ class ScanScheduler {
   bool get inFlight => _inFlight;
 
   Duration get interval => switch (_mode) {
-        ScanMode.alert => Duration.zero,
+        ScanMode.alert => alertInterval,
         ScanMode.normal => normalInterval,
         ScanMode.idle => idleInterval,
       };

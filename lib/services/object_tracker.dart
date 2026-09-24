@@ -59,7 +59,9 @@ class ObjectTracker {
 
     for (int t = 0; t < _tracks.length; t++) {
       if (usedT.contains(t)) continue;
-      if (coverage != null && !coverage.contains(_tracks[t].box.center)) continue; // không được nhìn tới
+      // Lần quét chỉ nhìn 1 vùng: vật không nằm TRỌN trong vùng đó thì lần này không tính (vật vắt qua mép
+      // vùng bị cắt dở nên đã bị bỏ — không phải "mất") → không làm khung vật chớp tắt
+      if (coverage != null && !_inside(_tracks[t].box, coverage)) continue;
       _tracks[t].misses++;
       _tracks[t].hits = min(_tracks[t].hits, minHits); // giữ trạng thái đã xác nhận
     }
@@ -82,6 +84,9 @@ class ObjectTracker {
   }
 
   void reset() => _tracks.clear();
+
+  static bool _inside(Rect box, Rect area) =>
+      box.left >= area.left && box.top >= area.top && box.right <= area.right && box.bottom <= area.bottom;
 }
 
 /// IoU (Intersection over Union) giữa 2 hình chữ nhật

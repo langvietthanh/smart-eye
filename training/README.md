@@ -32,16 +32,18 @@ File nghiệp vụ nói giá trị lớn nhất là vật **ở tầm ngực / c
 |---|---|---|---|---|---|
 | COCO 2017 (một phần) | người, xe, ghế, biển báo... | ~6800 ảnh | CC BY 4.0 | train + val | `fetch_coco_subset.py` |
 | [BPID — Bandung Pothole Image Dataset](https://data.mendeley.com/datasets/rgymy6dwdd/1) | `pothole` | 161 ảnh, 263 ổ gà (trung vị box 2,9% ảnh), nắng / râm / ướt / đêm | **CC BY 4.0** | **val** (tác giả thiết kế làm tập kiểm tra độc lập) | Nhãn YOLO sạch, 0 dòng lỗi · `fetch_mendeley.py rgymy6dwdd` |
+| [Pothole Detection (Kaggle)](https://www.kaggle.com/datasets/andrewmvd/pothole-detection) | `pothole` | 665 ảnh | DbCL v1.0 (ghi nguồn MakeML) | **train** | Nhãn PASCAL VOC → `build_dataset.py` tự đổi sang YOLO (đã chạy thử trên bản giả lập cùng cấu trúc) · tải cần tài khoản Kaggle, bước 3c notebook |
 | Roboflow Universe | tuỳ dataset | — | xem từng dataset | train | bước 3 notebook |
 | **Ảnh nhóm tự chụp** | mọi lớp | càng nhiều càng tốt | của nhóm | train + val | quan trọng nhất |
 
-**Ghi nguồn (bắt buộc với CC BY 4.0)** — đưa vào báo cáo / slide khi dùng model train với dữ liệu này:
+**Ghi nguồn (theo giấy phép từng dataset)** — đưa vào báo cáo / slide khi dùng model train với dữ liệu này:
 - Jamaludin, S. U. (2026). *Bandung Pothole Image Dataset (BPID)* (Version 1). Mendeley Data. https://doi.org/10.17632/rgymy6dwdd.1
 - Lin, T.-Y. et al. (2014). *Microsoft COCO: Common Objects in Context*. ECCV.
+- MakeML. *Potholes Dataset*. https://makeml.app/datasets/potholes (bản trên Kaggle: andrewmvd/pothole-detection)
 
 Lưu ý BPID: ảnh ổ gà trên **đường** ở Indonesia (theo mô tả của tác giả) — góc chụp có thể khác điện thoại đeo trước
 ngực đi trên vỉa hè Việt Nam. Tác giả thiết kế dataset làm tập kiểm tra độc lập, nên mặc định dùng để **kiểm tra** model
-có hiểu "ổ gà" ở nơi khác không; dữ liệu train ổ gà chính vẫn nên là Roboflow + ảnh nhóm tự chụp.
+có hiểu "ổ gà" ở nơi khác không; dữ liệu train ổ gà: Kaggle Pothole Detection (665 ảnh) + Roboflow + ảnh nhóm tự chụp.
 
 ## 3. Thu thập ảnh
 

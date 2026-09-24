@@ -17,6 +17,8 @@ Cách dùng:
     Nguồn dạng `DIR@names.yaml` dùng file tên lớp riêng; `DIR@coco80` dùng 80 lớp COCO.
     Thêm `#train` / `#val` ở cuối để ép cả nguồn vào 1 tập, VD `datasets/bpid#val`.
     Tên lớp tự đọc từ data.yaml / dataset.yaml, hoặc classes.txt / notes.json (Label Studio export YOLO).
+    Nhãn PASCAL VOC (file .xml cạnh ảnh hoặc trong thư mục annotations/, VD dataset Kaggle "Pothole Detection")
+    được tự đổi sang YOLO — tên lớp lấy từ thẻ <name> trong XML.
 """
 from __future__ import annotations
 
@@ -25,6 +27,7 @@ import hashlib
 import json
 import random
 import shutil
+import xml.etree.ElementTree as ET
 from collections import Counter, defaultdict
 from pathlib import Path
 
@@ -36,7 +39,8 @@ VAL_DIRS = {'val', 'valid', 'validation', 'test', 'val2017'}
 TRAIN_DIRS = {'train', 'train2017'}
 
 
-def find_names(src: Path, override: str | None) -> list[str]:
+def find_names(src: Path, override: str | None) -> list[str] | None:
+    """Danh sách tên lớp của nguồn YOLO; None nếu nguồn là PASCAL VOC (tên lớp nằm trong từng XML)"""
     if override == 'coco80':
         return COCO80
     if override:
@@ -59,8 +63,35 @@ def find_names(src: Path, override: str | None) -> list[str]:
         with open(y, encoding='utf-8') as f:
             if 'names' in (yaml.safe_load(f) or {}):
                 return read_names(y)
-    raise SystemExit(f'Không tìm thấy tên lớp (data.yaml / classes.txt / notes.json) trong {src} — '
+    if next(src.rglob('*.xml'), None) is not None:
+        return None  # PASCAL VOC
+    raise SystemExit(f'Không tìm thấy tên lớp (data.yaml / classes.txt / notes.json / XML VOC) trong {src} — '
                      f'dùng cú pháp {src}@names.yaml')
+
+
+def voc_boxes(xml_path: Path, image: Path) -> list[tuple[str, float, float, float, float]]:
+    """PASCAL VOC → [(tên lớp, cx, cy, w, h)] chuẩn hoá [0..1]"""
+    root = ET.parse(xml_path).getroot()
+    size = root.find('size')
+    w = float(size.findtext('width', '0')) if size is not None else 0
+    h = float(size.findtext('height', '0')) if size is not None else 0
+    if w <= 0 or h <= 0:  # XML thiếu kích thước → đọc từ ảnh
+        from PIL import Image
+        with Image.open(image) as im:
+            w, h = im.size
+    boxes = []
+    for obj in root.iter('object'):
+        bb = obj.find('bndbox')
+        if bb is None:
+            continue
+        x0, y0 = float(bb.findtext('xmin')), float(bb.findtext('ymin'))
+        x1, y1 = float(bb.findtext('xmax')), float(bb.findtext('ymax'))
+        x0, x1 = max(0, min(x0, x1)), min(w, max(x0, x1))
+        y0, y1 = max(0, min(y0, y1)), min(h, max(y0, y1))
+        if x1 <= x0 or y1 <= y0:
+            continue
+        boxes.append((obj.findtext('name', '').strip(), (x0 + x1) / 2 / w, (y0 + y1) / 2 / h, (x1 - x0) / w, (y1 - y0) / h))
+    return boxes
 
 
 def parse_label_line(line: str) -> tuple[int, float, float, float, float] | None:
@@ -123,15 +154,30 @@ def main() -> None:
         path, _, override = spec.partition('@')
         src = Path(path)
         names = find_names(src, override or None)
-        to_dst = {i: amap.get(norm(n)) for i, n in enumerate(names)}
         tag = f's{si}_' + ''.join(ch if ch.isalnum() else '_' for ch in src.name)[:20]
-        print(f'[{tag}] {src} — {len(names)} lớp, đổi được {sum(v is not None for v in to_dst.values())}')
+        voc_index: dict[str, Path] = {}
+        if names is None:
+            voc_index = {p.stem: p for p in src.rglob('*.xml')}
+            to_dst = {}
+            print(f'[{tag}] {src} — PASCAL VOC, {len(voc_index)} file XML')
+        else:
+            to_dst = {i: amap.get(norm(n)) for i, n in enumerate(names)}
+            print(f'[{tag}] {src} — {len(names)} lớp, đổi được {sum(v is not None for v in to_dst.values())}')
 
         for img in sorted(p for p in src.rglob('*') if p.suffix.lower() in IMAGE_EXTS):
             split = forced_split or split_of(img, src, args.val_ratio)
             lines = []
             lbl = label_path_for(img)
-            if lbl.exists():
+            if names is None:
+                xml = voc_index.get(img.stem)
+                for cls_name, cx, cy, w, h in (voc_boxes(xml, img) if xml else []):
+                    dst = amap.get(norm(cls_name))
+                    if dst is None:
+                        unmapped[tag][cls_name] += 1
+                        continue
+                    lines.append(f'{dst} {cx:.6f} {cy:.6f} {w:.6f} {h:.6f}')
+                    instances[split][dst] += 1
+            elif lbl.exists():
                 for raw in lbl.read_text(encoding='utf-8').splitlines():
                     parsed = parse_label_line(raw)
                     if parsed is None:

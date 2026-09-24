@@ -156,7 +156,8 @@ void main() {
       s.nextScan(at(0), frameWidth: 480, frameHeight: 720);
       s.onResult(at(50), motion: 0.1, hazard: true, relevantObjects: true);
       expect(s.mode, ScanMode.alert);
-      expect(s.nextScan(at(51), frameWidth: 480, frameHeight: 720)!.isFull, isTrue); // không chờ
+      expect(s.nextScan(at(60), frameWidth: 480, frameHeight: 720), isNull); // vẫn nghỉ ≥ 100 ms cho GPU vẽ màn hình
+      expect(s.nextScan(at(101), frameWidth: 480, frameHeight: 720)!.isFull, isTrue); // nhanh hơn 200 ms, luôn toàn khung
       s.onResult(at(100), motion: 0.1, hazard: false, relevantObjects: true);
       expect(s.mode, ScanMode.alert); // còn giữ
       s.nextScan(at(2200), frameWidth: 480, frameHeight: 720);
@@ -178,6 +179,21 @@ void main() {
   });
 
   group('ObjectTracker với vùng quét', () {
+    test('vật vắt qua mép vùng hành lang không bị tính là mất (không chớp tắt)', () {
+      final tracker = ObjectTracker();
+      const frame = Size(400, 800);
+      final t0 = DateTime(2026);
+      // Ô tô rộng, tâm nằm trong vùng hành lang nhưng 2 bên tràn ra ngoài
+      final car = [Recognition(2, 'xe ô tô', 0.9, const Rect.fromLTWH(40, 250, 320, 180), labelEn: 'car')];
+      for (var i = 0; i < 3; i++) {
+        tracker.update(car, frame, t0);
+      }
+      const corridor = Rect.fromLTWH(80, 200, 240, 240);
+      for (var i = 0; i < 8; i++) {
+        expect(tracker.update([], frame, t0, coverage: corridor), hasLength(1));
+      }
+    });
+
     test('vật ngoài vùng hành lang không bị tính là mất dấu', () {
       final tracker = ObjectTracker();
       const frame = Size(400, 800);

@@ -10,10 +10,7 @@ class BoundingBoxPainter extends CustomPainter {
   final String? alertSubject;
   final AlertLevel? alertLevel;
 
-  /// Vùng "hành lang" lần quét gần nhất (chỉ vẽ khi debug); null = lần quét toàn khung
-  final Rect? corridor;
-
-  BoundingBoxPainter(this.scene, {this.alertSubject, this.alertLevel, this.corridor});
+  BoundingBoxPainter(this.scene, {this.alertSubject, this.alertLevel});
 
   static Color colorOf(AlertLevel? level) => switch (level) {
         AlertLevel.danger => Colors.redAccent,
@@ -24,15 +21,6 @@ class BoundingBoxPainter extends CustomPainter {
   @override
   void paint(Canvas canvas, Size size) {
     _paintColumns(canvas, size);
-    if (corridor != null) {
-      canvas.drawRect(
-        corridor!,
-        Paint()
-          ..color = Colors.cyanAccent.withValues(alpha: 0.5)
-          ..style = PaintingStyle.stroke
-          ..strokeWidth = 1.5,
-      );
-    }
 
     for (final o in scene.objects) {
       final isAlert = 'track:${o.track.id}' == alertSubject;
