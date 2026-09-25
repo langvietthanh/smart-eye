@@ -70,7 +70,9 @@ const Map<String, String> labelVi = {
   'railing': 'lan can',
   'barrier': 'rào chắn',
   'vendor cart': 'xe hàng rong',
-  'stairs': 'bậc thang',
+  'stairs': 'bậc thang', // model v1–v3 (chưa tách hướng)
+  'stairs up': 'cầu thang đi lên',
+  'stairs down': 'cầu thang đi xuống',
   'curb': 'mép vỉa hè',
   'pothole': 'ổ gà',
   'manhole': 'hố ga',
@@ -79,7 +81,7 @@ const Map<String, String> labelVi = {
   'hole': 'hố',
 };
 
-const _groundHazards = {'manhole', 'pothole', 'stairs', 'hole', 'curb'};
+const _groundHazards = {'manhole', 'pothole', 'stairs', 'stairs up', 'stairs down', 'hole', 'curb'};
 
 /// Nguy hiểm mặt đất "nhẹ": gặp rất thường xuyên (mép vỉa hè) → chỉ nhắc chú ý, không hô "Dừng lại"
 const mildGroundHazards = {'curb'};

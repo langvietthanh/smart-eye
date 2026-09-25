@@ -4,6 +4,7 @@ r"""Gộp nhiều dataset định dạng YOLO (Roboflow, COCO subset, dữ liệ
 - Tên lớp của từng dataset nguồn được đổi về tên chuẩn qua `aliases` (VD "Electric Pole" → pole).
 - Lớp không có trong classes.yaml bị bỏ (có báo cáo), ảnh không còn nhãn nào giữ lại một phần làm
   ảnh "nền" (giúp model bớt báo nhầm).
+- Ảnh có lớp trong `skip_images_with` (VD cầu thang không rõ lên / xuống) bị bỏ hẳn, không dùng làm nền.
 - Giữ nguyên chia train/val của nguồn nếu có; không có thì chia ngẫu nhiên cố định theo tên file.
 - Nhãn dạng polygon (segmentation) tự đổi thành box.
 
@@ -33,7 +34,7 @@ from pathlib import Path
 
 import yaml
 
-from common import COCO80, IMAGE_EXTS, alias_map, label_path_for, load_classes, norm, read_names
+from common import COCO80, IMAGE_EXTS, alias_map, label_path_for, load_classes, norm, read_names, skip_names
 
 VAL_DIRS = {'val', 'valid', 'validation', 'test', 'val2017'}
 TRAIN_DIRS = {'train', 'train2017'}
@@ -132,7 +133,9 @@ def main() -> None:
     ap.add_argument('--seed', type=int, default=0)
     args = ap.parse_args()
 
-    classes = load_classes(Path(args.classes)) if args.classes else load_classes()
+    classes_yaml = Path(args.classes) if args.classes else None
+    classes = load_classes(classes_yaml) if classes_yaml else load_classes()
+    skip = skip_names(classes_yaml) if classes_yaml else skip_names()
     amap = alias_map(classes)
     out = Path(args.out)
     if out.exists():
@@ -145,6 +148,7 @@ def main() -> None:
     instances = {s: Counter() for s in ('train', 'val')}
     images = Counter()
     unmapped: dict[str, Counter] = defaultdict(Counter)
+    skipped: Counter = Counter()
     negatives: dict[str, list[tuple[Path, str]]] = {'train': [], 'val': []}
 
     for si, spec in enumerate(args.source):
@@ -170,7 +174,11 @@ def main() -> None:
             lbl = label_path_for(img)
             if names is None:
                 xml = voc_index.get(img.stem)
-                for cls_name, cx, cy, w, h in (voc_boxes(xml, img) if xml else []):
+                boxes = voc_boxes(xml, img) if xml else []
+                if any(norm(b[0]) in skip for b in boxes):
+                    skipped[tag] += 1
+                    continue
+                for cls_name, cx, cy, w, h in boxes:
                     dst = amap.get(norm(cls_name))
                     if dst is None:
                         unmapped[tag][cls_name] += 1
@@ -178,10 +186,11 @@ def main() -> None:
                     lines.append(f'{dst} {cx:.6f} {cy:.6f} {w:.6f} {h:.6f}')
                     instances[split][dst] += 1
             elif lbl.exists():
-                for raw in lbl.read_text(encoding='utf-8').splitlines():
-                    parsed = parse_label_line(raw)
-                    if parsed is None:
-                        continue
+                parsed_all = [p for p in map(parse_label_line, lbl.read_text(encoding='utf-8').splitlines()) if p]
+                if any(p[0] < len(names) and norm(names[p[0]]) in skip for p in parsed_all):
+                    skipped[tag] += 1
+                    continue
+                for parsed in parsed_all:
                     cls, cx, cy, w, h = parsed
                     dst = to_dst.get(cls)
                     if dst is None:
@@ -219,6 +228,7 @@ def main() -> None:
         'images': dict(images),
         'instances': {c['name']: {s: instances[s][i] for s in ('train', 'val')} for i, c in enumerate(classes)},
         'unmapped_classes': {k: dict(v) for k, v in unmapped.items()},
+        'skipped_images': dict(skipped),
     }
     (out / 'stats.json').write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding='utf-8')
 
@@ -229,6 +239,8 @@ def main() -> None:
         tr, va = instances['train'][i], instances['val'][i]
         warn = '  ⚠ thiếu dữ liệu' if tr < args.min_instances else ''
         print(f'{c["name"]:<16}{tr:>8}{va:>8}{warn}')
+    for tag, n in skipped.items():
+        print(f'[{tag}] bỏ {n} ảnh có nhãn trong skip_images_with (VD cầu thang không rõ lên / xuống)')
     for tag, cnt in unmapped.items():
         print(f'[{tag}] bỏ các lớp không có trong classes.yaml: {dict(cnt.most_common(10))}')
     print(f'\n→ {out / "data.yaml"}')

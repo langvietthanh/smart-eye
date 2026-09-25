@@ -21,7 +21,7 @@ File nghiệp vụ nói giá trị lớn nhất là vật **ở tầm ngực / c
 | Ưu tiên | Lớp (`name` → đọc là) | Ghi chú |
 |---|---|---|
 | **1** | `pole` → cột · `traffic sign` → biển báo · `tree` → cây · `branch` → cành cây · `railing` → lan can · `barrier` → rào chắn · `vendor cart` → xe hàng rong | Gậy không dò tới — **cần nhiều dữ liệu nhất** (≥ 1000 vật/lớp) |
-| **2** | `stairs` → bậc thang · `curb` → mép vỉa hè · `pothole` → ổ gà · `manhole` → hố ga · `bollard` → cọc chắn · `traffic cone` → cọc giao thông | Dưới chân, gậy dò được — báo sớm vẫn có ích (≥ 300 vật/lớp) |
+| **2** | `stairs up` → cầu thang đi lên · `stairs down` → cầu thang đi xuống · `curb` → mép vỉa hè · `pothole` → ổ gà · `manhole` → hố ga · `bollard` → cọc chắn · `traffic cone` → cọc giao thông | Dưới chân, gậy dò được — báo sớm vẫn có ích (≥ 300 vật/lớp) |
 | **3** | người, xe đạp, ô tô, xe máy, xe buýt, xe tải, chó, ghế, bàn, ghế băng, chậu cây, trụ nước cứu hỏa, ô dù | Lấy từ COCO để model **không quên** |
 
 **Thêm / bớt lớp:** sửa `classes.yaml` **và** `lib/utils/label_catalog.dart` (tên tiếng Việt + nhóm nguy hiểm).
@@ -34,7 +34,8 @@ File nghiệp vụ nói giá trị lớn nhất là vật **ở tầm ngực / c
 | COCO 2017 (một phần) | người, xe, ghế, biển báo... | ~6800 ảnh | CC BY 4.0 | train + val | `fetch_coco_subset.py` |
 | [BPID — Bandung Pothole Image Dataset](https://data.mendeley.com/datasets/rgymy6dwdd/1) | `pothole` | 161 ảnh, 263 ổ gà (trung vị box 2,9% ảnh), nắng / râm / ướt / đêm | **CC BY 4.0** | **val** (tác giả thiết kế làm tập kiểm tra độc lập) | Nhãn YOLO sạch, 0 dòng lỗi · `fetch_mendeley.py rgymy6dwdd` |
 | [Pothole Detection (Kaggle)](https://www.kaggle.com/datasets/andrewmvd/pothole-detection) | `pothole` | 665 ảnh | DbCL v1.0 (ghi nguồn MakeML) | **train** | Nhãn PASCAL VOC → `build_dataset.py` tự đổi sang YOLO (đã chạy thử trên bản giả lập cùng cấu trúc) · tải cần tài khoản Kaggle, bước 3c notebook |
-| Roboflow Universe | tuỳ dataset | — | xem từng dataset | train | bước 3 notebook |
+| Roboflow [stairs-detection-6cq2a](https://universe.roboflow.com/stair-eyhvv/stairs-detection-6cq2a) · [stairs-5yily](https://universe.roboflow.com/katti/stairs-5yily) · [staircase-nmchu](https://universe.roboflow.com/avionics/staircase-nmchu) | `stairs up` / `stairs down` | ~118 / ~516 / ~1451 ảnh | CC BY 4.0 / **xem trang** / **xem trang** | train + val (theo chia sẵn của nguồn) | Nhãn `stairsup`/`upstair`… đổi qua alias; ảnh chỉ ghi "stairs" chung chung **bị bỏ** · cần `ROBOFLOW_API_KEY`, bước 3 notebook |
+| Roboflow Universe (khác) | tuỳ dataset | — | xem từng dataset | train | bước 3 notebook |
 | **Ảnh nhóm tự chụp** | mọi lớp | càng nhiều càng tốt | của nhóm | train + val | quan trọng nhất |
 
 **Ghi nguồn (theo giấy phép từng dataset)** — đưa vào báo cáo / slide khi dùng model train với dữ liệu này:
@@ -70,7 +71,7 @@ dataset**; nếu cần chia sẻ, làm mờ mặt / biển số trước.
 | `railing` | Mỗi đoạn lan can / hàng rào liền mạch 1 box | |
 | `barrier` | Rào chắn công trình, barie, dải phân cách tạm | |
 | `vendor cart` | Xe đẩy / tủ kính / quầy hàng rong chiếm vỉa hè | Cửa hàng cố định |
-| `stairs` | Cả đoạn bậc thang nhìn thấy (lên hoặc xuống) | Bậc thềm 1 bậc (→ `curb`) |
+| `stairs up` / `stairs down` | Cả đoạn bậc thang nhìn thấy; **hướng theo người đang đứng nhìn** (thấy mặt đứng các bậc → lên, thấy mép bậc hụt xuống → xuống) | Bậc thềm 1 bậc (→ `curb`); cầu thang không rõ hướng thì bỏ ảnh |
 | `curb` | Đoạn mép vỉa hè / bậc thềm **cắt ngang lối đi, trong ~5 m** | Mép vỉa hè chạy dọc theo hướng đi, ở xa |
 | `pothole` | Ổ gà, chỗ lún, hố trên mặt đường / vỉa hè | Vũng nước trên mặt phẳng |
 | `manhole` | Nắp hố ga / cống, **đặc biệt hố ga mở** | |
@@ -115,5 +116,5 @@ nhận file asset mới, app sẽ vẫn dùng model cũ. App tự ưu tiên file
 đọc tên lớp từ metadata trong model (không cần sửa `coco.txt`). Log khởi động:
 ```
 Model: assets/models/smart_eye.tflite (...) · nhãn từ metadata
-Lớp: 26 (xét 26) · input 320 NCHW · output [1, 30, 2100]
+Lớp: 27 (xét 27) · input 320 NCHW · output [1, 30, 2100]
 ```

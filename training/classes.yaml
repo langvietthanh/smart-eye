@@ -62,8 +62,14 @@ classes:
      aliases: [street vendor cart, food cart, pushcart, cart], prompt: street food cart}
 
   # ---------------------------------------------------------------- MỚI — dưới chân
-  - {name: stairs, vi: bậc thang, category: groundHazard, priority: 2, source: new,
-     aliases: [staircase, stair, steps, step, stairway], prompt: stairs}
+  # Cầu thang tách 2 lớp: đi xuống nguy hiểm hơn hẳn (ngã), người dùng cần biết hướng
+  - {name: stairs up, vi: cầu thang đi lên, category: groundHazard, priority: 2, source: new,
+     aliases: [stairsup, upstairs, upstair, stair up, stairs going up, ascending stairs, upward stairs, up stairs],
+     prompt: stairs going up}
+  - {name: stairs down, vi: cầu thang đi xuống, category: groundHazard, priority: 2, source: new,
+     aliases: [stairsdown, downstairs, downstair, stair down, stairs going down, descending stairs, downward stairs,
+               down stairs],
+     prompt: stairs going down}
   - {name: curb, vi: mép vỉa hè, category: groundHazard, priority: 2, source: new,
      aliases: [kerb, sidewalk edge, curbstone], prompt: curb}
   - {name: pothole, vi: ổ gà, category: groundHazard, priority: 2, source: new,
@@ -74,3 +80,7 @@ classes:
      aliases: [bollards, parking meter], prompt: bollard}
   - {name: traffic cone, vi: cọc giao thông, category: obstacle, priority: 2, source: new,
      aliases: [cone, safety cone], prompt: traffic cone}
+
+# Nhãn KHÔNG rõ hướng (cầu thang chung chung): bỏ CẢ ẢNH khi gộp dữ liệu. Nếu chỉ bỏ box, ảnh vẫn còn
+# cầu thang mà không có nhãn → model bị dạy "cầu thang là nền", nhận kém cả 2 lớp lên / xuống.
+skip_images_with: [stairs, staircase, stair, steps, step, stairway]

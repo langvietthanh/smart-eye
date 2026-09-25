@@ -37,6 +37,12 @@ def load_classes(path: Path = CLASSES_YAML) -> list[dict]:
     return classes
 
 
+def skip_names(path: Path = CLASSES_YAML) -> set[str]:
+    """Tên lớp mà ảnh chứa nó bị bỏ hẳn khi gộp (`skip_images_with` trong classes.yaml), đã chuẩn hoá"""
+    with open(path, encoding='utf-8') as f:
+        return {norm(n) for n in yaml.safe_load(f).get('skip_images_with', [])}
+
+
 def alias_map(classes: list[dict]) -> dict[str, int]:
     """Tên chuẩn + mọi alias (đã chuẩn hoá) → id lớp đích. Báo lỗi nếu 1 alias trỏ tới 2 lớp."""
     mapping: dict[str, int] = {}

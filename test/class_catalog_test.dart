@@ -65,5 +65,10 @@ void main() {
       expect(run('curb', 'mép vỉa hè', 0.7).alert?.level, AlertLevel.caution);
       expect(run('curb', 'mép vỉa hè', 0.1).alert, isNull);
     });
+
+    test('cầu thang đi xuống phía trước → Dừng lại, nói rõ hướng', () {
+      expect(run('stairs down', 'cầu thang đi xuống', 0.35).alert!.message,
+          startsWith('Dừng lại! Có cầu thang đi xuống phía trước!'));
+    });
   });
 }
