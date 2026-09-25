@@ -151,6 +151,7 @@ def main() -> None:
         tp = fp = n_gt = wrong = large_hit = large_n = 0
         hit_by = np.zeros(len(classes), int)
         n_by = np.zeros(len(classes), int)
+        fp_by = np.zeros(len(classes), int)
         for img, gt in data:
             w, h = img.size
             dets = detect(img, conf)
@@ -174,11 +175,19 @@ def main() -> None:
                     used.add(bj)
                 else:
                     fp += 1
+                    fp_by[d[5]] += 1
                     wrong += best >= 0.5 and gt[bj][4] != d[5]
         print(f'conf={conf:.2f}  precision={tp / max(1, tp + fp):.2f}  recall={tp / max(1, n_gt):.2f}  '
               f'recall_vật_lớn={large_hit / max(1, large_n):.2f}  sai_lớp={wrong}  box_sai={fp}  đúng={tp}/{n_gt}')
         if abs(conf - 0.25) < 1e-6:
             per_class_at_25 = (hit_by, n_by)
+            # Box "sai" của lớp mà dataset không gán nhãn (VD cột điện trên ảnh COCO) có thể là đúng — tách riêng
+            unlabeled = set(range(len(classes))) - {c for c in d2c.values() if c is not None}
+            fp_unlabeled = int(sum(fp_by[c] for c in unlabeled))
+            print(f'          box sai thuộc lớp dataset KHÔNG gán nhãn (có thể đúng): {fp_unlabeled} · '
+                  f'precision chỉ tính lớp có nhãn = {tp / max(1, tp + fp - fp_unlabeled):.2f}')
+            top = sorted(((int(fp_by[c]), classes[c]['name']) for c in range(len(classes)) if fp_by[c]), reverse=True)[:8]
+            print('          box sai theo lớp:', ', '.join(f'{n} {k}' for k, n in top))
 
     if per_class_at_25 is not None:
         hit_by, n_by = per_class_at_25

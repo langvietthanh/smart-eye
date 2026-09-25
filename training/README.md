@@ -108,7 +108,8 @@ model cũ (`python tool/eval_model.py --data <data.yaml>`):
 
 ## 7. Đưa model vào app
 
-Đổi tên file thành **`smart_eye.tflite`**, chép vào `assets/models/`, chạy lại app. App tự ưu tiên file này,
+Đổi tên file thành **`smart_eye.tflite`**, chép vào `assets/models/`, chạy lại app. **Lần đầu thêm file phải chạy `flutter clean`** trước khi build — build tăng dần của Flutter không
+nhận file asset mới, app sẽ vẫn dùng model cũ. App tự ưu tiên file này,
 đọc tên lớp từ metadata trong model (không cần sửa `coco.txt`). Log khởi động:
 ```
 Model: assets/models/smart_eye.tflite (...) · nhãn từ metadata
