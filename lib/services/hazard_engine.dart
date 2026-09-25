@@ -194,6 +194,7 @@ class HazardEngine {
       return switch (side) {
         Guidance.goLeft => '$head Bên trái trống.',
         Guidance.goRight => '$head Bên phải trống.',
+        Guidance.slowDown => '$head Hai bên đều có vật cản.',
         _ => head,
       };
     }
@@ -204,7 +205,7 @@ class HazardEngine {
     return switch (side) {
       Guidance.goLeft => '$head. Đi chếch sang trái.',
       Guidance.goRight => '$head. Đi chếch sang phải.',
-      Guidance.slowDown => '$head. Đi chậm lại.',
+      Guidance.slowDown => '$head. Hai bên đều có vật cản, đi chậm lại.',
       _ => '$head.',
     };
   }

@@ -6,11 +6,11 @@ import '../utils/label_catalog.dart';
 /// CN13 — Tóm tắt chuyến đi (recap) bằng template.
 class CaptionBuilder {
   /// Số nhóm vật tối đa trong 1 câu mô tả — nhiều hơn sẽ thành "nói chuyện phiếm"
-  static const int maxGroups = 3;
+  static const int maxGroups = 2;
 
   /// "Phía trước có 2 người, gần nhất cách khoảng 2 mét. Bên phải có xe máy, ở xa. Bên trái trống."
   static String describeScene(SceneAssessment scene) {
-    final objects = scene.objects.where((o) => o.isRelevant || o.distance != DistanceLevel.far).toList();
+    final objects = scene.objects.where((o) => o.isRelevant).toList();
     if (objects.isEmpty) return 'Phía trước không thấy vật cản nào.';
 
     // Gộp theo (vị trí, tên vật), giữ khoảng cách gần nhất trong nhóm
@@ -40,24 +40,26 @@ class CaptionBuilder {
     final shown = sorted.take(maxGroups).toList()
       ..sort((a, b) => posOrder[a.pos]!.compareTo(posOrder[b.pos]!));
 
-    final parts = <String>[];
+    // Người khiếm thị cần biết ĐI HƯỚNG NÀO trước, vật gì sau
+    final parts = <String>[freeSpaceSentence(scene)];
     for (final g in shown) {
       final what = g.count > 1 ? '${g.count} ${g.label}' : g.label;
       final dist = g.count > 1 ? 'gần nhất ${g.nearest.vi}' : g.nearest.vi;
       parts.add('${capitalize(g.pos.vi)} có $what, $dist.');
     }
-    final hidden = sorted.length - shown.length;
-    if (hidden > 0) parts.add('Và $hidden loại vật khác.');
-
-    parts.add(freeSpaceSentence(scene));
     return parts.join(' ');
   }
 
   /// Câu tóm tắt lối đi dựa trên free-space 3 cột
   static String freeSpaceSentence(SceneAssessment scene) {
-    if (scene.isColumnFree(HPos.center)) return 'Lối đi phía trước thông thoáng.';
     final left = scene.isColumnFree(HPos.left);
     final right = scene.isColumnFree(HPos.right);
+    if (scene.isColumnFree(HPos.center)) {
+      if (left && right) return 'Lối đi phía trước thông thoáng.';
+      if (left) return 'Phía trước trống, bên phải có vật cản.';
+      if (right) return 'Phía trước trống, bên trái có vật cản.';
+      return 'Phía trước trống, hai bên có vật cản.';
+    }
     if (left && right) return 'Phía trước bị chắn, hai bên trái phải đều trống.';
     if (left) return 'Phía trước bị chắn, bên trái trống.';
     if (right) return 'Phía trước bị chắn, bên phải trống.';

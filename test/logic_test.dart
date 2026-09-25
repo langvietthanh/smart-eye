@@ -134,6 +134,20 @@ void main() {
       expect(text, contains('Bên phải có xe máy, ở xa.'));
     });
 
+    test('nói hướng đi TRƯỚC, rồi mới tới vật (tối đa 2 nhóm)', () {
+      final scene = run(ObjectTracker(), HazardEngine(), [
+        rec('chair', 'ghế', 56, centerBox(0.4)),
+        rec('person', 'người', 0, Rect.fromLTWH(10, 100, 110, 600)),
+      ]);
+      final text = CaptionBuilder.describeScene(scene);
+      expect(text, startsWith('Phía trước bị chắn, bên phải trống.'));
+    });
+
+    test('phía trước trống nhưng một bên có vật → nói rõ bên nào', () {
+      final scene = run(ObjectTracker(), HazardEngine(), [rec('person', 'người', 0, Rect.fromLTWH(10, 100, 110, 600))]);
+      expect(CaptionBuilder.describeScene(scene), startsWith('Phía trước trống, bên trái có vật cản.'));
+    });
+
     test('không có gì → câu ngắn', () {
       expect(CaptionBuilder.describeScene(SceneAssessment.empty), 'Phía trước không thấy vật cản nào.');
     });
