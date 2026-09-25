@@ -10,6 +10,7 @@ scripts/
   auto_label.py         ← gán nhãn tự động bằng YOLO-World (người sửa lại)
   build_dataset.py      ← gộp mọi nguồn dữ liệu theo classes.yaml
   fetch_mendeley.py     ← tải dataset từ Mendeley Data (VD BPID — ổ gà)
+  pseudo_label.py       ← gán nhãn bù người / xe cho ảnh ngoài COCO (chống "quên" lớp cũ)
 smart_eye_train.ipynb   ← notebook Colab chạy trọn quy trình
 ```
 
@@ -99,8 +100,9 @@ python training/scripts/build_dataset.py --source tool/coco128@coco80 --out data
 
 ## 6. Tiêu chí nhận model mới
 
-Trước khi thay model trong app, chạy `python tool/eval_model.py --model <file mới> --data <data.yaml>` và so với
-model cũ (`python tool/eval_model.py --data <data.yaml>`):
+Bước 8 của notebook tự chấm **model cũ và model mới trên cùng tập val** (COCO val2017 + BPID — cả 2 model chưa từng
+học). **Không so trên COCO128**: 128 ảnh đó nằm trong tập train của model gốc nên điểm model gốc bị đội lên.
+Nhận model mới khi:
 
 - Lớp **ưu tiên 1**: mAP50 ≥ 0.5 và recall vật lớn ≥ 0.7.
 - Các lớp COCO (người, xe...): recall vật lớn **không giảm quá 0.05** so với model cũ.
