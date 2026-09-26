@@ -81,6 +81,9 @@ classes:
   - {name: traffic cone, vi: cọc giao thông, category: obstacle, priority: 2, source: new,
      aliases: [cone, safety cone], prompt: traffic cone}
 
-# Nhãn KHÔNG rõ hướng (cầu thang chung chung): bỏ CẢ ẢNH khi gộp dữ liệu. Nếu chỉ bỏ box, ảnh vẫn còn
-# cầu thang mà không có nhãn → model bị dạy "cầu thang là nền", nhận kém cả 2 lớp lên / xuống.
-skip_images_with: [stairs, staircase, stair, steps, step, stairway]
+# Nhãn chung chung KHÔNG rõ hướng (VD "stairs"). Nhiều dataset gán 2 box cho cùng 1 cầu thang: "stairs" + "upstair"
+# → box chung nằm trùng box lên / xuống thì chỉ bỏ box chung. Không trùng box nào → bỏ CẢ ẢNH: nếu chỉ bỏ box, ảnh vẫn
+# còn cầu thang mà không có nhãn → model bị dạy "cầu thang là nền", nhận kém cả 2 lớp.
+generic_labels:
+  names: [stairs, staircase, stair, steps, step, stairway]
+  covered_by: [stairs up, stairs down]

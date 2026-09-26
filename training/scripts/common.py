@@ -37,10 +37,12 @@ def load_classes(path: Path = CLASSES_YAML) -> list[dict]:
     return classes
 
 
-def skip_names(path: Path = CLASSES_YAML) -> set[str]:
-    """Tên lớp mà ảnh chứa nó bị bỏ hẳn khi gộp (`skip_images_with` trong classes.yaml), đã chuẩn hoá"""
+def generic_labels(classes: list[dict], path: Path = CLASSES_YAML) -> tuple[set[str], set[int]]:
+    """`generic_labels` trong classes.yaml → (tên nhãn chung chung đã chuẩn hoá, id các lớp cụ thể có thể thay nó)"""
     with open(path, encoding='utf-8') as f:
-        return {norm(n) for n in yaml.safe_load(f).get('skip_images_with', [])}
+        g = yaml.safe_load(f).get('generic_labels') or {}
+    ids = {i for i, c in enumerate(classes) if c['name'] in g.get('covered_by', [])}
+    return {norm(n) for n in g.get('names', [])}, ids
 
 
 def alias_map(classes: list[dict]) -> dict[str, int]:

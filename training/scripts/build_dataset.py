@@ -4,7 +4,9 @@ r"""Gộp nhiều dataset định dạng YOLO (Roboflow, COCO subset, dữ liệ
 - Tên lớp của từng dataset nguồn được đổi về tên chuẩn qua `aliases` (VD "Electric Pole" → pole).
 - Lớp không có trong classes.yaml bị bỏ (có báo cáo), ảnh không còn nhãn nào giữ lại một phần làm
   ảnh "nền" (giúp model bớt báo nhầm).
-- Ảnh có lớp trong `skip_images_with` (VD cầu thang không rõ lên / xuống) bị bỏ hẳn, không dùng làm nền.
+- Nhãn chung chung trong `generic_labels` (VD "stairs" không rõ lên / xuống): box trùng box lớp cụ thể thì bỏ box,
+  không trùng thì bỏ cả ảnh.
+- Ảnh có nhãn lạ (không đổi được) không bao giờ làm ảnh nền — chưa chắc ảnh đó không có gì.
 - Giữ nguyên chia train/val của nguồn nếu có; không có thì chia ngẫu nhiên cố định theo tên file.
 - Nhãn dạng polygon (segmentation) tự đổi thành box.
 
@@ -34,7 +36,7 @@ from pathlib import Path
 
 import yaml
 
-from common import COCO80, IMAGE_EXTS, alias_map, label_path_for, load_classes, norm, read_names, skip_names
+from common import COCO80, IMAGE_EXTS, alias_map, label_path_for, load_classes, norm, read_names, generic_labels
 
 VAL_DIRS = {'val', 'valid', 'validation', 'test', 'val2017'}
 TRAIN_DIRS = {'train', 'train2017'}
@@ -112,6 +114,13 @@ def parse_label_line(line: str) -> tuple[int, float, float, float, float] | None
     return cls, cx, cy, w, h
 
 
+def overlap(a, b) -> float:
+    """Diện tích giao / diện tích box nhỏ hơn (box dạng cx, cy, w, h) — 1.0 khi box này nằm trọn trong box kia"""
+    w = min(a[0] + a[2] / 2, b[0] + b[2] / 2) - max(a[0] - a[2] / 2, b[0] - b[2] / 2)
+    h = min(a[1] + a[3] / 2, b[1] + b[3] / 2) - max(a[1] - a[3] / 2, b[1] - b[3] / 2)
+    return 0.0 if w <= 0 or h <= 0 else w * h / min(a[2] * a[3], b[2] * b[3])
+
+
 def split_of(image: Path, src: Path, val_ratio: float) -> str:
     rel_parts = {p.lower() for p in image.relative_to(src).parts[:-1]}
     if rel_parts & VAL_DIRS:
@@ -135,7 +144,7 @@ def main() -> None:
 
     classes_yaml = Path(args.classes) if args.classes else None
     classes = load_classes(classes_yaml) if classes_yaml else load_classes()
-    skip = skip_names(classes_yaml) if classes_yaml else skip_names()
+    generic, covered_by = generic_labels(classes, classes_yaml) if classes_yaml else generic_labels(classes)
     amap = alias_map(classes)
     out = Path(args.out)
     if out.exists():
@@ -149,6 +158,7 @@ def main() -> None:
     images = Counter()
     unmapped: dict[str, Counter] = defaultdict(Counter)
     skipped: Counter = Counter()
+    merged: Counter = Counter()
     negatives: dict[str, list[tuple[Path, str]]] = {'train': [], 'val': []}
 
     for si, spec in enumerate(args.source):
@@ -174,33 +184,32 @@ def main() -> None:
             lbl = label_path_for(img)
             if names is None:
                 xml = voc_index.get(img.stem)
-                boxes = voc_boxes(xml, img) if xml else []
-                if any(norm(b[0]) in skip for b in boxes):
-                    skipped[tag] += 1
-                    continue
-                for cls_name, cx, cy, w, h in boxes:
-                    dst = amap.get(norm(cls_name))
-                    if dst is None:
-                        unmapped[tag][cls_name] += 1
-                        continue
-                    lines.append(f'{dst} {cx:.6f} {cy:.6f} {w:.6f} {h:.6f}')
-                    instances[split][dst] += 1
+                boxes = [(amap.get(norm(n)), norm(n) in generic, n, b) for n, *b in (voc_boxes(xml, img) if xml else [])]
             elif lbl.exists():
-                parsed_all = [p for p in map(parse_label_line, lbl.read_text(encoding='utf-8').splitlines()) if p]
-                if any(p[0] < len(names) and norm(names[p[0]]) in skip for p in parsed_all):
-                    skipped[tag] += 1
-                    continue
-                for parsed in parsed_all:
-                    cls, cx, cy, w, h = parsed
-                    dst = to_dst.get(cls)
-                    if dst is None:
-                        unmapped[tag][names[cls] if cls < len(names) else str(cls)] += 1
-                        continue
-                    lines.append(f'{dst} {cx:.6f} {cy:.6f} {w:.6f} {h:.6f}')
-                    instances[split][dst] += 1
+                boxes = []
+                for cls, *b in filter(None, map(parse_label_line, lbl.read_text(encoding='utf-8').splitlines())):
+                    n = names[cls] if cls < len(names) else str(cls)
+                    boxes.append((to_dst.get(cls), norm(n) in generic, n, b))
+            else:
+                boxes = []
+            kept = [(dst, b) for dst, _, _, b in boxes if dst is not None]
+            # Nhãn chung chung: trùng box lớp cụ thể (cùng 1 vật) → bỏ box; không trùng → bỏ cả ảnh
+            loose = [b for dst, gen, _, b in boxes if dst is None and gen]
+            if any(not any(d in covered_by and overlap(b, k) >= 0.6 for d, k in kept) for b in loose):
+                skipped[tag] += 1
+                continue
+            if loose:
+                merged[tag] += len(loose)
+            for dst, gen, n, _ in boxes:
+                if dst is None and not gen:
+                    unmapped[tag][n] += 1
+            for dst, (cx, cy, w, h) in kept:
+                lines.append(f'{dst} {cx:.6f} {cy:.6f} {w:.6f} {h:.6f}')
+                instances[split][dst] += 1
             name = f'{tag}_{img.stem}'
             if not lines:
-                negatives[split].append((img, name))
+                if not boxes:  # ảnh có nhãn lạ không phải ảnh nền thật
+                    negatives[split].append((img, name))
                 continue
             shutil.copy2(img, out / 'images' / split / f'{name}{img.suffix.lower()}')
             (out / 'labels' / split / f'{name}.txt').write_text('\n'.join(lines) + '\n', encoding='utf-8')
@@ -229,6 +238,7 @@ def main() -> None:
         'instances': {c['name']: {s: instances[s][i] for s in ('train', 'val')} for i, c in enumerate(classes)},
         'unmapped_classes': {k: dict(v) for k, v in unmapped.items()},
         'skipped_images': dict(skipped),
+        'merged_generic_boxes': dict(merged),
     }
     (out / 'stats.json').write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding='utf-8')
 
@@ -239,8 +249,9 @@ def main() -> None:
         tr, va = instances['train'][i], instances['val'][i]
         warn = '  ⚠ thiếu dữ liệu' if tr < args.min_instances else ''
         print(f'{c["name"]:<16}{tr:>8}{va:>8}{warn}')
-    for tag, n in skipped.items():
-        print(f'[{tag}] bỏ {n} ảnh có nhãn trong skip_images_with (VD cầu thang không rõ lên / xuống)')
+    for tag in skipped.keys() | merged.keys():
+        print(f'[{tag}] nhãn chung chung (VD "stairs"): bỏ {merged[tag]} box trùng box lên / xuống, '
+              f'bỏ {skipped[tag]} ảnh có box không rõ hướng')
     for tag, cnt in unmapped.items():
         print(f'[{tag}] bỏ các lớp không có trong classes.yaml: {dict(cnt.most_common(10))}')
     print(f'\n→ {out / "data.yaml"}')
