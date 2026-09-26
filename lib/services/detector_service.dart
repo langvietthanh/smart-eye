@@ -24,9 +24,12 @@ class DetectorService {
   static const String _defaultModelPath = 'assets/models/yolov8n_int8.tflite';
   static const String _labelPath = 'assets/labels/coco.txt';
 
-  // Ngưỡng lọc — 0.25 là mặc định Ultralytics. Đo trên COCO128 (xem README):
-  // 0.15 → precision 0.71, 149 box sai; 0.25 → precision 0.83, 64 box sai, recall vật lớn gần như giữ nguyên.
-  static const double confidenceThreshold = 0.25;
+  // Ngưỡng lọc, theo model:
+  // - YOLOv8n COCO int8: điểm bị "chặn trần" ~0.5 → 0.25 (COCO128: precision 0.83, 64 box sai).
+  // - Model train riêng FP32 (có metadata): 0.35. Đo trên 1100 ảnh val (COCO val2017 + BPID + cầu thang), model v4:
+  //   0.25 → precision 0.71, 857 box sai; 0.35 → precision 0.78, 513 box sai, recall vật lớn 0.73 → 0.70.
+  static const double defaultModelConfidence = 0.25;
+  static const double customModelConfidence = 0.35;
   static const double iouThreshold = 0.45;
 
   DetectorWorker? _worker;
@@ -58,7 +61,7 @@ class DetectorService {
     _worker = await DetectorWorker.start(
       modelBytes: bytes,
       classIds: _classIds,
-      confThreshold: confidenceThreshold,
+      confThreshold: meta.names != null ? customModelConfidence : defaultModelConfidence,
       iouThreshold: iouThreshold,
       preferredBackend: preferredBackend,
     );
@@ -68,7 +71,8 @@ class DetectorService {
     debugPrint('Model: $modelPath (${meta.description ?? '?'}) · nhãn từ ${meta.names != null ? 'metadata' : 'coco.txt'}');
     debugPrint('Lớp: ${_labels.length} (xét ${_classIds.length}) · input ${info.inputSize} '
         '${info.channelsFirst ? 'NCHW' : 'NHWC'} · output ${info.outputShape}');
-    debugPrint('Backend: ${info.backend} · benchmark ms: ${info.benchmark}');
+    debugPrint('Backend: ${info.backend} · benchmark ms: ${info.benchmark} · '
+        'ngưỡng ${meta.names != null ? customModelConfidence : defaultModelConfidence}');
     info.rejected.forEach((backend, reason) => debugPrint('Không dùng $backend: $reason'));
   }
 
