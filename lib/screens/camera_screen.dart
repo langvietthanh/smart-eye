@@ -17,6 +17,9 @@ import '../services/history_service.dart';
 import '../services/location_service.dart';
 import '../services/object_tracker.dart';
 import '../services/speech_manager.dart';
+import '../services/detection/detector_worker.dart';
+import '../services/detection/frame_data.dart';
+import '../services/detection/scan_scheduler.dart';
 import '../utils/image_utils.dart';
 import 'history_screen.dart';
 
@@ -35,7 +38,24 @@ class _CameraScreenState extends State<CameraScreen> with WidgetsBindingObserver
   static const Duration _calmAfterAlert = Duration(seconds: 10);
 
   CameraController? _controller;
-  bool _isDetecting = false;
+  final ScanScheduler _scheduler = ScanScheduler();
+
+  /// Frame mốc khi đang ở chế độ tiết kiệm — so với từng frame mới để phát hiện chuyển động
+  Uint8List? _idleSignature;
+
+  /// Thời điểm các lần quét trong 3 giây gần nhất — tính số lần quét/giây cho dòng chẩn đoán
+  final List<DateTime> _scanStats = [];
+
+  /// 10 lần quét gần nhất — dòng chẩn đoán hiển thị số TRUNG BÌNH để không nhảy liên tục
+  final List<DetectionBatch> _recentBatches = [];
+
+  /// Dòng chẩn đoán đã tính sẵn — chỉ làm mới 2 lần/giây cho dễ đọc
+  String _diagText = '';
+  DateTime _diagUpdatedAt = DateTime.fromMillisecondsSinceEpoch(0);
+
+  /// Cách chạy AI người dùng chọn ở nút debug: auto / cpu / gpu (iOS: metal)
+  String _backendChoice = 'auto';
+  bool _switchingBackend = false;
 
   // Trạng thái loading
   bool _modelLoaded = false;
@@ -181,13 +201,18 @@ class _CameraScreenState extends State<CameraScreen> with WidgetsBindingObserver
   void didChangeAppLifecycleState(AppLifecycleState state) {
     final controller = _controller;
     if (state == AppLifecycleState.paused) _history.flush();
-    if (controller == null || !controller.value.isInitialized) return;
 
-    // Camera phải được giải phóng khi app rời màn hình, mở lại khi quay về
-    if (state == AppLifecycleState.inactive) {
-      _controller = null;
-      controller.dispose();
-    } else if (state == AppLifecycleState.resumed) {
+    // Camera phải được giải phóng khi app rời màn hình, mở lại khi quay về.
+    // (Lỗi cũ: kiểm tra `_controller == null` trước → khi quay về luôn thoát sớm, camera không bao giờ mở lại
+    // sau khi kéo thanh thông báo / hiện hộp thoại xin quyền.)
+    if (state == AppLifecycleState.inactive || state == AppLifecycleState.paused) {
+      if (controller != null && controller.value.isInitialized) {
+        _controller = null;
+        controller.dispose();
+      }
+    } else if (state == AppLifecycleState.resumed && _modelLoaded && controller == null && !_hasError) {
+      _scheduler.reset();
+      _tracker.reset();
       _initializeCamera();
     }
   }
@@ -196,33 +221,67 @@ class _CameraScreenState extends State<CameraScreen> with WidgetsBindingObserver
   // Pipeline
   // ---------------------------------------------------------------------------
 
+  /// Camera gửi ~30 frame/giây; bộ điều phối quyết định frame nào được quét và quét vùng nào.
+  /// Luồng UI chỉ copy frame (~1 ms), phần nặng chạy ở isolate AI.
   void _onCameraFrame(CameraImage image) {
-    if (_isDetecting || !_modelLoaded || _isMockTest || _paused) return;
-    _isDetecting = true;
+    if (!_modelLoaded || _isMockTest || _paused || _screenWidth == 0) return;
+    if (_scheduler.mode == ScanMode.idle) _watchForMotion(image);
+    if (!_scheduler.shouldScan(DateTime.now())) {
+      return;
+    }
+    _idleSignature = null;
+    _scan(image, _rotationDegrees);
+  }
 
-    // finally: lỗi ở 1 frame không được làm kẹt cờ → nếu kẹt, nhận diện + nút "Xung quanh" chết hẳn
-    try {
-      final sw = _screenWidth;
-      final sh = _screenHeight;
-      if (sw == 0 || sh == 0) return;
-
-      final results = _detector.detect(
-        image: image,
-        screenWidth: sw,
-        screenHeight: sh,
-        rotationDegrees: _rotationDegrees,
-      );
-
-      if (mounted) _runPipeline(results, image: image);
-    } catch (e, stack) {
-      debugPrint('Lỗi xử lý frame: $e\n$stack');
-    } finally {
-      _isDetecting = false;
+  /// Chế độ tiết kiệm: so độ sáng 16×16 điểm của từng frame (~0,1 ms, không copy ảnh) với frame mốc —
+  /// có chuyển động (VD bàn tay, xe lao vào khung) là quét ngay, không phải chờ hết 1 giây.
+  void _watchForMotion(CameraImage image) {
+    final frame = FrameData(
+      width: image.width,
+      height: image.height,
+      planes: [for (final p in image.planes) PlaneData(p.bytes, p.bytesPerRow, p.bytesPerPixel)],
+    );
+    final signature = ImageUtils.lumaSignature(frame, rotationDegrees: _rotationDegrees);
+    if (signature == null) return;
+    final reference = _idleSignature;
+    if (reference == null) {
+      _idleSignature = signature;
+    } else if (ImageUtils.signatureDiff(signature, reference) > ScanScheduler.stillThreshold * 1.5) {
+      _scheduler.wakeUp();
     }
   }
 
-  /// [image] chỉ hợp lệ trong lúc xử lý frame — dùng để chụp ảnh ghi nhớ (CN12)
-  void _runPipeline(List<Recognition> detections, {CameraImage? image}) {
+  Future<void> _scan(CameraImage image, int rotation) async {
+    try {
+      // detect() copy frame ngay (trước lần await đầu tiên) → an toàn dù buffer camera bị tái sử dụng
+      final batch = await _detector.detect(image, rotation: rotation);
+      if (!mounted || _paused || _isMockTest) {
+        _scheduler.onFailed();
+        return;
+      }
+      final screen = Size(_screenWidth, _screenHeight);
+      _runPipeline(_detector.toRecognitions(batch, screen), fromCamera: true);
+      final now = DateTime.now();
+      _scanStats
+        ..add(now)
+        ..removeWhere((t) => now.difference(t) > const Duration(seconds: 3));
+      _recentBatches.add(batch);
+      if (_recentBatches.length > 10) _recentBatches.removeAt(0);
+
+      _scheduler.onResult(
+        now,
+        motion: batch.motion,
+        hazard: _scene.alert != null || _scene.objects.any((o) => o.approaching),
+        relevantObjects: _scene.objects.any((o) => o.isRelevant),
+      );
+    } catch (e, stack) {
+      debugPrint('Lỗi quét: $e\n$stack');
+      _scheduler.onFailed();
+    }
+  }
+
+  /// [fromCamera]: kết quả từ camera thật (có ảnh ghi nhớ) — false khi giả lập.
+  void _runPipeline(List<Recognition> detections, {bool fromCamera = false}) {
     final now = DateTime.now();
     final frame = Size(_screenWidth, _screenHeight);
     final tracks = _tracker.update(detections, frame, now);
@@ -231,51 +290,55 @@ class _CameraScreenState extends State<CameraScreen> with WidgetsBindingObserver
 
     final alert = scene.alert;
     if (alert != null) {
-      _handleAlert(alert, image, now);
+      _handleAlert(alert, now, fromCamera: fromCamera);
     }
 
     if (_pendingDescribe) {
       _pendingDescribe = false;
       _describeFallback?.cancel();
-      _describe(image, manual: true);
+      _describe(manual: true, fromCamera: fromCamera);
     } else if (_autoDescribe &&
         now.difference(_lastDescribeAt) >= _autoDescribeEvery &&
         now.difference(_lastAlertAt) >= _calmAfterAlert &&
         !_speech.isBusy) {
-      _describe(image, manual: false);
+      _describe(manual: false, fromCamera: fromCamera);
     }
   }
 
-  void _handleAlert(HazardAlert alert, CameraImage? image, DateTime now) {
+  void _handleAlert(HazardAlert alert, DateTime now, {required bool fromCamera}) {
     _lastAlertAt = now;
     final isDanger = alert.level == AlertLevel.danger;
     final priority = isDanger ? SpeechPriority.danger : SpeechPriority.caution;
     if (!_speech.canSay(priority, subject: alert.subject)) return; // Đã báo / đang chờ đọc
 
-    // Ảnh chỉ hợp lệ trong frame hiện tại → chụp ngay, ghi lịch sử khi câu thực sự được đọc
-    final jpeg = isDanger ? _captureMemory(image) : null;
+    // Xin ảnh của frame vừa quét ngay bây giờ (trước lần quét kế tiếp), ghi lịch sử khi câu thực sự được đọc
+    final photo = isDanger && fromCamera ? _capturePhoto() : null;
     _speech.say(alert.message, priority, subject: alert.subject, onStart: () {
       if (isDanger) HapticFeedback.heavyImpact();
-      _logEvent(isDanger ? TripEventType.danger : TripEventType.caution, alert.message, jpeg: jpeg);
+      _logEvent(isDanger ? TripEventType.danger : TripEventType.caution, alert.message, photo: photo);
     });
   }
 
-  void _describe(CameraImage? image, {required bool manual}) {
+  void _describe({required bool manual, bool fromCamera = false}) {
     _lastDescribeAt = DateTime.now();
     // Người dùng chủ động hỏi thì luôn trả lời, kể cả khi đang ở chế độ yên lặng
     if (!_speech.canSay(SpeechPriority.description, force: manual)) return;
     final text = CaptionBuilder.describeScene(_scene);
-    final jpeg = _captureMemory(image);
+    final photo = fromCamera ? _capturePhoto() : null;
     _speech.say(text, SpeechPriority.description, force: manual,
-        onStart: () => _logEvent(TripEventType.description, text, jpeg: jpeg));
+        onStart: () => _logEvent(TripEventType.description, text, photo: photo));
   }
 
-  Uint8List? _captureMemory(CameraImage? image) {
-    if (image == null || !_history.canCaptureMemory()) return null;
-    return ImageUtils.cameraImageToJpeg(image, rotationDegrees: _rotationDegrees);
-  }
+  /// Ảnh ghi nhớ (CN12) của frame vừa quét — isolate AI mã hoá JPEG, không chiếm luồng UI
+  Future<Uint8List?>? _capturePhoto() => _history.canCaptureMemory() ? _detector.thumbnail() : null;
 
-  void _logEvent(TripEventType type, String text, {Uint8List? jpeg}) {
+  Future<void> _logEvent(TripEventType type, String text, {Future<Uint8List?>? photo}) async {
+    Uint8List? jpeg;
+    try {
+      jpeg = await photo;
+    } catch (_) {
+      // Không có ảnh vẫn ghi sự kiện
+    }
     _history.log(type, text, lat: _location.last?.latitude, lng: _location.last?.longitude, jpeg: jpeg);
   }
 
@@ -286,16 +349,17 @@ class _CameraScreenState extends State<CameraScreen> with WidgetsBindingObserver
   void _requestDescribe() {
     HapticFeedback.selectionClick();
     if (_isMockTest || _controller == null || _paused) {
-      _describe(null, manual: true);
+      _describe(manual: true);
       return;
     }
+    _scheduler.wakeUp(); // Quét ngay frame kế tiếp, kể cả khi đang ở chế độ tiết kiệm
     // Làm ở frame kế tiếp để có ảnh ghi nhớ; nếu 0,8 giây không có frame thì trả lời luôn
     _pendingDescribe = true;
     _describeFallback?.cancel();
-    _describeFallback = Timer(const Duration(milliseconds: 800), () {
+    _describeFallback = Timer(const Duration(milliseconds: 1500), () {
       if (!mounted || !_pendingDescribe) return;
       _pendingDescribe = false;
-      _describe(null, manual: true);
+      _describe(manual: true);
     });
   }
 
@@ -333,6 +397,7 @@ class _CameraScreenState extends State<CameraScreen> with WidgetsBindingObserver
     if (!mounted) return;
     await Navigator.push(context, MaterialPageRoute(builder: (_) => const HistoryScreen()));
     _tracker.reset();
+    _scheduler.reset();
     _paused = false;
   }
 
@@ -594,22 +659,30 @@ class _CameraScreenState extends State<CameraScreen> with WidgetsBindingObserver
                 child: Column(
                   mainAxisSize: MainAxisSize.min,
                   children: [
-                    Row(
+                    Align(
+                      alignment: Alignment.centerLeft,
+                      child: Text(
+                        _diagnostics,
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(color: Colors.white54, fontSize: 12),
+                      ),
+                    ),
+                    const SizedBox(height: 6),
+                    Wrap(
+                      spacing: 8,
+                      runSpacing: 6,
+                      alignment: WrapAlignment.end,
                       children: [
-                        // Chữ thông số co giãn trong phần còn lại → nút Test luôn đứng yên một chỗ
-                        Expanded(
-                          child: Text(
-                            _isMockTest
-                                ? 'Giả lập · ${_scene.objects.length} vật'
-                                : '${_detector.lastFrameMs}ms · ${_scene.objects.length} vật · max '
-                                    '${_detector.lastMaxLabel} ${(_detector.lastMaxScore * 100).round()}%',
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                            style: const TextStyle(color: Colors.white54, fontSize: 12),
+                        if (!kReleaseMode) ...[
+                          _smallButton(
+                            icon: Icons.memory,
+                            label: _switchingBackend ? 'AI: đang đổi...' : 'AI: ${_backendLabel(_backendChoice)}',
+                            color: Colors.indigo.withValues(alpha: 0.8),
+                            onTap: _switchingBackend ? () {} : _cycleBackend,
                           ),
-                        ),
-                        const SizedBox(width: 8),
-                        if (kDebugMode) ...[
+                        ],
+                        if (kDebugMode)
                           _smallButton(
                             icon: Icons.screen_rotation,
                             label: 'Bù xoay $_debugRotationOffset°',
@@ -620,8 +693,6 @@ class _CameraScreenState extends State<CameraScreen> with WidgetsBindingObserver
                               _scene = SceneAssessment.empty;
                             }),
                           ),
-                          const SizedBox(width: 8),
-                        ],
                         _smallButton(
                           icon: Icons.bug_report,
                           label: _isMockTest ? 'Tắt Test' : '🧪 Test UI',
@@ -700,6 +771,61 @@ class _CameraScreenState extends State<CameraScreen> with WidgetsBindingObserver
         ),
       ),
     );
+  }
+
+  /// Dòng chẩn đoán: cách chạy AI, thời gian từng bước, số lần quét/giây, chế độ, điểm cao nhất
+  /// Số liệu là TRUNG BÌNH 10 lần quét gần nhất, làm mới 2 lần/giây → đọc được, không nhấp nháy.
+  String get _diagnostics {
+    if (_isMockTest) return 'Giả lập · ${_scene.objects.length} vật';
+    if (_switchingBackend) return 'Đang đổi cách chạy AI...';
+    final now = DateTime.now();
+    if (now.difference(_diagUpdatedAt) < const Duration(milliseconds: 500) && _diagText.isNotEmpty) return _diagText;
+    _diagUpdatedAt = now;
+
+    final batches = _recentBatches;
+    if (batches.isEmpty) return _diagText = _modelLoaded ? 'Đang chờ frame...' : 'Đang nạp AI...';
+    double avg(double Function(DetectionBatch) f) => batches.map(f).reduce((a, b) => a + b) / batches.length;
+    final last = batches.last;
+    final rate = _scanStats.length / 3;
+    return _diagText = '${last.backend.toUpperCase()}${last.verifying ? ' (đối chiếu CPU)' : ''} · '
+        '${avg((b) => b.totalMs).round()}ms (ảnh ${avg((b) => b.prepMs).round()} · AI ${avg((b) => b.inferMs).round()}) · '
+        '${rate.toStringAsFixed(1)} lần/s · ${_scheduler.mode.vi}\n'
+        '${_scene.objects.length} vật'
+        ' · max ${_detector.labelOf(last.maxClassId)} ${(last.maxScore * 100).round()}%';
+  }
+
+  static String _backendLabel(String b) => switch (b) {
+        'cpu' => 'CPU',
+        'gpu' || 'metal' => 'GPU',
+        _ => 'Tự động',
+      };
+
+  /// Nút debug: Tự động → CPU → GPU → Tự động... (nạp lại model với cách chạy đã chọn)
+  Future<void> _cycleBackend() async {
+    final gpu = Platform.isIOS ? 'metal' : 'gpu';
+    final next = switch (_backendChoice) { 'auto' => 'cpu', 'cpu' => gpu, _ => 'auto' };
+    setState(() {
+      _backendChoice = next;
+      _switchingBackend = true;
+      _modelLoaded = false;
+    });
+    try {
+      await _detector.reload(preferredBackend: next);
+    } catch (e) {
+      debugPrint('Không đổi được cách chạy AI ($next): $e');
+      _speech.say('Máy không chạy được AI bằng ${_backendLabel(next)}.', SpeechPriority.description, force: true);
+      _backendChoice = 'auto';
+      await _detector.reload();
+    }
+    _recentBatches.clear();
+    _scheduler.reset();
+    _tracker.reset();
+    if (mounted) {
+      setState(() {
+        _switchingBackend = false;
+        _modelLoaded = true;
+      });
+    }
   }
 
   /// Máy chưa có giọng tiếng Việt → TTS sẽ đọc bằng giọng mặc định, khó nghe → hướng dẫn cài

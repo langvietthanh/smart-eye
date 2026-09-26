@@ -1,11 +1,13 @@
 import 'dart:typed_data';
-import 'package:camera/camera.dart';
 import 'package:image/image.dart' as img;
 
-typedef _PixelReader = ({int r, int g, int b}) Function(int x, int y);
+import '../services/detection/frame_data.dart';
 
-/// Các tiện ích xử lý ảnh: lấy mẫu trực tiếp frame camera → RGB đã xoay → tensor float32 / JPEG.
-/// Hỗ trợ 3 định dạng frame:
+/// Nhận 1 mẫu RGB đã lấy từ frame — [index] là vị trí mẫu theo thứ tự hàng rồi cột
+typedef _SampleSink = void Function(int index, int r, int g, int b);
+
+/// Các tiện ích xử lý ảnh: lấy mẫu trực tiếp frame camera → RGB đã xoay →
+/// tensor float32 / JPEG / chữ ký độ sáng. Hỗ trợ 3 định dạng frame:
 /// - YUV_420_888 3 lớp (Android)
 /// - BGRA8888 1 lớp (iOS — app xin định dạng này trên iOS)
 /// - NV12 2 lớp: Y + CbCr xen kẽ (iOS khi xin yuv420 — dự phòng)
@@ -27,81 +29,67 @@ class ImageUtils {
         : (sensorOrientation - deviceDegrees + 360) % 360;
   }
 
-  /// Chuyển CameraImage thành tensor float32 [0..1] kích thước [size]×[size].
+  /// Kích thước (rộng, cao) của frame sau khi xoay
+  static ({int width, int height}) rotatedSize(int width, int height, int rotationDegrees) =>
+      rotationDegrees == 90 || rotationDegrees == 270
+          ? (width: height, height: width)
+          : (width: width, height: height);
+
+  /// Chuyển frame thành tensor float32 [0..1] kích thước [size]×[size] (toàn bộ ảnh đã xoay).
   /// Layout theo model: [channelsFirst] = NCHW `[1, 3, S, S]`, ngược lại NHWC `[1, S, S, 3]`.
-  /// [rotationDegrees]: góc xoay ảnh (0, 90, 180, 270) để ảnh đứng thẳng như người dùng nhìn.
-  static Float32List? cameraImageToFloat32(
-    CameraImage image, {
+  static Float32List? toInputTensor(
+    FrameData frame, {
     required int size,
     required bool channelsFirst,
-    int rotationDegrees = 90,
+    int rotationDegrees = 0,
   }) {
-    try {
-      final read = _readerFor(image);
-      if (read == null) return null;
-      final int srcW = image.width;
-      final int srcH = image.height;
-      final bool swap = rotationDegrees == 90 || rotationDegrees == 270;
-      final int rotW = swap ? srcH : srcW;
-      final int rotH = swap ? srcW : srcH;
-
-      final int plane = size * size;
-      final Float32List out = Float32List(3 * plane);
-      for (int y = 0; y < size; y++) {
-        final int ry = (y * rotH ~/ size).clamp(0, rotH - 1);
-        for (int x = 0; x < size; x++) {
-          final int rx = (x * rotW ~/ size).clamp(0, rotW - 1);
-          final src = sourceCoord(rx, ry, srcW, srcH, rotationDegrees);
-          final rgb = read(src.x, src.y);
-          final int p = y * size + x;
-          if (channelsFirst) {
-            out[p] = rgb.r / 255.0;
-            out[plane + p] = rgb.g / 255.0;
-            out[2 * plane + p] = rgb.b / 255.0;
-          } else {
-            out[p * 3] = rgb.r / 255.0;
-            out[p * 3 + 1] = rgb.g / 255.0;
-            out[p * 3 + 2] = rgb.b / 255.0;
+    final plane = size * size;
+    final out = Float32List(3 * plane);
+    const k = 1 / 255.0;
+    final ok = _sample(frame, rotationDegrees, size, size, channelsFirst
+        ? (i, r, g, b) {
+            out[i] = r * k;
+            out[plane + i] = g * k;
+            out[2 * plane + i] = b * k;
           }
-        }
-      }
-      return out;
-    } catch (e) {
-      return null;
-    }
+        : (i, r, g, b) {
+            out[i * 3] = r * k;
+            out[i * 3 + 1] = g * k;
+            out[i * 3 + 2] = b * k;
+          });
+    return ok ? out : null;
   }
 
-  /// CN12 — Tạo ảnh thumbnail JPEG nhỏ (cạnh dài [maxSide] px) từ frame camera,
-  /// đã xoay đúng chiều. Lấy mẫu trực tiếp từ frame nên rất nhẹ.
-  static Uint8List? cameraImageToJpeg(
-    CameraImage image, {
-    int rotationDegrees = 90,
-    int maxSide = 320,
-  }) {
-    try {
-      final read = _readerFor(image);
-      if (read == null) return null;
-      final int srcW = image.width;
-      final int srcH = image.height;
-      final bool swap = rotationDegrees == 90 || rotationDegrees == 270;
-      final int rotW = swap ? srcH : srcW;
-      final int rotH = swap ? srcW : srcH;
-      final double scale = maxSide / (rotW > rotH ? rotW : rotH);
-      final int outW = (rotW * scale).round();
-      final int outH = (rotH * scale).round();
+  /// "Chữ ký" độ sáng [grid]×[grid] của toàn khung — so 2 chữ ký để biết cảnh có thay đổi không
+  static Uint8List? lumaSignature(FrameData frame, {int rotationDegrees = 0, int grid = 16}) {
+    final sig = Uint8List(grid * grid);
+    final ok = _sample(frame, rotationDegrees, grid, grid,
+        (i, r, g, b) => sig[i] = (r * 77 + g * 150 + b * 29) >> 8);
+    return ok ? sig : null;
+  }
 
+  /// Mức thay đổi giữa 2 chữ ký độ sáng: 0 = giống hệt, 1 = khác hoàn toàn
+  static double signatureDiff(Uint8List a, Uint8List b) {
+    if (a.length != b.length || a.isEmpty) return 1;
+    var sum = 0;
+    for (var i = 0; i < a.length; i++) {
+      sum += (a[i] - b[i]).abs();
+    }
+    return sum / (a.length * 255);
+  }
+
+  /// CN12 — Tạo ảnh thumbnail JPEG nhỏ (cạnh dài [maxSide] px), đã xoay đúng chiều.
+  static Uint8List? toJpeg(FrameData frame, {int rotationDegrees = 0, int maxSide = 320}) {
+    try {
+      final rot = rotatedSize(frame.width, frame.height, rotationDegrees);
+      final scale = maxSide / (rot.width > rot.height ? rot.width : rot.height);
+      final outW = (rot.width * scale).round();
+      final outH = (rot.height * scale).round();
       final thumb = img.Image(width: outW, height: outH);
-      for (int y = 0; y < outH; y++) {
-        final int ry = (y / scale).floor().clamp(0, rotH - 1);
-        for (int x = 0; x < outW; x++) {
-          final int rx = (x / scale).floor().clamp(0, rotW - 1);
-          final src = sourceCoord(rx, ry, srcW, srcH, rotationDegrees);
-          final rgb = read(src.x, src.y);
-          thumb.setPixelRgb(x, y, rgb.r, rgb.g, rgb.b);
-        }
-      }
-      return img.encodeJpg(thumb, quality: 70);
-    } catch (e) {
+      final ok = _sample(frame, rotationDegrees, outW, outH,
+          (i, r, g, b) => thumb.setPixelRgb(i % outW, i ~/ outW, r, g, b));
+      return ok ? img.encodeJpg(thumb, quality: 70) : null;
+    } catch (_) {
       return null;
     }
   }
@@ -117,58 +105,84 @@ class ImageUtils {
   }
 
   // ---------------------------------------------------------------------------
-  // Private helpers
+  // Lõi lấy mẫu — không cấp phát bộ nhớ theo từng pixel
   // ---------------------------------------------------------------------------
 
-  /// Chọn cách đọc 1 pixel RGB theo định dạng frame (nhận biết qua số lớp — plane)
-  static _PixelReader? _readerFor(CameraImage image) {
-    final planes = image.planes;
+  /// Lấy mẫu lưới [outW]×[outH] (láng giềng gần nhất) trên toàn bộ ảnh đã xoay,
+  /// đổi sang RGB và đẩy vào [sink]. Trả về false nếu định dạng frame không hỗ trợ.
+  static bool _sample(
+    FrameData f,
+    int rotation,
+    int outW,
+    int outH,
+    _SampleSink sink,
+  ) {
+    final planes = f.planes;
+    if (planes.isEmpty) return false;
+    final format = switch (planes.length) { 1 => 0, 2 => 1, _ => 2 }; // 0 BGRA, 1 NV12, 2 YUV 3 lớp
+    final srcW = f.width;
+    final srcH = f.height;
+    final rot = rotatedSize(srcW, srcH, rotation);
 
-    if (planes.length == 1) {
-      // BGRA8888: 4 byte/pixel theo thứ tự B, G, R, A; mỗi hàng có thể có byte đệm
-      final bytes = planes[0].bytes;
-      final int row = planes[0].bytesPerRow;
-      return (x, y) {
-        final int i = y * row + x * 4;
-        return (r: bytes[i + 2], g: bytes[i + 1], b: bytes[i]);
-      };
+    final p0 = planes[0].bytes;
+    final row0 = planes[0].bytesPerRow;
+    final p1 = format > 0 ? planes[1].bytes : p0;
+    final row1 = format > 0 ? planes[1].bytesPerRow : 0;
+    final p2 = format == 2 ? planes[2].bytes : p0;
+    final px1 = format == 2 ? (planes[1].bytesPerPixel ?? 1) : 2;
+
+    // Toạ độ trên ảnh đã xoay cho từng cột / hàng đầu ra — tính 1 lần
+    final colRx = Int32List(outW);
+    for (var x = 0; x < outW; x++) {
+      colRx[x] = ((x + 0.5) / outW * rot.width).floor().clamp(0, rot.width - 1);
     }
 
-    if (planes.length == 2) {
-      // NV12: lớp Y + lớp CbCr xen kẽ (U, V, U, V...) ở nửa độ phân giải
-      final yBytes = planes[0].bytes;
-      final int yRow = planes[0].bytesPerRow;
-      final uvBytes = planes[1].bytes;
-      final int uvRow = planes[1].bytesPerRow;
-      return (x, y) {
-        final int uv = (y >> 1) * uvRow + (x >> 1) * 2;
-        return _yuvToRgb(yBytes[y * yRow + x], uvBytes[uv], uvBytes[uv + 1]);
-      };
-    }
+    var index = 0;
+    for (var y = 0; y < outH; y++) {
+      final ry = ((y + 0.5) / outH * rot.height).floor().clamp(0, rot.height - 1);
+      for (var x = 0; x < outW; x++) {
+        final rx = colRx[x];
+        int sx, sy;
+        switch (rotation) {
+          case 90:
+            sx = ry;
+            sy = srcH - 1 - rx;
+          case 180:
+            sx = srcW - 1 - rx;
+            sy = srcH - 1 - ry;
+          case 270:
+            sx = srcW - 1 - ry;
+            sy = rx;
+          default:
+            sx = rx;
+            sy = ry;
+        }
 
-    if (planes.length >= 3) {
-      // YUV_420_888 (Android): U và V ở 2 lớp riêng, khoảng cách pixel theo bytesPerPixel
-      final yBytes = planes[0].bytes;
-      final int yRow = planes[0].bytesPerRow;
-      final uBytes = planes[1].bytes;
-      final vBytes = planes[2].bytes;
-      final int uvRow = planes[1].bytesPerRow;
-      final int uvPixel = planes[1].bytesPerPixel ?? 1;
-      return (x, y) {
-        final int uv = (y >> 1) * uvRow + (x >> 1) * uvPixel;
-        return _yuvToRgb(yBytes[y * yRow + x], uBytes[uv], vBytes[uv]);
-      };
+        int r, g, b;
+        if (format == 0) {
+          final i = sy * row0 + sx * 4; // B, G, R, A
+          b = p0[i];
+          g = p0[i + 1];
+          r = p0[i + 2];
+        } else {
+          final yv = p0[sy * row0 + sx];
+          int u, v;
+          if (format == 1) {
+            final k = (sy >> 1) * row1 + (sx >> 1) * 2; // U, V xen kẽ
+            u = p1[k] - 128;
+            v = p1[k + 1] - 128;
+          } else {
+            final k = (sy >> 1) * row1 + (sx >> 1) * px1;
+            u = p1[k] - 128;
+            v = p2[k] - 128;
+          }
+          r = (yv + 1.370705 * v).round().clamp(0, 255);
+          g = (yv - 0.337633 * u - 0.698001 * v).round().clamp(0, 255);
+          b = (yv + 1.732446 * u).round().clamp(0, 255);
+        }
+        sink(index++, r, g, b);
+      }
     }
-    return null;
-  }
-
-  static ({int r, int g, int b}) _yuvToRgb(int yValue, int u, int v) {
-    final int uValue = u - 128;
-    final int vValue = v - 128;
-    return (
-      r: (yValue + 1.370705 * vValue).round().clamp(0, 255),
-      g: (yValue - 0.337633 * uValue - 0.698001 * vValue).round().clamp(0, 255),
-      b: (yValue + 1.732446 * uValue).round().clamp(0, 255),
-    );
+    return true;
   }
 }

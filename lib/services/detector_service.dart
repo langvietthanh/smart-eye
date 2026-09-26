@@ -1,295 +1,148 @@
-import 'dart:math';
-import 'dart:typed_data';
+
 import 'package:camera/camera.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
-import 'package:tflite_flutter/tflite_flutter.dart';
-import '../models/Recognition.dart';
-import '../utils/image_utils.dart';
-import '../utils/label_catalog.dart';
 
-/// Dịch vụ nhận diện vật thể dùng YOLOv8 TFLite.
-/// Kích thước input, layout (NCHW/NHWC) và kiểu dữ liệu được đọc từ chính model,
-/// nên đổi model (320/640, float/int8) không cần sửa code.
+import '../models/Recognition.dart';
+import '../models/scene_info.dart';
+import '../utils/label_catalog.dart';
+import 'detection/detector_worker.dart';
+import 'detection/frame_data.dart';
+import 'detection/model_metadata.dart';
+
+/// F1 — Nhận diện vật thể YOLO (TFLite) chạy ở isolate riêng.
+///
+/// - Tên lớp đọc từ metadata nhúng trong model (fallback `coco.txt`) → thay model có lớp mới
+///   (cầu thang, cột điện...) không cần sửa code.
+/// - Chỉ xét các lớp liên quan tới đi lại (category khác "other").
+/// - Tự chọn CPU / GPU (Android) hoặc CPU / Metal / CoreML (iOS) theo tốc độ đo lúc khởi động.
 class DetectorService {
-  static const String _modelPath = 'assets/models/yolov8n_int8.tflite';
+  /// Model train riêng (có lớp cầu thang, cột điện...) — chỉ cần chép file vào đây là app tự dùng.
+  static const String _customModelPath = 'assets/models/smart_eye.tflite';
+
+  /// Model COCO mặc định (dùng khi chưa có model train riêng)
+  static const String _defaultModelPath = 'assets/models/yolov8n_int8.tflite';
   static const String _labelPath = 'assets/labels/coco.txt';
 
-  // Ngưỡng lọc — 0.25 là mặc định Ultralytics. Đo trên COCO128 (xem README):
-  // 0.15 → precision 0.71, 149 box sai; 0.25 → precision 0.83, 64 box sai, recall vật lớn gần như giữ nguyên.
-  static const double _confidenceThreshold = 0.25;
-  static const double _iouThreshold = 0.45;
+  // Ngưỡng lọc, theo model:
+  // - YOLOv8n COCO int8: điểm bị "chặn trần" ~0.5 → 0.25 (COCO128: precision 0.83, 64 box sai).
+  // - Model train riêng FP32 (có metadata): 0.35. Đo trên 1100 ảnh val (COCO val2017 + BPID + cầu thang), model v4:
+  //   0.25 → precision 0.71, 857 box sai; 0.35 → precision 0.78, 513 box sai, recall vật lớn 0.73 → 0.70.
+  static const double defaultModelConfidence = 0.25;
+  static const double customModelConfidence = 0.35;
+  static const double iouThreshold = 0.45;
 
-  Interpreter? _interpreter;
+  DetectorWorker? _worker;
   List<String> _labels = [];
-  bool _isLoaded = false;
-  int _frameCount = 0;
+  List<int> _classIds = [];
 
-  // Thông tin model đọc lúc load
-  int _inputSize = 0;
-  bool _channelsFirst = false;
-  TensorType _inputType = TensorType.float32;
-  double _inputScale = 0;
-  int _inputZeroPoint = 0;
+  bool get isLoaded => _worker != null;
+  List<String> get labels => _labels;
 
-  bool get isLoaded => _isLoaded;
+  /// Số lớp model có / số lớp đang xét
+  int get modelClassCount => _labels.length;
+  int get activeClassCount => _classIds.length;
 
-  // Chẩn đoán hiển thị trên màn hình
-  int lastFrameMs = 0;          // Thời gian xử lý 1 frame (tiền xử lý + model + parse)
-  double lastMaxScore = 0;      // Điểm cao nhất model thấy được (kể cả dưới ngưỡng)
-  String lastMaxLabel = '';
+  WorkerInfo? get info => _worker?.info;
 
-  // ---------------------------------------------------------------------------
-  // Khởi tạo
-  // ---------------------------------------------------------------------------
+  /// Kết quả lần quét gần nhất — cho dòng chẩn đoán trên màn hình
+  DetectionBatch? lastBatch;
+  int _scanCount = 0;
 
-  /// Load model TFLite và labels vào bộ nhớ.
-  /// Gọi 1 lần duy nhất khi app khởi động.
-  Future<void> loadModel() async {
-    try {
-      final options = InterpreterOptions()..threads = 2;
-      _interpreter = await Interpreter.fromAsset(_modelPath, options: options);
+  Future<void> loadModel({String preferredBackend = 'auto'}) async {
+    final bytes = await _loadModelBytes();
+    final meta = ModelMetadata.parse(bytes);
+    _labels = meta.names ?? await _loadLabelFile();
+    _classIds = [
+      for (var i = 0; i < _labels.length; i++)
+        if (categoryOf(_labels[i]) != ObjectCategory.other) i,
+    ];
 
-      final labelsData = await rootBundle.loadString(_labelPath);
-      _labels = labelsData
-          .split('\n')
-          .map((e) => e.trim())
-          .where((e) => e.isNotEmpty)
-          .toList();
+    _worker = await DetectorWorker.start(
+      modelBytes: bytes,
+      classIds: _classIds,
+      confThreshold: meta.names != null ? customModelConfidence : defaultModelConfidence,
+      iouThreshold: iouThreshold,
+      preferredBackend: preferredBackend,
+    );
 
-      final inputTensor = _interpreter!.getInputTensor(0);
-      final outputTensor = _interpreter!.getOutputTensor(0);
-      final shape = inputTensor.shape; // [1, 3, S, S] (NCHW) hoặc [1, S, S, 3] (NHWC)
-      _channelsFirst = shape[1] == 3;
-      _inputSize = _channelsFirst ? shape[2] : shape[1];
-      _inputType = inputTensor.type;
-      _inputScale = inputTensor.params.scale;
-      _inputZeroPoint = inputTensor.params.zeroPoint;
-
-      final numClasses = min(outputTensor.shape[1], outputTensor.shape[2]) - 4;
-      if (numClasses != _labels.length) {
-        debugPrint('⚠️ Model có $numClasses lớp nhưng file nhãn có ${_labels.length} dòng — nhãn sẽ bị lệch!');
-      }
-
-      _isLoaded = true;
-      debugPrint('=== SMART EYE TFLITE DIAGNOSTICS ===');
-      debugPrint('Input Tensor: shape=$shape (${_channelsFirst ? 'NCHW' : 'NHWC'}), type=${inputTensor.type}, '
-          'scale=$_inputScale, zeroPoint=$_inputZeroPoint');
-      debugPrint('Output Tensor: shape=${outputTensor.shape}, type=${outputTensor.type}, '
-          'scale=${outputTensor.params.scale}, zeroPoint=${outputTensor.params.zeroPoint}');
-    } catch (e) {
-      _isLoaded = false;
-      rethrow;
-    }
+    final info = _worker!.info;
+    debugPrint('=== SMART EYE DETECTOR ===');
+    debugPrint('Model: $modelPath (${meta.description ?? '?'}) · nhãn từ ${meta.names != null ? 'metadata' : 'coco.txt'}');
+    debugPrint('Lớp: ${_labels.length} (xét ${_classIds.length}) · input ${info.inputSize} '
+        '${info.channelsFirst ? 'NCHW' : 'NHWC'} · output ${info.outputShape}');
+    debugPrint('Backend: ${info.backend} · benchmark ms: ${info.benchmark} · '
+        'ngưỡng ${meta.names != null ? customModelConfidence : defaultModelConfidence}');
+    info.rejected.forEach((backend, reason) => debugPrint('Không dùng $backend: $reason'));
   }
 
-  // ---------------------------------------------------------------------------
-  // Inference
-  // ---------------------------------------------------------------------------
+  /// Đường dẫn model đang dùng
+  String modelPath = _defaultModelPath;
 
-  List<Recognition> detect({
-    required CameraImage image,
-    required double screenWidth,
-    required double screenHeight,
-    int rotationDegrees = 90,
-  }) {
-    if (!_isLoaded || _interpreter == null) return [];
-
-    final watch = Stopwatch()..start();
-    try {
-      final pixels = ImageUtils.cameraImageToFloat32(
-        image,
-        size: _inputSize,
-        channelsFirst: _channelsFirst,
-        rotationDegrees: rotationDegrees,
-      );
-      if (pixels == null) return [];
-
-      _interpreter!.runInference([_toInputBytes(pixels)]);
-      _frameCount++;
-
-      final outputTensor = _interpreter!.getOutputTensor(0);
-      final results = _parseOutput(
-        outputTensor,
-        screenWidth: screenWidth,
-        screenHeight: screenHeight,
-      );
-      lastFrameMs = watch.elapsedMilliseconds;
-      return results;
-    } catch (e, stack) {
-      // Không để 1 frame lỗi làm dừng cả luồng nhận diện
-      debugPrint('Lỗi nhận diện: $e\n$stack');
-      return [];
-    }
-  }
-
-  /// Đóng gói tensor float [0..1] thành bytes đúng kiểu input của model (float32 / int8 / uint8)
-  Uint8List _toInputBytes(Float32List pixels) {
-    if (_inputType == TensorType.float32) return pixels.buffer.asUint8List();
-
-    final double scale = _inputScale == 0 ? (1.0 / 255.0) : _inputScale;
-    if (_inputType == TensorType.int8) {
-      final q = Int8List(pixels.length);
-      for (int i = 0; i < pixels.length; i++) {
-        q[i] = ((pixels[i] / scale) + _inputZeroPoint).round().clamp(-128, 127);
-      }
-      return q.buffer.asUint8List();
-    }
-    final q = Uint8List(pixels.length);
-    for (int i = 0; i < pixels.length; i++) {
-      q[i] = ((pixels[i] / scale) + _inputZeroPoint).round().clamp(0, 255);
-    }
-    return q;
-  }
-
-  // ---------------------------------------------------------------------------
-  // Parse & NMS
-  // ---------------------------------------------------------------------------
-
-  List<Recognition> _parseOutput(
-    Tensor output, {
-    required double screenWidth,
-    required double screenHeight,
-  }) {
-    // YOLOv8: [1, 4 + số lớp, số anchor] (VD [1, 84, 2100] với input 320)
-    final shape = output.shape;
-    final bool transposed = shape[1] > shape[2]; // một số bản export ra [1, anchor, 4 + lớp]
-    final int channels = transposed ? shape[2] : shape[1];
-    final int numAnchors = transposed ? shape[1] : shape[2];
-    final int numClasses = min(channels - 4, _labels.length);
-
-    final bytes = ByteData.sublistView(output.data);
-    final type = output.type;
-    final double outScale = output.params.scale;
-    final int outZero = output.params.zeroPoint;
-
-    double value(int c, int i) {
-      final int idx = transposed ? i * channels + c : c * numAnchors + i;
-      switch (type) {
-        case TensorType.int8:
-          return (bytes.getInt8(idx) - outZero) * outScale;
-        case TensorType.uint8:
-          return (bytes.getUint8(idx) - outZero) * outScale;
-        default:
-          return bytes.getFloat32(idx * 4, Endian.little);
+  Future<Uint8List> _loadModelBytes() async {
+    for (final path in [_customModelPath, _defaultModelPath]) {
+      try {
+        final data = await rootBundle.load(path);
+        modelPath = path;
+        return data.buffer.asUint8List(data.offsetInBytes, data.lengthInBytes);
+      } catch (_) {
+        // Chưa có model train riêng → thử model mặc định
       }
     }
-
-    final List<Recognition> candidates = [];
-    double maxOverallScore = 0.0;
-    int maxOverallClass = -1;
-
-    for (int i = 0; i < numAnchors; i++) {
-      double maxScore = 0.0;
-      int maxClassIdx = -1;
-      for (int c = 0; c < numClasses; c++) {
-        final double score = value(4 + c, i);
-        if (score > maxScore) {
-          maxScore = score;
-          maxClassIdx = c;
-        }
-      }
-
-      if (maxScore > maxOverallScore) {
-        maxOverallScore = maxScore;
-        maxOverallClass = maxClassIdx;
-      }
-
-      if (maxScore < _confidenceThreshold || maxClassIdx < 0) continue;
-
-      final double cx = value(0, i);
-      final double cy = value(1, i);
-      final double bw = value(2, i);
-      final double bh = value(3, i);
-
-      // Tự động phát hiện tọa độ là chuẩn hóa [0..1] hay pixel [0..inputSize]
-      final bool isNormalized = (cx <= 1.5 && bw <= 1.5);
-      final double scaleX = isNormalized ? screenWidth : (screenWidth / _inputSize);
-      final double scaleY = isNormalized ? screenHeight : (screenHeight / _inputSize);
-
-      final double left = ((cx - bw / 2) * scaleX).clamp(0, screenWidth);
-      final double top = ((cy - bh / 2) * scaleY).clamp(0, screenHeight);
-      final double right = ((cx + bw / 2) * scaleX).clamp(0, screenWidth);
-      final double bottom = ((cy + bh / 2) * scaleY).clamp(0, screenHeight);
-
-      if (right <= left || bottom <= top) continue;
-
-      final labelEn = _labels[maxClassIdx];
-      candidates.add(Recognition(
-        maxClassIdx,
-        labelVi[labelEn] ?? labelEn,
-        maxScore,
-        Rect.fromLTRB(left, top, right, bottom),
-        labelEn: labelEn,
-      ));
-    }
-
-    lastMaxScore = maxOverallScore;
-    lastMaxLabel = maxOverallClass >= 0 ? (labelVi[_labels[maxOverallClass]] ?? _labels[maxOverallClass]) : '';
-    if (_frameCount % 10 == 0) {
-      final maxLabel = maxOverallClass >= 0 ? _labels[maxOverallClass] : 'none';
-      debugPrint('[Frame $_frameCount] ${lastFrameMs}ms, Max score: ${(maxOverallScore * 100).toStringAsFixed(1)}% ($maxLabel), Candidates: ${candidates.length}');
-    }
-
-    // Non-Maximum Suppression
-    return _applyNMS(candidates);
+    throw StateError('Không tìm thấy model trong assets/models/');
   }
 
-  /// Non-Maximum Suppression: loại bỏ các box bị chồng lấp quá nhiều
-  List<Recognition> _applyNMS(List<Recognition> detections) {
-    if (detections.isEmpty) return [];
+  Future<List<String>> _loadLabelFile() async => (await rootBundle.loadString(_labelPath))
+      .split('\n')
+      .map((e) => e.trim())
+      .where((e) => e.isNotEmpty)
+      .toList();
 
-    // Sắp xếp theo score giảm dần
-    detections.sort((a, b) => b.score.compareTo(a.score));
-
-    final List<Recognition> result = [];
-    final List<bool> suppressed = List.filled(detections.length, false);
-
-    for (int i = 0; i < detections.length; i++) {
-      if (suppressed[i]) continue;
-      result.add(detections[i]);
-
-      // Giới hạn tối đa 10 box để không quá rối UI
-      if (result.length >= 10) break;
-
-      for (int j = i + 1; j < detections.length; j++) {
-        if (suppressed[j]) continue;
-        // Chỉ NMS trong cùng class
-        if (detections[i].id != detections[j].id) continue;
-
-        final iou = _computeIoU(detections[i].location, detections[j].location);
-        if (iou > _iouThreshold) {
-          suppressed[j] = true;
-        }
-      }
+  /// Quét 1 frame ở isolate AI. Phần chạy trên luồng UI chỉ là copy frame (~1 ms).
+  Future<DetectionBatch> detect(CameraImage image, {required int rotation}) async {
+    final worker = _worker;
+    if (worker == null) throw StateError('Model chưa nạp');
+    final batch = await worker.detect(FramePacket.fromCameraImage(image), rotation: rotation);
+    lastBatch = batch;
+    if (batch.error != null) debugPrint('Detector: ${batch.error}');
+    if (++_scanCount % 20 == 0) {
+      debugPrint('[Scan $_scanCount] ${batch.backend}${batch.verifying ? ' (đối chiếu CPU)' : ''} ${batch.totalMs.toStringAsFixed(1)}ms '
+          '(ảnh ${batch.prepMs.toStringAsFixed(1)} · AI ${batch.inferMs.toStringAsFixed(1)} · '
+          'đọc ${batch.parseMs.toStringAsFixed(1)}) · '
+          'motion ${batch.motion.toStringAsFixed(3)} · ${batch.detections.length} vật · '
+          'max ${labelOf(batch.maxClassId)} ${(batch.maxScore * 100).toStringAsFixed(0)}%');
     }
-    return result;
+    return batch;
   }
 
-  /// Tính IoU (Intersection over Union) giữa 2 hình chữ nhật
-  double _computeIoU(Rect a, Rect b) {
-    final double interLeft   = max(a.left, b.left);
-    final double interTop    = max(a.top, b.top);
-    final double interRight  = min(a.right, b.right);
-    final double interBottom = min(a.bottom, b.bottom);
+  /// JPEG của frame vừa quét gần nhất (ảnh ghi nhớ)
+  Future<Uint8List?> thumbnail() async => _worker?.thumbnail();
 
-    if (interRight <= interLeft || interBottom <= interTop) return 0.0;
+  /// Đổi kết quả (toạ độ chuẩn hoá) sang toạ độ màn hình + tên tiếng Việt
+  List<Recognition> toRecognitions(DetectionBatch batch, Size screen) => [
+        for (final d in batch.detections)
+          Recognition(
+            d.classId,
+            labelVi[_labels[d.classId]] ?? _labels[d.classId],
+            d.score,
+            Rect.fromLTRB(d.left * screen.width, d.top * screen.height, d.right * screen.width, d.bottom * screen.height),
+            labelEn: _labels[d.classId],
+          ),
+      ];
 
-    final double intersection = (interRight - interLeft) * (interBottom - interTop);
-    final double aArea = a.width * a.height;
-    final double bArea = b.width * b.height;
-    final double union = aArea + bArea - intersection;
+  /// Tên (tiếng Việt) của lớp — cho dòng chẩn đoán
+  String labelOf(int classId) =>
+      classId < 0 || classId >= _labels.length ? '' : (labelVi[_labels[classId]] ?? _labels[classId]);
 
-    return union <= 0 ? 0.0 : intersection / union;
+  /// Nạp lại model với cách chạy khác (nút debug "AI: Tự động / CPU / GPU")
+  Future<void> reload({String preferredBackend = 'auto'}) async {
+    dispose();
+    lastBatch = null;
+    await loadModel(preferredBackend: preferredBackend);
   }
-
-  // ---------------------------------------------------------------------------
-  // Giải phóng
-  // ---------------------------------------------------------------------------
 
   void dispose() {
-    _interpreter?.close();
-    _interpreter = null;
-    _isLoaded = false;
+    _worker?.dispose();
+    _worker = null;
   }
 }

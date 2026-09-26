@@ -7,10 +7,16 @@ import '../models/tracked_object.dart';
 /// CN5 — Tracker IoU + centroid: gán ID cho vật qua các frame.
 ///
 /// Hysteresis xuất hiện/biến mất:
-/// - Vật chỉ được "xác nhận" sau [minHits] frame liên tiếp → lọc nhận diện nhảy lung tung
+/// - Vật chỉ được "xác nhận" sau [minHits] frame liên tiếp → lọc nhận diện nhảy lung tung.
+///   Ngoại lệ AN TOÀN: vật đã to (gần) và điểm cao → xác nhận ngay từ lần quét đầu, không chờ thêm
+///   (chờ thêm 1–2 lần quét = chậm 100–200 ms, quá lâu khi vật đang ở sát người)
 /// - Vật chỉ bị xoá sau [maxMisses] frame mất liên tiếp → không báo lại khi AI chớp mất 1 frame
 class ObjectTracker {
-  static const int minHits = 3;
+  static const int minHits = 2;
+
+  /// Vật cao ≥ tỉ lệ này của khung (≈ gần) và điểm ≥ [fastConfirmScore] → xác nhận ngay
+  static const double fastConfirmHeight = 0.45;
+  static const double fastConfirmScore = 0.4;
   static const int maxMisses = 5;
   static const double _iouMatch = 0.3;
   static const double _centroidMatch = 0.15; // theo tỉ lệ đường chéo khung
@@ -75,10 +81,13 @@ class ObjectTracker {
       )..addHistory(now, det.location.height / frame.height));
     }
 
-    return _tracks.where((t) => t.hits >= minHits && t.misses <= 2).toList();
+    return _tracks.where((t) => t.misses <= 2 && _confirmed(t, frame)).toList();
   }
 
   void reset() => _tracks.clear();
+
+  static bool _confirmed(TrackedObject t, Size frame) =>
+      t.hits >= minHits || (t.score >= fastConfirmScore && t.box.height / frame.height >= fastConfirmHeight);
 }
 
 /// IoU (Intersection over Union) giữa 2 hình chữ nhật

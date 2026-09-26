@@ -62,19 +62,36 @@ const Map<String, String> labelVi = {
   'book': 'sách',
   'clock': 'đồng hồ',
   'vase': 'bình hoa',
-  // Lớp đặc thù VN — chỉ có khi dùng model fine-tune riêng
-  'manhole': 'hố ga',
+  // Lớp mới — chỉ có khi dùng model train riêng (xem training/classes.yaml)
+  'pole': 'cột',
+  'traffic sign': 'biển báo',
+  'tree': 'cây',
+  'branch': 'cành cây',
+  'railing': 'lan can',
+  'barrier': 'rào chắn',
+  'vendor cart': 'xe hàng rong',
+  'stairs': 'bậc thang', // model v1–v3 (chưa tách hướng)
+  'stairs up': 'cầu thang đi lên',
+  'stairs down': 'cầu thang đi xuống',
+  'curb': 'mép vỉa hè',
   'pothole': 'ổ gà',
-  'stairs': 'bậc thang',
+  'manhole': 'hố ga',
+  'bollard': 'cọc chắn',
+  'traffic cone': 'cọc giao thông',
   'hole': 'hố',
 };
 
-const _groundHazards = {'manhole', 'pothole', 'stairs', 'hole'};
+const _groundHazards = {'manhole', 'pothole', 'stairs', 'stairs up', 'stairs down', 'hole', 'curb'};
+
+/// Nguy hiểm mặt đất "nhẹ": gặp rất thường xuyên (mép vỉa hè) → chỉ nhắc chú ý, không hô "Dừng lại"
+const mildGroundHazards = {'curb'};
 const _vehicles = {'bicycle', 'car', 'motorbike', 'motorcycle', 'bus', 'train', 'truck'};
 const _obstacles = {
   'bench', 'chair', 'sofa', 'couch', 'pottedplant', 'potted plant', 'diningtable',
   'dining table', 'bed', 'toilet', 'tvmonitor', 'tv', 'refrigerator', 'fire hydrant',
-  'stop sign', 'traffic light', 'parking meter', 'suitcase',
+  'stop sign', 'traffic light', 'parking meter', 'suitcase', 'umbrella',
+  // Lớp mới (model train riêng)
+  'pole', 'traffic sign', 'tree', 'branch', 'railing', 'barrier', 'vendor cart', 'bollard', 'traffic cone',
 };
 const _animals = {'dog', 'cat', 'horse', 'cow', 'sheep', 'elephant', 'bear', 'zebra', 'giraffe'};
 

@@ -33,16 +33,24 @@ SceneAssessment run(ObjectTracker tracker, HazardEngine engine, List<Recognition
 
 void main() {
   group('ObjectTracker (CN5)', () {
-    test('chỉ xác nhận vật sau đủ số frame, giữ ID ổn định', () {
+    test('vật xa: xác nhận sau 2 lần quét, giữ ID ổn định', () {
       final tracker = ObjectTracker();
       final d = [rec('car', 'xe ô tô', 2, centerBox(0.3))];
       final t0 = DateTime(2026);
-      expect(tracker.update(d, frame, t0), isEmpty);
       expect(tracker.update(d, frame, t0), isEmpty);
       final confirmed = tracker.update(d, frame, t0);
       expect(confirmed, hasLength(1));
       final id = confirmed.single.id;
       expect(tracker.update(d, frame, t0).single.id, id);
+    });
+
+    test('vật gần + điểm cao: báo ngay từ lần quét đầu tiên (không chờ)', () {
+      final tracker = ObjectTracker();
+      final near = [rec('person', 'người', 0, centerBox(0.6))];
+      expect(tracker.update(near, frame, DateTime(2026)), hasLength(1));
+      // Vật gần nhưng điểm thấp (dễ là báo nhầm) → vẫn chờ lần 2
+      final weak = [Recognition(0, 'người', 0.3, centerBox(0.6, cx: 100), labelEn: 'person')];
+      expect(ObjectTracker().update(weak, frame, DateTime(2026)), isEmpty);
     });
 
     test('mất 1–2 frame không làm mất vật (hysteresis)', () {
@@ -124,6 +132,20 @@ void main() {
       final text = CaptionBuilder.describeScene(scene);
       expect(text, contains('Phía trước có 2 người, gần nhất cách khoảng 2 mét.'));
       expect(text, contains('Bên phải có xe máy, ở xa.'));
+    });
+
+    test('nói hướng đi TRƯỚC, rồi mới tới vật (tối đa 2 nhóm)', () {
+      final scene = run(ObjectTracker(), HazardEngine(), [
+        rec('chair', 'ghế', 56, centerBox(0.4)),
+        rec('person', 'người', 0, Rect.fromLTWH(10, 100, 110, 600)),
+      ]);
+      final text = CaptionBuilder.describeScene(scene);
+      expect(text, startsWith('Phía trước bị chắn, bên phải trống.'));
+    });
+
+    test('phía trước trống nhưng một bên có vật → nói rõ bên nào', () {
+      final scene = run(ObjectTracker(), HazardEngine(), [rec('person', 'người', 0, Rect.fromLTWH(10, 100, 110, 600))]);
+      expect(CaptionBuilder.describeScene(scene), startsWith('Phía trước trống, bên trái có vật cản.'));
     });
 
     test('không có gì → câu ngắn', () {

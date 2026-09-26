@@ -133,6 +133,8 @@ class HazardEngine {
       case ObjectCategory.groundHazard:
         // Hố ga / bậc thang: gậy có thể dò được nhưng rủi ro cao → báo sớm
         if (!inPath) return near ? AlertLevel.caution : AlertLevel.info;
+        // Mép vỉa hè gặp liên tục → chỉ nhắc chú ý khi đã tới gần, không hô "Dừng lại"
+        if (mildGroundHazards.contains(o.track.labelEn)) return o.distance == DistanceLevel.far ? AlertLevel.info : AlertLevel.caution;
         return o.distance == DistanceLevel.far ? AlertLevel.caution : AlertLevel.danger;
       case ObjectCategory.vehicle:
         if (o.approaching) return inPath ? AlertLevel.danger : AlertLevel.caution;
@@ -192,6 +194,7 @@ class HazardEngine {
       return switch (side) {
         Guidance.goLeft => '$head Bên trái trống.',
         Guidance.goRight => '$head Bên phải trống.',
+        Guidance.slowDown => '$head Hai bên đều có vật cản.',
         _ => head,
       };
     }
@@ -202,7 +205,7 @@ class HazardEngine {
     return switch (side) {
       Guidance.goLeft => '$head. Đi chếch sang trái.',
       Guidance.goRight => '$head. Đi chếch sang phải.',
-      Guidance.slowDown => '$head. Đi chậm lại.',
+      Guidance.slowDown => '$head. Hai bên đều có vật cản, đi chậm lại.',
       _ => '$head.',
     };
   }
