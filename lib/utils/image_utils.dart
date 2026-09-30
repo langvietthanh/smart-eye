@@ -27,13 +27,15 @@ class ImageUtils {
         : (sensorOrientation - deviceDegrees + 360) % 360;
   }
 
-  /// Chuyển CameraImage thành tensor float32 [0..1] kích thước [size]×[size].
-  /// Layout theo model: [channelsFirst] = NCHW `[1, 3, S, S]`, ngược lại NHWC `[1, S, S, 3]`.
-  /// [rotationDegrees]: góc xoay ảnh (0, 90, 180, 270) để ảnh đứng thẳng như người dùng nhìn.
-  static Float32List? cameraImageToFloat32(
+  /// Chuyển CameraImage thành tensor đầu vào (Float32List, Int8List, hoặc Uint8List).
+  /// Hàm này tối ưu hoá trực tiếp quy trình chuyển đổi, loại bỏ float division dư thừa cho model quantized (INT8/UINT8).
+  static dynamic cameraImageToModelBytes(
     CameraImage image, {
     required int size,
     required bool channelsFirst,
+    required dynamic inputType, // TensorType from tflite_flutter
+    required double scale,
+    required int zeroPoint,
     int rotationDegrees = 90,
   }) {
     try {
@@ -46,26 +48,66 @@ class ImageUtils {
       final int rotH = swap ? srcW : srcH;
 
       final int plane = size * size;
-      final Float32List out = Float32List(3 * plane);
+      final String typeString = inputType.toString();
+      final bool isFloat32 = typeString.contains('float32');
+      final bool isInt8 = typeString.contains('int8');
+      
+      final Float32List? fOut = isFloat32 ? Float32List(3 * plane) : null;
+      final Int8List? iOut = isInt8 ? Int8List(3 * plane) : null;
+      final Uint8List? uOut = (!isFloat32 && !isInt8) ? Uint8List(3 * plane) : null;
+
+      final double effectiveScale = scale == 0 ? (1.0 / 255.0) : scale;
+      final double multiplier = 1.0 / (255.0 * effectiveScale);
+
       for (int y = 0; y < size; y++) {
         final int ry = (y * rotH ~/ size).clamp(0, rotH - 1);
         for (int x = 0; x < size; x++) {
           final int rx = (x * rotW ~/ size).clamp(0, rotW - 1);
           final src = sourceCoord(rx, ry, srcW, srcH, rotationDegrees);
           final rgb = read(src.x, src.y);
+          
           final int p = y * size + x;
-          if (channelsFirst) {
-            out[p] = rgb.r / 255.0;
-            out[plane + p] = rgb.g / 255.0;
-            out[2 * plane + p] = rgb.b / 255.0;
+          
+          if (isFloat32) {
+            final double rF = rgb.r / 255.0;
+            final double gF = rgb.g / 255.0;
+            final double bF = rgb.b / 255.0;
+            if (channelsFirst) {
+              fOut![p] = rF; fOut[plane + p] = gF; fOut[2 * plane + p] = bF;
+            } else {
+              fOut![p * 3] = rF; fOut[p * 3 + 1] = gF; fOut[p * 3 + 2] = bF;
+            }
           } else {
-            out[p * 3] = rgb.r / 255.0;
-            out[p * 3 + 1] = rgb.g / 255.0;
-            out[p * 3 + 2] = rgb.b / 255.0;
+            int qR = (rgb.r * multiplier + zeroPoint).round();
+            int qG = (rgb.g * multiplier + zeroPoint).round();
+            int qB = (rgb.b * multiplier + zeroPoint).round();
+            
+            if (isInt8) {
+              qR = qR.clamp(-128, 127);
+              qG = qG.clamp(-128, 127);
+              qB = qB.clamp(-128, 127);
+              if (channelsFirst) {
+                iOut![p] = qR; iOut[plane + p] = qG; iOut[2 * plane + p] = qB;
+              } else {
+                iOut![p * 3] = qR; iOut[p * 3 + 1] = qG; iOut[p * 3 + 2] = qB;
+              }
+            } else {
+              qR = qR.clamp(0, 255);
+              qG = qG.clamp(0, 255);
+              qB = qB.clamp(0, 255);
+              if (channelsFirst) {
+                uOut![p] = qR; uOut[plane + p] = qG; uOut[2 * plane + p] = qB;
+              } else {
+                uOut![p * 3] = qR; uOut[p * 3 + 1] = qG; uOut[p * 3 + 2] = qB;
+              }
+            }
           }
         }
       }
-      return out;
+      
+      if (isFloat32) return fOut!.buffer.asUint8List();
+      if (isInt8) return iOut!.buffer.asUint8List();
+      return uOut!;
     } catch (e) {
       return null;
     }

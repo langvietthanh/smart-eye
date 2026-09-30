@@ -1,3 +1,4 @@
+import 'dart:io';
 import 'dart:math';
 import 'dart:typed_data';
 import 'package:camera/camera.dart';
@@ -47,7 +48,17 @@ class DetectorService {
   /// Gọi 1 lần duy nhất khi app khởi động.
   Future<void> loadModel() async {
     try {
-      final options = InterpreterOptions()..threads = 2;
+      final options = InterpreterOptions()..threads = 4;
+      
+      // Hardware Acceleration: Thêm delegates để tăng tốc
+      if (Platform.isAndroid) {
+        options.addDelegate(XnnpackDelegate());
+        // options.addDelegate(GpuDelegateV2()); // Bỏ comment nếu model có thể chạy mượt trên GPU
+      } else if (Platform.isIOS) {
+        options.addDelegate(XnnpackDelegate());
+        options.addDelegate(CoreMlDelegate());
+      }
+
       _interpreter = await Interpreter.fromAsset(_modelPath, options: options);
 
       final labelsData = await rootBundle.loadString(_labelPath);
@@ -97,15 +108,19 @@ class DetectorService {
 
     final watch = Stopwatch()..start();
     try {
-      final pixels = ImageUtils.cameraImageToFloat32(
+      // Dùng hàm tối ưu hoá mới: xử lý trực tiếp ra bytes của model, không dùng float
+      final inputBytes = ImageUtils.cameraImageToModelBytes(
         image,
         size: _inputSize,
         channelsFirst: _channelsFirst,
+        inputType: _inputType,
+        scale: _inputScale,
+        zeroPoint: _inputZeroPoint,
         rotationDegrees: rotationDegrees,
       );
-      if (pixels == null) return [];
+      if (inputBytes == null) return [];
 
-      _interpreter!.runInference([_toInputBytes(pixels)]);
+      _interpreter!.runInference([inputBytes]);
       _frameCount++;
 
       final outputTensor = _interpreter!.getOutputTensor(0);
@@ -121,25 +136,6 @@ class DetectorService {
       debugPrint('Lỗi nhận diện: $e\n$stack');
       return [];
     }
-  }
-
-  /// Đóng gói tensor float [0..1] thành bytes đúng kiểu input của model (float32 / int8 / uint8)
-  Uint8List _toInputBytes(Float32List pixels) {
-    if (_inputType == TensorType.float32) return pixels.buffer.asUint8List();
-
-    final double scale = _inputScale == 0 ? (1.0 / 255.0) : _inputScale;
-    if (_inputType == TensorType.int8) {
-      final q = Int8List(pixels.length);
-      for (int i = 0; i < pixels.length; i++) {
-        q[i] = ((pixels[i] / scale) + _inputZeroPoint).round().clamp(-128, 127);
-      }
-      return q.buffer.asUint8List();
-    }
-    final q = Uint8List(pixels.length);
-    for (int i = 0; i < pixels.length; i++) {
-      q[i] = ((pixels[i] / scale) + _inputZeroPoint).round().clamp(0, 255);
-    }
-    return q;
   }
 
   // ---------------------------------------------------------------------------
