@@ -60,10 +60,10 @@ class DetectorService {
       
       // Hardware Acceleration: Thêm delegates để tăng tốc
       if (Platform.isAndroid) {
-        options.addDelegate(XnnpackDelegate());
+        options.addDelegate(XNNPackDelegate());
         // options.addDelegate(GpuDelegateV2()); // Bỏ comment nếu model có thể chạy mượt trên GPU
       } else if (Platform.isIOS) {
-        options.addDelegate(XnnpackDelegate());
+        options.addDelegate(XNNPackDelegate());
         options.addDelegate(CoreMlDelegate());
       }
 
