@@ -596,43 +596,6 @@ class _CameraScreenState extends State<CameraScreen> with WidgetsBindingObserver
                   children: [
                     Row(
                       children: [
-                        // Chữ thông số co giãn trong phần còn lại → nút Test luôn đứng yên một chỗ
-                        Expanded(
-                          child: Text(
-                            _isMockTest
-                                ? 'Giả lập · ${_scene.objects.length} vật'
-                                : '${_detector.lastFrameMs}ms · ${_scene.objects.length} vật · max '
-                                    '${_detector.lastMaxLabel} ${(_detector.lastMaxScore * 100).round()}%',
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                            style: const TextStyle(color: Colors.white54, fontSize: 12),
-                          ),
-                        ),
-                        const SizedBox(width: 8),
-                        if (kDebugMode) ...[
-                          _smallButton(
-                            icon: Icons.screen_rotation,
-                            label: 'Bù xoay $_debugRotationOffset°',
-                            color: Colors.blueGrey.withValues(alpha: 0.8),
-                            onTap: () => setState(() {
-                              _debugRotationOffset = (_debugRotationOffset + 90) % 360;
-                              _tracker.reset();
-                              _scene = SceneAssessment.empty;
-                            }),
-                          ),
-                          const SizedBox(width: 8),
-                        ],
-                        _smallButton(
-                          icon: Icons.bug_report,
-                          label: _isMockTest ? 'Tắt Test' : '🧪 Test UI',
-                          color: _isMockTest ? Colors.orange : Colors.grey.withValues(alpha: 0.8),
-                          onTap: _toggleMock,
-                        ),
-                      ],
-                    ),
-                    const SizedBox(height: 10),
-                    Row(
-                      children: [
                         _bigButton(Icons.visibility, 'Xung quanh', 'Nghe xung quanh có gì', _requestDescribe),
                         const SizedBox(width: 8),
                         _bigButton(Icons.summarize, 'Tóm tắt', 'Nghe tóm tắt chuyến đi hiện tại', _speakRecap),
