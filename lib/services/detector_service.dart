@@ -21,6 +21,14 @@ class DetectorService {
   static const double _confidenceThreshold = 0.25;
   static const double _iouThreshold = 0.45;
 
+  // Các class ID liên quan đến an toàn/di chuyển của người mù
+  static const Set<int> _relevantClasses = {
+    0, 1, 2, 3, 5, 6, 7, // person, bicycle, car, motorcycle, bus, train, truck
+    9, 10, 11, 13, // traffic light, fire hydrant, stop sign, bench
+    15, 16, // cat, dog
+    56, 57, 58, 60, // chair, couch, potted plant, dining table
+  };
+
   Interpreter? _interpreter;
   List<String> _labels = [];
   bool _isLoaded = false;
@@ -192,6 +200,9 @@ class DetectorService {
       }
 
       if (maxScore < _confidenceThreshold || maxClassIdx < 0) continue;
+
+      // BỎ QUA các vật thể không ảnh hưởng đến đường đi để tránh tốn CPU xử lý toạ độ và NMS
+      if (!_relevantClasses.contains(maxClassIdx)) continue;
 
       final double cx = value(0, i);
       final double cy = value(1, i);
