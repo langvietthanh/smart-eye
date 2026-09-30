@@ -43,6 +43,9 @@ class _CameraScreenState extends State<CameraScreen> with WidgetsBindingObserver
   bool _hasError = false;
   bool _greeted = false;
 
+  DateTime _lastDetectionTime = DateTime.fromMillisecondsSinceEpoch(0);
+  static const int _minDetectionIntervalMs = 250; // Giới hạn tối đa 4 FPS
+
   final DetectorService _detector = DetectorService();
   final ObjectTracker _tracker = ObjectTracker();
   final HazardEngine _engine = HazardEngine();
@@ -198,7 +201,14 @@ class _CameraScreenState extends State<CameraScreen> with WidgetsBindingObserver
 
   void _onCameraFrame(CameraImage image) {
     if (_isDetecting || !_modelLoaded || _isMockTest || _paused) return;
+
+    final now = DateTime.now();
+    if (now.difference(_lastDetectionTime).inMilliseconds < _minDetectionIntervalMs) {
+      return;
+    }
+
     _isDetecting = true;
+    _lastDetectionTime = now;
 
     // finally: lỗi ở 1 frame không được làm kẹt cờ → nếu kẹt, nhận diện + nút "Xung quanh" chết hẳn
     try {
