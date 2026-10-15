@@ -60,34 +60,47 @@ CameraImage nv12GrayImage() {
   });
 }
 
+Float32List getFloat32(CameraImage image, int size, bool channelsFirst, int rotation) {
+  final bytes = ImageUtils.cameraImageToModelBytes(
+    image,
+    size: size,
+    channelsFirst: channelsFirst,
+    inputType: 'float32',
+    scale: 0.0,
+    zeroPoint: 0,
+    rotationDegrees: rotation,
+  ) as Uint8List;
+  return Float32List.view(bytes.buffer);
+}
+
 void main() {
   test('NCHW: 3 mặt phẳng R, G, B liên tiếp', () {
-    final out = ImageUtils.cameraImageToFloat32(grayImage(), size: 2, channelsFirst: true, rotationDegrees: 0)!;
+    final out = getFloat32(grayImage(), 2, true, 0);
     expect(out.length, 12);
     expect(toBytes(out.sublist(0, 4)), [10, 20, 30, 40]); // R
     expect(toBytes(out.sublist(8, 12)), [10, 20, 30, 40]); // B
   });
 
   test('NHWC: mỗi pixel 3 kênh liền nhau', () {
-    final out = ImageUtils.cameraImageToFloat32(grayImage(), size: 2, channelsFirst: false, rotationDegrees: 0)!;
+    final out = getFloat32(grayImage(), 2, false, 0);
     expect(toBytes(out.sublist(0, 6)), [10, 10, 10, 20, 20, 20]);
   });
 
   test('xoay 90° theo chiều kim đồng hồ (camera Android cầm dọc)', () {
-    final out = ImageUtils.cameraImageToFloat32(grayImage(), size: 2, channelsFirst: true, rotationDegrees: 90)!;
+    final out = getFloat32(grayImage(), 2, true, 90);
     // Ảnh sau khi xoay:  30 10 / 40 20
     expect(toBytes(out.sublist(0, 4)), [30, 10, 40, 20]);
   });
 
   test('BGRA (iOS): đúng thứ tự kênh, bỏ qua byte đệm cuối hàng', () {
-    final out = ImageUtils.cameraImageToFloat32(bgraImage(), size: 2, channelsFirst: true, rotationDegrees: 0)!;
+    final out = getFloat32(bgraImage(), 2, true, 0);
     expect(toBytes(out.sublist(0, 4)), [255, 0, 0, 255]); // R
     expect(toBytes(out.sublist(4, 8)), [0, 255, 0, 255]); // G
     expect(toBytes(out.sublist(8, 12)), [0, 0, 255, 255]); // B
   });
 
   test('NV12 (iOS yuv420): đọc lớp UV xen kẽ', () {
-    final out = ImageUtils.cameraImageToFloat32(nv12GrayImage(), size: 2, channelsFirst: true, rotationDegrees: 0)!;
+    final out = getFloat32(nv12GrayImage(), 2, true, 0);
     expect(toBytes(out.sublist(0, 4)), [10, 20, 30, 40]);
   });
 
@@ -103,9 +116,9 @@ void main() {
   });
 
   test('xoay 180° và 270°', () {
-    final r180 = ImageUtils.cameraImageToFloat32(grayImage(), size: 2, channelsFirst: true, rotationDegrees: 180)!;
+    final r180 = getFloat32(grayImage(), 2, true, 180);
     expect(toBytes(r180.sublist(0, 4)), [40, 30, 20, 10]);
-    final r270 = ImageUtils.cameraImageToFloat32(grayImage(), size: 2, channelsFirst: true, rotationDegrees: 270)!;
+    final r270 = getFloat32(grayImage(), 2, true, 270);
     expect(toBytes(r270.sublist(0, 4)), [20, 40, 10, 30]);
   });
 }

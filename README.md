@@ -130,9 +130,11 @@ Apple không cho build app iOS trên Windows → build trên máy macOS của **
 rồi cài từ Windows bằng **Sideloadly**.
 
 ### Bước 1: Lấy file `.ipa`
-1. Push code lên `main` hoặc nhánh `feature/**` → workflow **"iOS build (IPA chưa ký)"** tự chạy (~10–15 phút).
-   Muốn chạy tay: tab **Actions** → chọn workflow → **Run workflow**.
-2. Mở lần chạy thành công → mục **Artifacts** → tải `smart-eye-ios-unsigned` (giải nén ra `smart-eye-unsigned.ipa`).
+1. Push code lên `main` hoặc nhánh `feature/**` → workflow **"iOS build (IPA chưa ký)"** tự chạy (~10–15 phút, có thể lâu hơn nếu máy Mac của GitHub đang xếp hàng).
+   Muốn chạy tay: tab **Actions** → chọn workflow → **Run workflow**. **Không bấm Re-run** khi đang chờ — sẽ phải xếp hàng lại từ đầu.
+2. Build xong, file được đăng lên mục **Releases** của repo — **link cố định, không cần đăng nhập**:
+   - Nhánh `main`: https://github.com/langvietthanh/smart-eye/releases/download/ios-latest-main/smart-eye-unsigned.ipa
+   - Nhánh khác: thay `main` bằng tên nhánh, dấu `/` đổi thành `-` (VD `ios-latest-feature-ios-support`).
 
 ### Bước 2: Cài lên iPhone (Windows)
 1. Cài **iTunes bản tải từ trang Apple** (không dùng bản Microsoft Store) để Windows nhận iPhone.
