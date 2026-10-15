@@ -18,7 +18,13 @@ class _Request {
   final DateTime createdAt;
   final Completer<bool> result = Completer<bool>();
 
-  _Request(this.text, this.priority, this.subject, this.onStart) : createdAt = DateTime.now();
+  _Request(
+    this.text,
+    this.priority,
+    this.subject,
+    this.onStart,
+    this.createdAt,
+  );
 
   /// Cảnh báo cũ quá 2 giây thì không còn đúng với thực tế → bỏ
   bool isStale(DateTime now) =>
@@ -36,7 +42,10 @@ class _Request {
 /// - Khoảng lặng tối thiểu giữa các câu không khẩn cấp để không che âm thanh môi trường
 class SpeechManager {
   static final SpeechManager instance = SpeechManager._();
-  SpeechManager._();
+  SpeechManager._() : _tts = TTSService(), _now = DateTime.now;
+
+  @visibleForTesting
+  SpeechManager.forTesting({required this._tts, required this._now});
 
   static const Map<SpeechPriority, Duration> cooldown = {
     SpeechPriority.danger: Duration(seconds: 6),
@@ -51,12 +60,16 @@ class SpeechManager {
   /// Câu vừa đọc xong còn hiện trên màn hình thêm bao lâu
   static const Duration _showAfterEnd = Duration(seconds: 3);
 
-  final TTSService _tts = TTSService();
+  final TTSService _tts;
+  final DateTime Function() _now;
   final List<_Request> _queue = [];
-  final Map<String, ({SpeechPriority priority, DateTime time})> _lastBySubject = {};
+  final Map<String, ({SpeechPriority priority, DateTime time})> _lastBySubject =
+      {};
   _Request? _current;
   DateTime _lastEnd = DateTime.fromMillisecondsSinceEpoch(0);
   Timer? _hideTimer;
+  Timer? _quietTimer;
+  Future<void>? _stopping;
 
   /// Câu đang nói (hoặc vừa nói xong < 3 giây); null = không hiện gì
   final ValueNotifier<SpokenLine?> showing = ValueNotifier(null);
@@ -69,13 +82,24 @@ class SpeechManager {
   /// Máy có giọng đọc tiếng Việt không (kiểm tra lúc [init])
   bool get vietnameseAvailable => _tts.vietnameseAvailable;
 
-  bool get isBusy => _current != null || _queue.isNotEmpty;
+  bool get isBusy => _current != null || _queue.isNotEmpty || _stopping != null;
+
+  @visibleForTesting
+  int get cooldownEntryCount => _lastBySubject.length;
 
   /// Câu này có được nhận không (không bị tắt tiếng, không trùng, chưa có câu cùng chủ thể đang chờ)
   bool canSay(SpeechPriority priority, {String? subject, bool force = false}) {
+    final now = _now();
+    _pruneCooldowns(now);
     if (muted && !force && priority != SpeechPriority.danger) return false;
     if (subject == null) return true;
-    if (_isDuplicate(subject, priority, DateTime.now())) return false;
+    final current = _current;
+    if (current != null &&
+        current.subject == subject &&
+        current.priority.index >= priority.index) {
+      return false;
+    }
+    if (_isDuplicate(subject, priority, now)) return false;
     return !_queue.any((r) => r.subject == subject && r.priority == priority);
   }
 
@@ -83,27 +107,44 @@ class SpeechManager {
   /// [subject]: chủ thể để dedupe (VD 'track:12'); null = không dedupe.
   /// [force]: người dùng chủ động yêu cầu → nói kể cả khi đang yên lặng.
   /// [onStart]: gọi khi câu THỰC SỰ bắt đầu được đọc (VD để ghi lịch sử).
-  bool say(String text, SpeechPriority priority, {String? subject, bool force = false, VoidCallback? onStart}) {
+  bool say(
+    String text,
+    SpeechPriority priority, {
+    String? subject,
+    bool force = false,
+    VoidCallback? onStart,
+  }) {
     return _enqueue(text, priority, subject, force, onStart) != null;
   }
 
   /// Nói và chờ nói xong. Trả về true nếu câu được đọc trọn vẹn (không bị lọc/ngắt/bỏ).
-  Future<bool> sayAndWait(String text, SpeechPriority priority, {bool force = false}) {
+  Future<bool> sayAndWait(
+    String text,
+    SpeechPriority priority, {
+    bool force = false,
+  }) {
     final req = _enqueue(text, priority, null, force, null);
     return req?.result.future ?? Future.value(false);
   }
 
-  _Request? _enqueue(String text, SpeechPriority priority, String? subject, bool force, VoidCallback? onStart) {
+  _Request? _enqueue(
+    String text,
+    SpeechPriority priority,
+    String? subject,
+    bool force,
+    VoidCallback? onStart,
+  ) {
     if (!canSay(priority, subject: subject, force: force)) return null;
-    final req = _Request(text, priority, subject, onStart);
+    final req = _Request(text, priority, subject, onStart, _now());
 
     final current = _current;
-    if (current != null && priority.index > current.priority.index &&
+    if (current != null &&
+        priority.index > current.priority.index &&
         priority.index >= SpeechPriority.caution.index) {
       // Barge-in: bỏ câu đang nói, nói ngay câu khẩn cấp hơn
       _drop(current);
       _current = null;
-      _tts.stop();
+      unawaited(_stopSpeech());
     }
 
     // Mỗi mức cảnh báo chỉ giữ câu mới nhất đang chờ
@@ -126,9 +167,35 @@ class SpeechManager {
     return now.difference(last.time) < cooldown[last.priority]!;
   }
 
+  void _pruneCooldowns(DateTime now) {
+    _lastBySubject.removeWhere(
+      (_, last) => now.difference(last.time) >= cooldown[last.priority]!,
+    );
+  }
+
+  /// Không gửi câu mới trước khi nền tảng đã xử lý xong lệnh dừng câu cũ.
+  /// Các lệnh dừng chồng nhau cùng đợi một Future để không dừng nhầm câu mới.
+  Future<void> _stopSpeech() {
+    final stopping = _stopping;
+    if (stopping != null) return stopping;
+    late final Future<void> pending;
+    pending = Future<void>.sync(_tts.stop)
+        .catchError((Object error) {
+          debugPrint('Không dừng được TTS: $error');
+        })
+        .whenComplete(() {
+          _stopping = null;
+          _pump();
+        });
+    _stopping = pending;
+    return pending;
+  }
+
   void _pump() {
-    if (_current != null || _queue.isEmpty) return;
-    final now = DateTime.now();
+    _quietTimer?.cancel();
+    _quietTimer = null;
+    if (_stopping != null || _current != null || _queue.isEmpty) return;
+    final now = _now();
 
     _queue.where((r) => r.isStale(now)).toList().forEach((r) {
       _queue.remove(r);
@@ -144,10 +211,11 @@ class SpeechManager {
     final next = _queue.first;
 
     // Câu không khẩn cấp phải chờ 1 khoảng lặng để người dùng còn nghe môi trường
-    if (next.priority != SpeechPriority.danger && next.priority != SpeechPriority.playback) {
+    if (next.priority != SpeechPriority.danger &&
+        next.priority != SpeechPriority.playback) {
       final wait = _quietGap - now.difference(_lastEnd);
       if (wait > Duration.zero) {
-        Timer(wait, _pump);
+        _quietTimer = Timer(wait, _pump);
         return;
       }
     }
@@ -158,8 +226,10 @@ class SpeechManager {
 
   Future<void> _speak(_Request req) async {
     _current = req;
+    final now = _now();
+    _pruneCooldowns(now);
     if (req.subject != null) {
-      _lastBySubject[req.subject!] = (priority: req.priority, time: DateTime.now());
+      _lastBySubject[req.subject!] = (priority: req.priority, time: now);
     }
     _hideTimer?.cancel();
     showing.value = (text: req.text, priority: req.priority);
@@ -168,7 +238,7 @@ class SpeechManager {
     await _tts.speak(req.text);
     if (_current != req) return; // Đã bị barge-in ngắt
     _current = null;
-    _lastEnd = DateTime.now();
+    _lastEnd = _now();
     if (!req.result.isCompleted) req.result.complete(true);
     _hideTimer = Timer(_showAfterEnd, () {
       if (_current == null) showing.value = null;
@@ -190,8 +260,10 @@ class SpeechManager {
     _current = null;
     if (current != null) _drop(current);
     _hideTimer?.cancel();
+    _quietTimer?.cancel();
+    _quietTimer = null;
     showing.value = null;
-    await _tts.stop();
+    await _stopSpeech();
   }
 
   /// Quên lịch sử dedupe (VD khi bắt đầu chuyến đi mới)

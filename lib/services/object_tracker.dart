@@ -14,14 +14,18 @@ class ObjectTracker {
   static const int maxMisses = 5;
   static const double _iouMatch = 0.3;
   static const double _centroidMatch = 0.15; // theo tỉ lệ đường chéo khung
-  static const double _smooth = 0.5;         // hệ số EMA làm mượt box
+  static const double _smooth = 0.5; // hệ số EMA làm mượt box
 
   final List<TrackedObject> _tracks = [];
   int _nextId = 1;
 
   /// Cập nhật tracker với kết quả nhận diện của frame mới.
   /// Trả về các vật đã xác nhận (kể cả vừa mất 1–2 frame).
-  List<TrackedObject> update(List<Recognition> detections, Size frame, DateTime now) {
+  List<TrackedObject> update(
+    List<Recognition> detections,
+    Size frame,
+    DateTime now,
+  ) {
     final diag = sqrt(frame.width * frame.width + frame.height * frame.height);
 
     // Tất cả cặp (track, detection) cùng lớp có thể ghép, xếp theo độ khớp giảm dần
@@ -34,7 +38,9 @@ class ObjectTracker {
           pairs.add((t: t, d: d, score: 1 + iou));
           continue;
         }
-        final dist = (_tracks[t].box.center - detections[d].location.center).distance / diag;
+        final dist =
+            (_tracks[t].box.center - detections[d].location.center).distance /
+            diag;
         if (dist <= _centroidMatch) pairs.add((t: t, d: d, score: 1 - dist));
       }
     }
@@ -58,21 +64,25 @@ class ObjectTracker {
     for (int t = 0; t < _tracks.length; t++) {
       if (usedT.contains(t)) continue;
       _tracks[t].misses++;
-      _tracks[t].hits = min(_tracks[t].hits, minHits); // giữ trạng thái đã xác nhận
+      // Vật chưa xác nhận phải bắt đầu lại chuỗi frame liên tiếp khi bị mất.
+      // Vật đã xác nhận vẫn giữ trạng thái qua các frame AI chớp mất.
+      _tracks[t].hits = _tracks[t].hits >= minHits ? minHits : 0;
     }
     _tracks.removeWhere((t) => t.misses > maxMisses);
 
     for (int d = 0; d < detections.length; d++) {
       if (usedD.contains(d)) continue;
       final det = detections[d];
-      _tracks.add(TrackedObject(
-        id: _nextId++,
-        classId: det.id,
-        labelEn: det.labelEn,
-        labelVi: det.label,
-        box: det.location,
-        score: det.score,
-      )..addHistory(now, det.location.height / frame.height));
+      _tracks.add(
+        TrackedObject(
+          id: _nextId++,
+          classId: det.id,
+          labelEn: det.labelEn,
+          labelVi: det.label,
+          box: det.location,
+          score: det.score,
+        )..addHistory(now, det.location.height / frame.height),
+      );
     }
 
     return _tracks.where((t) => t.hits >= minHits && t.misses <= 2).toList();

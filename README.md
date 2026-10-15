@@ -65,7 +65,7 @@ smart_eye/
 
 ## 🚀 Hướng Dẫn Chạy Trên Thiết Bị Android Thật (Khuyên Dùng)
 
-Chạy ứng dụng trên thiết bị Android phần cứng thật sẽ cho **hiệu năng cao nhất (15-30 FPS)**, đúng góc dọc camera và đọc âm thanh trực tiếp qua loa điện thoại.
+Nên chạy trên thiết bị Android thật để kiểm tra độ trễ nhận diện, góc dọc camera và âm thanh qua loa điện thoại. App nhận diện tối đa **4 frame/giây**; tốc độ preview camera độc lập với tốc độ chạy AI.
 
 ### Bước 1: Chuẩn bị điện thoại
 1. Vào **Cài đặt** (Settings) trên điện thoại Android $\rightarrow$ **Thông tin điện thoại** (About Phone).
@@ -183,6 +183,15 @@ rồi cài từ Windows bằng **Sideloadly**.
 ```bash
 flutter test
 ```
+
+### Luồng xử lý thời gian thực
+- Một isolate sống xuyên suốt phiên nhận diện giữ model, chuyển ảnh, chạy TFLite và lọc box; luồng giao diện chỉ nhận kết quả.
+- Chỉ xử lý một frame tại một thời điểm, không xếp hàng frame cũ. Bộ đệm tensor được tái sử dụng; ảnh JPEG ghi nhớ được mã hóa ở isolate riêng khi cần.
+- Chỉ cập nhật lớp khung nhận diện khi có kết quả; không rebuild cả màn hình camera mỗi frame.
+- Camera được giải phóng khi app ra nền, mở lịch sử hoặc bật giả lập. Kết quả đang chạy bị bỏ nếu camera, hướng máy hoặc màn hình đã thay đổi.
+- Các test bao phủ chuyển màu/quantization, giao tiếp isolate và đóng tài nguyên, vòng đời camera, tracker và thứ tự ngắt/phát giọng nói.
+
+Kiểm tra trên điện thoại bằng `flutter run --profile`: xoay máy khi đang nhận diện, ra nền rồi quay lại nhiều lần, mở/đóng lịch sử và yêu cầu mô tả lúc có cảnh báo. Dùng Flutter DevTools để đo độ trễ/khung hình; unit test trên máy tính không thay thế phép đo hiệu năng hay kiểm tra delegate TFLite trên Android/iOS.
 
 ### Đánh giá model trên COCO (COCO128)
 ```bash

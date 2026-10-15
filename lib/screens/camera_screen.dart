@@ -1,16 +1,19 @@
 import 'dart:async';
 import 'dart:io';
+
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:camera/camera.dart';
 import 'package:wakelock_plus/wakelock_plus.dart';
+
 import '../main.dart';
 import '../models/Recognition.dart';
 import '../models/scene_info.dart';
 import '../models/trip.dart';
 import '../widgets/bounding_box_painter.dart';
 import '../services/caption_builder.dart';
+import '../services/camera_session.dart';
 import '../services/detector_service.dart';
 import '../services/hazard_engine.dart';
 import '../services/history_service.dart';
@@ -19,6 +22,14 @@ import '../services/object_tracker.dart';
 import '../services/speech_manager.dart';
 import '../utils/image_utils.dart';
 import 'history_screen.dart';
+
+// A top-level callback prevents compute from capturing the widget, controller,
+// detector or any other unsendable platform state.
+Uint8List? _encodeMemory(({CameraImage image, int rotation}) request) =>
+    ImageUtils.cameraImageToJpeg(
+      request.image,
+      rotationDegrees: request.rotation,
+    );
 
 /// Màn hình chính — pipeline mỗi frame:
 /// F1 nhận diện (YOLOv8n) → CN5 tracker → F2 rules engine → CN10 Speech Manager → F4 lịch sử.
@@ -29,13 +40,27 @@ class CameraScreen extends StatefulWidget {
   State<CameraScreen> createState() => _CameraScreenState();
 }
 
-class _CameraScreenState extends State<CameraScreen> with WidgetsBindingObserver {
+class _CameraScreenState extends State<CameraScreen>
+    with WidgetsBindingObserver {
   /// F3 tự mô tả: tần suất rất thấp, và chỉ khi yên ổn (không có cảnh báo gần đây)
   static const Duration _autoDescribeEvery = Duration(seconds: 45);
   static const Duration _calmAfterAlert = Duration(seconds: 10);
 
   CameraController? _controller;
   bool _isDetecting = false;
+  late final CameraSession<CameraController> _cameraSession;
+  bool _foreground = true;
+  bool _disposed = false;
+  bool _servicesReady = false;
+  Future<void>? _initialization;
+  Future<void>? _locationStart;
+  Future<void> _wakeOperations = Future.value();
+  Future<void> _eventWrites = Future.value();
+  TripSummary? _trip;
+  bool _encodingMemory = false;
+  int _frameGeneration = 0;
+  int? _lastFrameRotation;
+  DeviceOrientation? _lastFrameOrientation;
 
   // Trạng thái loading
   bool _modelLoaded = false;
@@ -43,7 +68,8 @@ class _CameraScreenState extends State<CameraScreen> with WidgetsBindingObserver
   bool _hasError = false;
   bool _greeted = false;
 
-  DateTime _lastDetectionTime = DateTime.fromMillisecondsSinceEpoch(0);
+  final Stopwatch _frameClock = Stopwatch()..start();
+  int _lastDetectionMs = -250;
   static const int _minDetectionIntervalMs = 250; // Giới hạn tối đa 4 FPS
 
   final DetectorService _detector = DetectorService();
@@ -54,6 +80,9 @@ class _CameraScreenState extends State<CameraScreen> with WidgetsBindingObserver
   final LocationService _location = LocationService();
 
   SceneAssessment _scene = SceneAssessment.empty;
+  final ValueNotifier<SceneAssessment> _sceneNotifier = ValueNotifier(
+    SceneAssessment.empty,
+  );
 
   double _screenWidth = 0;
   double _screenHeight = 0;
@@ -70,12 +99,15 @@ class _CameraScreenState extends State<CameraScreen> with WidgetsBindingObserver
   /// 3 cột và ảnh đưa vào AI cùng xoay theo màn hình, không cần bấm nút.
   int get _rotationDegrees {
     final controller = _controller;
-    final camera = controller?.description ?? (cameras.isNotEmpty ? cameras.first : null);
+    final camera =
+        controller?.description ?? (cameras.isNotEmpty ? cameras.first : null);
     if (camera == null) return 90;
     final auto = ImageUtils.frameRotation(
       isIOS: Platform.isIOS,
       sensorOrientation: camera.sensorOrientation,
-      deviceDegrees: _deviceDegrees[controller?.value.deviceOrientation ?? DeviceOrientation.portraitUp]!,
+      deviceDegrees:
+          _deviceDegrees[controller?.value.deviceOrientation ??
+              DeviceOrientation.portraitUp]!,
       frontCamera: camera.lensDirection == CameraLensDirection.front,
     );
     return (auto + _debugRotationOffset) % 360;
@@ -83,17 +115,19 @@ class _CameraScreenState extends State<CameraScreen> with WidgetsBindingObserver
 
   /// Chỉ dùng khi debug: webcam của máy ảo Android hay báo sai góc cảm biến → hình bị nghiêng.
   /// Xoay bù cả preview lẫn ảnh vào AI để chúng luôn khớp nhau. Bản release luôn = 0.
-  int _debugRotationOffset = 0;
+  final int _debugRotationOffset = 0;
 
-  bool _paused = false;          // Tạm dừng nhận diện (khi mở lịch sử)
-  bool _autoDescribe = false;    // F3 mặc định on-demand
-  bool _pendingDescribe = false; // Người dùng vừa yêu cầu mô tả → xử lý ở frame kế tiếp
-  Timer? _describeFallback;      // Không có frame nào tới kịp → vẫn trả lời
+  bool _paused = false; // Tạm dừng nhận diện (khi mở lịch sử)
+  bool _autoDescribe = false; // F3 mặc định on-demand
+  bool _pendingDescribe =
+      false; // Người dùng vừa yêu cầu mô tả → xử lý ở frame kế tiếp
+  Timer? _describeFallback; // Không có frame nào tới kịp → vẫn trả lời
   DateTime _lastDescribeAt = DateTime.now();
   DateTime _lastAlertAt = DateTime.fromMillisecondsSinceEpoch(0);
 
   // Chế độ giả lập (không cần camera)
   bool _isMockTest = false;
+  int _modeGeneration = 0;
   Timer? _mockTimer;
   DateTime _mockStart = DateTime.now();
 
@@ -101,36 +135,71 @@ class _CameraScreenState extends State<CameraScreen> with WidgetsBindingObserver
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
+    _foreground =
+        WidgetsBinding.instance.lifecycleState == null ||
+        WidgetsBinding.instance.lifecycleState == AppLifecycleState.resumed;
+    _cameraSession = CameraSession(
+      open: _createCamera,
+      close: (controller) => controller.dispose(),
+      onChanged: _cameraChanged,
+      onError: (error, stack) {
+        debugPrint('Lỗi camera: $error\n$stack');
+        if (mounted && !_disposed && _wantsCamera) {
+          setState(() {
+            _hasError = true;
+            _statusText = 'Lỗi camera: $error';
+          });
+        }
+      },
+    );
     // Dùng addPostFrameCallback để UI render trước, rồi mới init
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      _initAll();
+      if (mounted && !_disposed) unawaited(_initAll());
     });
   }
 
-  Future<void> _initAll() async {
+  bool get _wantsCamera =>
+      !_disposed && _foreground && !_paused && !_isMockTest && _servicesReady;
+
+  Future<void> _initAll() {
+    return _initialization ??= _initializeServices().whenComplete(
+      () => _initialization = null,
+    );
+  }
+
+  Future<void> _initializeServices() async {
     try {
       // 1. TTS + Speech Manager
       if (mounted) setState(() => _statusText = 'Khởi tạo giọng nói...');
       await _speech.init();
+      if (_disposed) return;
 
       // 2. Load model
       if (!_modelLoaded) {
         if (mounted) setState(() => _statusText = 'Đang load model YOLOv8...');
         await _detector.loadModel();
+        if (_disposed) return;
         if (mounted) setState(() => _modelLoaded = true);
       }
 
       // 3. Lịch sử chuyến đi + GPS (không bắt buộc)
       await _history.startTrip();
-      _location.onDistance = _history.updateDistance;
-      unawaited(_location.start());
+      _trip = _history.currentTrip;
+      if (_disposed) return;
+      _location.onDistance = (distance) {
+        if (!_disposed && identical(_trip, _history.currentTrip)) {
+          _history.updateDistance(distance);
+        }
+      };
+      _locationStart ??= _location.start().then<void>((_) {});
 
       // 4. Khởi động camera
+      _servicesReady = true;
       if (mounted) setState(() => _statusText = 'Đang mở camera...');
-      await _initializeCamera();
+      await _syncCamera();
     } catch (e, stack) {
       debugPrint('Lỗi khởi tạo: $e\n$stack');
-      if (mounted) {
+      if (mounted && !_disposed) {
         setState(() {
           _hasError = true;
           _statusText = 'Lỗi: $e';
@@ -140,10 +209,9 @@ class _CameraScreenState extends State<CameraScreen> with WidgetsBindingObserver
     }
   }
 
-  Future<void> _initializeCamera() async {
+  Future<CameraController> _createCamera() async {
     if (cameras.isEmpty) {
-      setState(() => _statusText = 'Không tìm thấy camera trên thiết bị');
-      return;
+      throw CameraException('NoCamera', 'Không tìm thấy camera trên thiết bị');
     }
 
     final controller = CameraController(
@@ -151,64 +219,137 @@ class _CameraScreenState extends State<CameraScreen> with WidgetsBindingObserver
       ResolutionPreset.medium,
       enableAudio: false,
       // iOS: BGRA 1 lớp (định dạng camera plugin khuyên dùng cho AI trên iOS); Android: YUV_420_888
-      imageFormatGroup: Platform.isIOS ? ImageFormatGroup.bgra8888 : ImageFormatGroup.yuv420,
+      imageFormatGroup: Platform.isIOS
+          ? ImageFormatGroup.bgra8888
+          : ImageFormatGroup.yuv420,
     );
-    _controller = controller;
-
     try {
       await controller.initialize();
-      if (!mounted || _controller != controller) return;
-      setState(() => _statusText = 'Camera sẵn sàng!');
-      await controller.startImageStream(_onCameraFrame);
-      // Màn hình tự khoá = app dừng = mất cảnh báo → giữ sáng suốt lúc đang quét
-      unawaited(WakelockPlus.enable());
-      if (!_greeted) {
+      if (_wantsCamera) {
+        await controller.startImageStream(
+          (image) => _onCameraFrame(controller, image),
+        );
+      }
+      return controller;
+    } catch (_) {
+      await controller.dispose();
+      rethrow;
+    }
+  }
+
+  void _cameraChanged(CameraController? controller) {
+    _controller = controller;
+    _invalidateScene();
+    if (mounted && !_disposed) {
+      setState(() {
+        if (controller != null) {
+          _hasError = false;
+          _statusText = 'Camera sẵn sàng!';
+        }
+      });
+      if (controller != null && !_greeted) {
         _greeted = true;
         _speech.say(
           'Smart Eye đã sẵn sàng. Chạm hai lần vào màn hình để nghe xung quanh có gì.',
           SpeechPriority.description,
         );
       }
-    } on CameraException catch (e) {
-      debugPrint('Lỗi camera: ${e.code} - ${e.description}');
-      if (mounted) {
-        setState(() {
-          _hasError = true;
-          _statusText = 'Lỗi camera: ${e.description}';
-        });
-      }
+    }
+    _syncWakelock();
+  }
+
+  Future<void> _syncCamera() {
+    _syncWakelock();
+    _syncMockTimer();
+    return _cameraSession.setActive(_wantsCamera);
+  }
+
+  void _syncMockTimer() {
+    if (!_disposed && _foreground && !_paused && _isMockTest) {
+      _mockTimer ??= Timer.periodic(
+        const Duration(milliseconds: 150),
+        (_) => _mockTick(),
+      );
+    } else {
+      _mockTimer?.cancel();
+      _mockTimer = null;
+    }
+  }
+
+  void _syncWakelock() {
+    _wakeOperations = _wakeOperations
+        .then(
+          (_) => WakelockPlus.toggle(
+            enable:
+                !_disposed &&
+                _foreground &&
+                !_paused &&
+                (_isMockTest || _controller != null),
+          ),
+        )
+        .catchError((Object e) => debugPrint('Không đổi được wakelock: $e'));
+  }
+
+  void _invalidateScene({bool duringBuild = false}) {
+    final generation = ++_frameGeneration;
+    _tracker.reset();
+    _scene = SceneAssessment.empty;
+    _lastFrameRotation = null;
+    _lastFrameOrientation = null;
+    _pendingDescribe = false;
+    _describeFallback?.cancel();
+    if (_disposed) return;
+    if (duringBuild) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!_disposed && generation == _frameGeneration) {
+          _sceneNotifier.value = _scene;
+        }
+      });
+    } else {
+      _sceneNotifier.value = _scene;
     }
   }
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
-    final controller = _controller;
-    if (state == AppLifecycleState.paused) _history.flush();
-    if (controller == null || !controller.value.isInitialized) return;
-
-    // Camera phải được giải phóng khi app rời màn hình, mở lại khi quay về
-    if (state == AppLifecycleState.inactive) {
-      _controller = null;
-      controller.dispose();
-    } else if (state == AppLifecycleState.resumed) {
-      _initializeCamera();
+    if (_disposed) return;
+    _foreground = state == AppLifecycleState.resumed;
+    _invalidateScene();
+    if (!_foreground) {
+      unawaited(_speech.stopAll());
+      unawaited(_eventWrites.then((_) => _history.flush()));
     }
+    unawaited(_syncCamera());
   }
 
   // ---------------------------------------------------------------------------
   // Pipeline
   // ---------------------------------------------------------------------------
 
-  void _onCameraFrame(CameraImage image) {
-    if (_isDetecting || !_modelLoaded || _isMockTest || _paused) return;
+  Future<void> _onCameraFrame(
+    CameraController controller,
+    CameraImage image,
+  ) async {
+    if (!_wantsCamera || controller != _controller || !_modelLoaded) return;
+    final rotation = _rotationDegrees;
+    final orientation = controller.value.deviceOrientation;
+    if (_lastFrameRotation != null &&
+        (_lastFrameRotation != rotation ||
+            _lastFrameOrientation != orientation)) {
+      _invalidateScene();
+    }
+    _lastFrameRotation = rotation;
+    _lastFrameOrientation = orientation;
+    if (_isDetecting) return;
 
-    final now = DateTime.now();
-    if (now.difference(_lastDetectionTime).inMilliseconds < _minDetectionIntervalMs) {
+    final now = _frameClock.elapsedMilliseconds;
+    if (now - _lastDetectionMs < _minDetectionIntervalMs) {
       return;
     }
 
     _isDetecting = true;
-    _lastDetectionTime = now;
+    _lastDetectionMs = now;
+    final generation = _frameGeneration;
 
     // finally: lỗi ở 1 frame không được làm kẹt cờ → nếu kẹt, nhận diện + nút "Xung quanh" chết hẳn
     try {
@@ -216,14 +357,24 @@ class _CameraScreenState extends State<CameraScreen> with WidgetsBindingObserver
       final sh = _screenHeight;
       if (sw == 0 || sh == 0) return;
 
-      final results = _detector.detect(
+      final results = await _detector.detect(
         image: image,
         screenWidth: sw,
         screenHeight: sh,
-        rotationDegrees: _rotationDegrees,
+        rotationDegrees: rotation,
       );
 
-      if (mounted) _runPipeline(results, image: image);
+      if (!_wantsCamera ||
+          !mounted ||
+          generation != _frameGeneration ||
+          controller != _controller ||
+          rotation != _rotationDegrees ||
+          orientation != controller.value.deviceOrientation ||
+          sw != _screenWidth ||
+          sh != _screenHeight) {
+        return;
+      }
+      _runPipeline(results, image: image, rotation: rotation);
     } catch (e, stack) {
       debugPrint('Lỗi xử lý frame: $e\n$stack');
     } finally {
@@ -231,62 +382,125 @@ class _CameraScreenState extends State<CameraScreen> with WidgetsBindingObserver
     }
   }
 
-  /// [image] chỉ hợp lệ trong lúc xử lý frame — dùng để chụp ảnh ghi nhớ (CN12)
-  void _runPipeline(List<Recognition> detections, {CameraImage? image}) {
+  /// Retain the frame and its rotation together for asynchronous memory encoding.
+  void _runPipeline(
+    List<Recognition> detections, {
+    CameraImage? image,
+    int rotation = 0,
+  }) {
     final now = DateTime.now();
     final frame = Size(_screenWidth, _screenHeight);
     final tracks = _tracker.update(detections, frame, now);
     final scene = _engine.assess(tracks, frame);
-    setState(() => _scene = scene);
+    _scene = scene;
+    _sceneNotifier.value = scene;
 
     final alert = scene.alert;
     if (alert != null) {
-      _handleAlert(alert, image, now);
+      _handleAlert(alert, image, now, rotation);
     }
 
     if (_pendingDescribe) {
       _pendingDescribe = false;
       _describeFallback?.cancel();
-      _describe(image, manual: true);
+      _describe(image, manual: true, rotation: rotation);
     } else if (_autoDescribe &&
         now.difference(_lastDescribeAt) >= _autoDescribeEvery &&
         now.difference(_lastAlertAt) >= _calmAfterAlert &&
         !_speech.isBusy) {
-      _describe(image, manual: false);
+      _describe(image, manual: false, rotation: rotation);
     }
   }
 
-  void _handleAlert(HazardAlert alert, CameraImage? image, DateTime now) {
+  void _handleAlert(
+    HazardAlert alert,
+    CameraImage? image,
+    DateTime now,
+    int rotation,
+  ) {
     _lastAlertAt = now;
     final isDanger = alert.level == AlertLevel.danger;
     final priority = isDanger ? SpeechPriority.danger : SpeechPriority.caution;
-    if (!_speech.canSay(priority, subject: alert.subject)) return; // Đã báo / đang chờ đọc
+    if (!_speech.canSay(priority, subject: alert.subject)) {
+      return; // Đã báo / đang chờ đọc
+    }
 
-    // Ảnh chỉ hợp lệ trong frame hiện tại → chụp ngay, ghi lịch sử khi câu thực sự được đọc
-    final jpeg = isDanger ? _captureMemory(image) : null;
-    _speech.say(alert.message, priority, subject: alert.subject, onStart: () {
-      if (isDanger) HapticFeedback.heavyImpact();
-      _logEvent(isDanger ? TripEventType.danger : TripEventType.caution, alert.message, jpeg: jpeg);
-    });
+    final jpeg = isDanger ? _captureMemory(image, rotation) : null;
+    final log = _eventLogger(
+      isDanger ? TripEventType.danger : TripEventType.caution,
+      alert.message,
+      jpeg: jpeg,
+    );
+    _speech.say(
+      alert.message,
+      priority,
+      subject: alert.subject,
+      onStart: () {
+        if (isDanger) HapticFeedback.heavyImpact();
+        log();
+      },
+    );
   }
 
-  void _describe(CameraImage? image, {required bool manual}) {
+  void _describe(CameraImage? image, {required bool manual, int rotation = 0}) {
     _lastDescribeAt = DateTime.now();
     // Người dùng chủ động hỏi thì luôn trả lời, kể cả khi đang ở chế độ yên lặng
     if (!_speech.canSay(SpeechPriority.description, force: manual)) return;
     final text = CaptionBuilder.describeScene(_scene);
-    final jpeg = _captureMemory(image);
-    _speech.say(text, SpeechPriority.description, force: manual,
-        onStart: () => _logEvent(TripEventType.description, text, jpeg: jpeg));
+    final jpeg = _captureMemory(image, rotation);
+    _speech.say(
+      text,
+      SpeechPriority.description,
+      force: manual,
+      onStart: _eventLogger(TripEventType.description, text, jpeg: jpeg),
+    );
   }
 
-  Uint8List? _captureMemory(CameraImage? image) {
-    if (image == null || !_history.canCaptureMemory()) return null;
-    return ImageUtils.cameraImageToJpeg(image, rotationDegrees: _rotationDegrees);
+  Future<Uint8List?>? _captureMemory(CameraImage? image, int rotation) {
+    if (image == null || _encodingMemory || !_history.canCaptureMemory()) {
+      return null;
+    }
+    _encodingMemory = true;
+    return compute(_encodeMemory, (
+          image: image,
+          rotation: rotation,
+        ), debugLabel: 'memory-jpeg')
+        .catchError((Object error) {
+          debugPrint('Không tạo được ảnh ghi nhớ: $error');
+          return null;
+        })
+        .whenComplete(() => _encodingMemory = false);
   }
 
-  void _logEvent(TripEventType type, String text, {Uint8List? jpeg}) {
-    _history.log(type, text, lat: _location.last?.latitude, lng: _location.last?.longitude, jpeg: jpeg);
+  VoidCallback _eventLogger(
+    TripEventType type,
+    String text, {
+    Future<Uint8List?>? jpeg,
+  }) {
+    final trip = _trip;
+    return () {
+      if (_disposed || trip == null || !identical(trip, _history.currentTrip)) {
+        return;
+      }
+      final location = _location.last;
+      // Drain accepted speech events before flush/endTrip, even if their JPEG is
+      // still encoding. A completed image can never attach to a different trip.
+      _eventWrites = _eventWrites
+          .then((_) async {
+            final bytes = await jpeg;
+            if (!identical(trip, _history.currentTrip)) return;
+            _history.log(
+              type,
+              text,
+              lat: location?.latitude,
+              lng: location?.longitude,
+              jpeg: bytes,
+            );
+          })
+          .catchError(
+            (Object error) => debugPrint('Không ghi được sự kiện: $error'),
+          );
+    };
   }
 
   // ---------------------------------------------------------------------------
@@ -313,13 +527,19 @@ class _CameraScreenState extends State<CameraScreen> with WidgetsBindingObserver
     HapticFeedback.selectionClick();
     final trip = _history.currentTrip;
     if (trip == null) return;
-    _speech.say(CaptionBuilder.recap(trip), SpeechPriority.description, force: true);
+    _speech.say(
+      CaptionBuilder.recap(trip),
+      SpeechPriority.description,
+      force: true,
+    );
   }
 
   void _toggleQuiet() {
     setState(() => _speech.muted = !_speech.muted);
     _speech.say(
-      _speech.muted ? 'Chế độ yên lặng. Chỉ báo khi nguy hiểm.' : 'Đã bật lại nhắc nhở.',
+      _speech.muted
+          ? 'Chế độ yên lặng. Chỉ báo khi nguy hiểm.'
+          : 'Đã bật lại nhắc nhở.',
       SpeechPriority.description,
       force: true,
     );
@@ -329,21 +549,32 @@ class _CameraScreenState extends State<CameraScreen> with WidgetsBindingObserver
     setState(() => _autoDescribe = !_autoDescribe);
     _lastDescribeAt = DateTime.now();
     _speech.say(
-      _autoDescribe ? 'Bật tự động mô tả, khoảng 1 phút 1 lần.' : 'Tắt tự động mô tả.',
+      _autoDescribe
+          ? 'Bật tự động mô tả, khoảng 1 phút 1 lần.'
+          : 'Tắt tự động mô tả.',
       SpeechPriority.description,
       force: true,
     );
   }
 
   Future<void> _openHistory() async {
+    if (_paused || _disposed) return;
     HapticFeedback.selectionClick();
     _paused = true;
+    _invalidateScene();
+    await _syncCamera();
     await _speech.stopAll();
+    await _eventWrites;
     await _history.flush();
-    if (!mounted) return;
-    await Navigator.push(context, MaterialPageRoute(builder: (_) => const HistoryScreen()));
-    _tracker.reset();
+    if (!mounted || _disposed) return;
+    await Navigator.push(
+      context,
+      MaterialPageRoute(builder: (_) => const HistoryScreen()),
+    );
+    if (!mounted || _disposed) return;
+    _invalidateScene();
     _paused = false;
+    await _syncCamera();
   }
 
   // ---------------------------------------------------------------------------
@@ -351,30 +582,36 @@ class _CameraScreenState extends State<CameraScreen> with WidgetsBindingObserver
   // ---------------------------------------------------------------------------
 
   Future<void> _toggleMock() async {
+    if (_disposed) return;
     setState(() {
       _isMockTest = !_isMockTest;
-      _scene = SceneAssessment.empty;
     });
-    _tracker.reset();
+    _invalidateScene();
+    final modeGeneration = ++_modeGeneration;
     _mockTimer?.cancel();
+    _mockTimer = null;
+    if (_isMockTest) _mockStart = DateTime.now();
+    await _syncCamera();
     await _speech.stopAll(); // Bỏ các câu của chế độ cũ đang chờ/đang đọc
+    if (_disposed || modeGeneration != _modeGeneration) return;
     _speech.resetDedupe();
     _speech.say(
-      _isMockTest ? 'Bật chế độ giả lập. Dữ liệu không phải từ camera.' : 'Tắt giả lập. Dùng camera thật.',
+      _isMockTest
+          ? 'Bật chế độ giả lập. Dữ liệu không phải từ camera.'
+          : 'Tắt giả lập. Dùng camera thật.',
       SpeechPriority.description,
       force: true,
     );
-    if (_isMockTest) {
-      _mockStart = DateTime.now();
-      _mockTimer = Timer.periodic(const Duration(milliseconds: 150), (_) => _mockTick());
-    }
   }
 
   void _mockTick() {
-    if (!mounted || _paused) return;
+    if (!mounted || _disposed || !_foreground || !_isMockTest || _paused) {
+      return;
+    }
     final sw = _screenWidth;
     final sh = _screenHeight;
-    final t = (DateTime.now().difference(_mockStart).inMilliseconds % 8000) / 1000.0;
+    final t =
+        (DateTime.now().difference(_mockStart).inMilliseconds % 8000) / 1000.0;
 
     final List<Recognition> recs;
     if (t < 4) {
@@ -382,13 +619,31 @@ class _CameraScreenState extends State<CameraScreen> with WidgetsBindingObserver
       final h = sh * (0.2 + 0.55 * (t / 4));
       final w = h * 0.6;
       recs = [
-        Recognition(3, 'xe máy', 0.9, Rect.fromLTWH((sw - w) / 2, sh * 0.9 - h, w, h), labelEn: 'motorcycle'),
+        Recognition(
+          3,
+          'xe máy',
+          0.9,
+          Rect.fromLTWH((sw - w) / 2, sh * 0.9 - h, w, h),
+          labelEn: 'motorcycle',
+        ),
       ];
     } else {
       // Ghế giữa (cách ~2m), người sát bên trái → nên đi chếch sang phải
       recs = [
-        Recognition(56, 'ghế', 0.8, Rect.fromLTWH(sw * 0.38, sh * 0.45, sw * 0.26, sh * 0.38), labelEn: 'chair'),
-        Recognition(0, 'người', 0.85, Rect.fromLTWH(sw * 0.02, sh * 0.15, sw * 0.28, sh * 0.7), labelEn: 'person'),
+        Recognition(
+          56,
+          'ghế',
+          0.8,
+          Rect.fromLTWH(sw * 0.38, sh * 0.45, sw * 0.26, sh * 0.38),
+          labelEn: 'chair',
+        ),
+        Recognition(
+          0,
+          'người',
+          0.85,
+          Rect.fromLTWH(sw * 0.02, sh * 0.15, sw * 0.28, sh * 0.7),
+          labelEn: 'person',
+        ),
       ];
     }
     _runPipeline(recs);
@@ -396,16 +651,41 @@ class _CameraScreenState extends State<CameraScreen> with WidgetsBindingObserver
 
   @override
   void dispose() {
+    _disposed = true;
     WidgetsBinding.instance.removeObserver(this);
     _mockTimer?.cancel();
     _describeFallback?.cancel();
-    unawaited(WakelockPlus.disable());
-    _controller?.dispose();
-    _detector.dispose();
-    _speech.stopAll();
-    _location.stop();
-    _history.endTrip();
+    _invalidateScene();
+    _frameClock.stop();
+    _sceneNotifier.dispose();
+    _syncWakelock();
+    unawaited(_cameraSession.dispose());
+    unawaited(_disposeServices());
     super.dispose();
+  }
+
+  Future<void> _disposeServices() async {
+    // Initialization may still be opening a trip or requesting GPS permission.
+    // Let it observe _disposed before releasing the resources it owns.
+    await _initialization;
+    await _cleanup(_speech.stopAll);
+    await _cleanup(_detector.dispose);
+    await _locationStart;
+    await _cleanup(_location.stop);
+    await _eventWrites;
+    if (_trip != null && identical(_trip, _history.currentTrip)) {
+      await _cleanup(() async {
+        await _history.endTrip();
+      });
+    }
+  }
+
+  Future<void> _cleanup(Future<void> Function() release) async {
+    try {
+      await release();
+    } catch (error, stack) {
+      debugPrint('Lỗi giải phóng tài nguyên: $error\n$stack');
+    }
   }
 
   // ---------------------------------------------------------------------------
@@ -415,10 +695,10 @@ class _CameraScreenState extends State<CameraScreen> with WidgetsBindingObserver
   @override
   Widget build(BuildContext context) {
     final size = MediaQuery.sizeOf(context);
-    if (_screenWidth != 0 && (size.width != _screenWidth || size.height != _screenHeight)) {
+    if (_screenWidth != 0 &&
+        (size.width != _screenWidth || size.height != _screenHeight)) {
       // Vừa xoay màn hình: toạ độ cũ không còn đúng → theo dõi lại từ đầu
-      _tracker.reset();
-      _scene = SceneAssessment.empty;
+      _invalidateScene(duringBuild: true);
     }
     _screenWidth = size.width;
     _screenHeight = size.height;
@@ -463,7 +743,10 @@ class _CameraScreenState extends State<CameraScreen> with WidgetsBindingObserver
                     ),
                   // Vẫn test được rules + giọng nói khi chưa có camera
                   if (_modelLoaded || _hasError)
-                    OutlinedButton(onPressed: _toggleMock, child: const Text('🧪 Test UI')),
+                    OutlinedButton(
+                      onPressed: _toggleMock,
+                      child: const Text('🧪 Test UI'),
+                    ),
                 ],
               ),
             ],
@@ -471,8 +754,6 @@ class _CameraScreenState extends State<CameraScreen> with WidgetsBindingObserver
         ),
       );
     }
-
-    final alert = _scene.alert;
 
     // Main camera screen
     return Scaffold(
@@ -492,9 +773,14 @@ class _CameraScreenState extends State<CameraScreen> with WidgetsBindingObserver
               onDoubleTap: _requestDescribe,
               onLongPress: _speakRecap,
               // Chế độ Test: KHÔNG hiện camera thật để không ai nhầm khung giả lập là kết quả nhận diện
-              child: cameraReady && !_isMockTest
-                  ? RotatedBox(quarterTurns: _debugRotationOffset ~/ 90, child: CameraPreview(controller))
-                  : const ColoredBox(color: Color(0xFF1A1A2E)),
+              child: RepaintBoundary(
+                child: cameraReady && !_isMockTest
+                    ? RotatedBox(
+                        quarterTurns: _debugRotationOffset ~/ 90,
+                        child: CameraPreview(controller),
+                      )
+                    : const ColoredBox(color: Color(0xFF1A1A2E)),
+              ),
             ),
           ),
 
@@ -504,15 +790,35 @@ class _CameraScreenState extends State<CameraScreen> with WidgetsBindingObserver
                 child: Text(
                   'CHẾ ĐỘ GIẢ LẬP\nKhung trên màn hình là dữ liệu giả,\nkhông phải từ camera',
                   textAlign: TextAlign.center,
-                  style: TextStyle(color: Colors.white24, fontSize: 22, fontWeight: FontWeight.bold),
+                  style: TextStyle(
+                    color: Colors.white24,
+                    fontSize: 22,
+                    fontWeight: FontWeight.bold,
+                  ),
                 ),
               ),
             ),
 
           // Layer 2: Bounding boxes + free-space
           IgnorePointer(
-            child: CustomPaint(
-              painter: BoundingBoxPainter(_scene, alertSubject: alert?.subject, alertLevel: alert?.level),
+            child: RepaintBoundary(
+              child: ValueListenableBuilder<SceneAssessment>(
+                valueListenable: _sceneNotifier,
+                builder: (_, scene, _) {
+                  // Layout changes invalidate immediately, before the deferred
+                  // notifier update can clear boxes from the old orientation.
+                  final visibleScene = identical(scene, _scene)
+                      ? scene
+                      : SceneAssessment.empty;
+                  return CustomPaint(
+                    painter: BoundingBoxPainter(
+                      visibleScene,
+                      alertSubject: visibleScene.alert?.subject,
+                      alertLevel: visibleScene.alert?.level,
+                    ),
+                  );
+                },
+              ),
             ),
           ),
 
@@ -523,16 +829,24 @@ class _CameraScreenState extends State<CameraScreen> with WidgetsBindingObserver
             right: 0,
             child: SafeArea(
               child: Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 12,
+                  vertical: 8,
+                ),
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
                     Row(
                       children: [
-                        _badge(_isMockTest ? 'SMART EYE · TEST' : 'SMART EYE', Colors.black54),
+                        _badge(
+                          _isMockTest ? 'SMART EYE · TEST' : 'SMART EYE',
+                          Colors.black54,
+                        ),
                         const Spacer(),
                         _toggleChip(
-                          icon: _speech.muted ? Icons.volume_off : Icons.volume_up,
+                          icon: _speech.muted
+                              ? Icons.volume_off
+                              : Icons.volume_up,
                           label: _speech.muted ? 'Yên lặng' : 'Đầy đủ',
                           semantics: _speech.muted
                               ? 'Chế độ yên lặng đang bật, chỉ báo nguy hiểm. Chạm để tắt.'
@@ -567,17 +881,24 @@ class _CameraScreenState extends State<CameraScreen> with WidgetsBindingObserver
                                 padding: const EdgeInsets.all(12),
                                 decoration: BoxDecoration(
                                   color: switch (line.priority) {
-                                    SpeechPriority.danger => BoundingBoxPainter.colorOf(AlertLevel.danger),
-                                    SpeechPriority.caution => BoundingBoxPainter.colorOf(AlertLevel.caution),
+                                    SpeechPriority.danger =>
+                                      BoundingBoxPainter.colorOf(
+                                        AlertLevel.danger,
+                                      ),
+                                    SpeechPriority.caution =>
+                                      BoundingBoxPainter.colorOf(
+                                        AlertLevel.caution,
+                                      ),
                                     _ => Colors.black,
-                                  }
-                                      .withValues(alpha: 0.8),
+                                  }.withValues(alpha: 0.8),
                                   borderRadius: BorderRadius.circular(12),
                                 ),
                                 child: Text(
                                   line.text,
                                   style: TextStyle(
-                                    color: line.priority.index >= SpeechPriority.caution.index
+                                    color:
+                                        line.priority.index >=
+                                            SpeechPriority.caution.index
                                         ? Colors.black
                                         : Colors.white,
                                     fontSize: 20,
@@ -606,11 +927,26 @@ class _CameraScreenState extends State<CameraScreen> with WidgetsBindingObserver
                   children: [
                     Row(
                       children: [
-                        _bigButton(Icons.visibility, 'Xung quanh', 'Nghe xung quanh có gì', _requestDescribe),
+                        _bigButton(
+                          Icons.visibility,
+                          'Xung quanh',
+                          'Nghe xung quanh có gì',
+                          _requestDescribe,
+                        ),
                         const SizedBox(width: 8),
-                        _bigButton(Icons.summarize, 'Tóm tắt', 'Nghe tóm tắt chuyến đi hiện tại', _speakRecap),
+                        _bigButton(
+                          Icons.summarize,
+                          'Tóm tắt',
+                          'Nghe tóm tắt chuyến đi hiện tại',
+                          _speakRecap,
+                        ),
                         const SizedBox(width: 8),
-                        _bigButton(Icons.history, 'Lịch sử', 'Mở lịch sử các chuyến đi', _openHistory),
+                        _bigButton(
+                          Icons.history,
+                          'Lịch sử',
+                          'Mở lịch sử các chuyến đi',
+                          _openHistory,
+                        ),
                       ],
                     ),
                   ],
@@ -626,10 +962,17 @@ class _CameraScreenState extends State<CameraScreen> with WidgetsBindingObserver
   Widget _badge(String text, Color color) {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-      decoration: BoxDecoration(color: color, borderRadius: BorderRadius.circular(8)),
+      decoration: BoxDecoration(
+        color: color,
+        borderRadius: BorderRadius.circular(8),
+      ),
       child: Text(
         text,
-        style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 13),
+        style: const TextStyle(
+          color: Colors.white,
+          fontWeight: FontWeight.bold,
+          fontSize: 13,
+        ),
       ),
     );
   }
@@ -682,41 +1025,27 @@ class _CameraScreenState extends State<CameraScreen> with WidgetsBindingObserver
         : 'Cài đặt → Quản lý chung → Chuyển văn bản thành giọng nói → tải gói Tiếng Việt';
     return Container(
       padding: const EdgeInsets.all(10),
-      decoration: BoxDecoration(color: Colors.amber, borderRadius: BorderRadius.circular(12)),
+      decoration: BoxDecoration(
+        color: Colors.amber,
+        borderRadius: BorderRadius.circular(12),
+      ),
       child: Text(
         'Máy chưa có giọng đọc tiếng Việt. Vào: $path',
-        style: const TextStyle(color: Colors.black, fontWeight: FontWeight.bold),
-      ),
-    );
-  }
-
-  Widget _smallButton({
-    required IconData icon,
-    required String label,
-    required Color color,
-    required VoidCallback onTap,
-  }) {
-    return InkWell(
-      onTap: onTap,
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
-        decoration: BoxDecoration(color: color, borderRadius: BorderRadius.circular(20)),
-        child: Row(
-          children: [
-            Icon(icon, color: Colors.white, size: 16),
-            const SizedBox(width: 4),
-            Text(
-              label,
-              style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 12),
-            ),
-          ],
+        style: const TextStyle(
+          color: Colors.black,
+          fontWeight: FontWeight.bold,
         ),
       ),
     );
   }
 
   /// Nút lớn, tương phản cao — dễ bấm khi không nhìn rõ, có nhãn cho TalkBack
-  Widget _bigButton(IconData icon, String label, String semantics, VoidCallback onTap) {
+  Widget _bigButton(
+    IconData icon,
+    String label,
+    String semantics,
+    VoidCallback onTap,
+  ) {
     return Expanded(
       child: Semantics(
         button: true,
@@ -737,7 +1066,11 @@ class _CameraScreenState extends State<CameraScreen> with WidgetsBindingObserver
                   const SizedBox(height: 4),
                   Text(
                     label,
-                    style: const TextStyle(color: Colors.black, fontWeight: FontWeight.bold, fontSize: 15),
+                    style: const TextStyle(
+                      color: Colors.black,
+                      fontWeight: FontWeight.bold,
+                      fontSize: 15,
+                    ),
                   ),
                 ],
               ),
