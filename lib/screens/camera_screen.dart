@@ -7,18 +7,19 @@ import 'package:flutter/services.dart';
 import 'package:camera/camera.dart';
 import 'package:wakelock_plus/wakelock_plus.dart';
 
-import '../main.dart';
 import '../models/Recognition.dart';
 import '../models/scene_info.dart';
 import '../models/trip.dart';
 import '../widgets/bounding_box_painter.dart';
+import '../widgets/camera_feed_preview.dart';
 import '../services/caption_builder.dart';
-import '../services/camera_session.dart';
+import '../services/camera_feed.dart';
 import '../services/detector_service.dart';
 import '../services/hazard_engine.dart';
 import '../services/history_service.dart';
 import '../services/location_service.dart';
 import '../services/object_tracker.dart';
+import '../services/scene_freshness.dart';
 import '../services/speech_manager.dart';
 import '../utils/image_utils.dart';
 import 'history_screen.dart';
@@ -48,7 +49,7 @@ class _CameraScreenState extends State<CameraScreen>
 
   CameraController? _controller;
   bool _isDetecting = false;
-  late final CameraSession<CameraController> _cameraSession;
+  late final CameraFeed _cameraFeed;
   bool _foreground = true;
   bool _disposed = false;
   bool _servicesReady = false;
@@ -58,6 +59,10 @@ class _CameraScreenState extends State<CameraScreen>
   Future<void> _eventWrites = Future.value();
   TripSummary? _trip;
   bool _encodingMemory = false;
+  Timer? _diagnosticTimer;
+  final ValueNotifier<String> _diagnostics = ValueNotifier('');
+  int _diagnosticFrames = 0;
+  int _diagnosticAtMs = 0;
   int _frameGeneration = 0;
   int? _lastFrameRotation;
   DeviceOrientation? _lastFrameOrientation;
@@ -69,12 +74,15 @@ class _CameraScreenState extends State<CameraScreen>
   bool _greeted = false;
 
   final Stopwatch _frameClock = Stopwatch()..start();
-  int _lastDetectionMs = -250;
-  static const int _minDetectionIntervalMs = 250; // Giới hạn tối đa 4 FPS
+  int _lastDetectionMs = -150;
+  static const int _minDetectionIntervalMs = 150;
+  static const int _maxFrameAgeMs = 750;
+  final DateTime _frameEpoch = DateTime.now();
 
   final DetectorService _detector = DetectorService();
   final ObjectTracker _tracker = ObjectTracker();
   final HazardEngine _engine = HazardEngine();
+  late final SceneFreshness _sceneFreshness;
   final SpeechManager _speech = SpeechManager.instance;
   final HistoryService _history = HistoryService.instance;
   final LocationService _location = LocationService();
@@ -99,8 +107,7 @@ class _CameraScreenState extends State<CameraScreen>
   /// 3 cột và ảnh đưa vào AI cùng xoay theo màn hình, không cần bấm nút.
   int get _rotationDegrees {
     final controller = _controller;
-    final camera =
-        controller?.description ?? (cameras.isNotEmpty ? cameras.first : null);
+    final camera = controller?.description;
     if (camera == null) return 90;
     final auto = ImageUtils.frameRotation(
       isIOS: Platform.isIOS,
@@ -134,13 +141,16 @@ class _CameraScreenState extends State<CameraScreen>
   @override
   void initState() {
     super.initState();
+    _sceneFreshness = SceneFreshness(
+      onExpired: _expireScene,
+      maxAge: const Duration(milliseconds: _maxFrameAgeMs),
+    );
     WidgetsBinding.instance.addObserver(this);
     _foreground =
         WidgetsBinding.instance.lifecycleState == null ||
         WidgetsBinding.instance.lifecycleState == AppLifecycleState.resumed;
-    _cameraSession = CameraSession(
-      open: _createCamera,
-      close: (controller) => controller.dispose(),
+    _cameraFeed = CameraFeed(
+      onFrame: _onCameraFrame,
       onChanged: _cameraChanged,
       onError: (error, stack) {
         debugPrint('Lỗi camera: $error\n$stack');
@@ -209,34 +219,6 @@ class _CameraScreenState extends State<CameraScreen>
     }
   }
 
-  Future<CameraController> _createCamera() async {
-    if (cameras.isEmpty) {
-      throw CameraException('NoCamera', 'Không tìm thấy camera trên thiết bị');
-    }
-
-    final controller = CameraController(
-      cameras.first,
-      ResolutionPreset.medium,
-      enableAudio: false,
-      // iOS: BGRA 1 lớp (định dạng camera plugin khuyên dùng cho AI trên iOS); Android: YUV_420_888
-      imageFormatGroup: Platform.isIOS
-          ? ImageFormatGroup.bgra8888
-          : ImageFormatGroup.yuv420,
-    );
-    try {
-      await controller.initialize();
-      if (_wantsCamera) {
-        await controller.startImageStream(
-          (image) => _onCameraFrame(controller, image),
-        );
-      }
-      return controller;
-    } catch (_) {
-      await controller.dispose();
-      rethrow;
-    }
-  }
-
   void _cameraChanged(CameraController? controller) {
     _controller = controller;
     _invalidateScene();
@@ -261,7 +243,44 @@ class _CameraScreenState extends State<CameraScreen>
   Future<void> _syncCamera() {
     _syncWakelock();
     _syncMockTimer();
-    return _cameraSession.setActive(_wantsCamera);
+    _syncDiagnostics();
+    return _cameraFeed.setActive(
+      !_disposed && !_paused && !_isMockTest && _servicesReady,
+    );
+  }
+
+  void _syncDiagnostics() {
+    if (kReleaseMode || !_wantsCamera) {
+      _diagnosticTimer?.cancel();
+      _diagnosticTimer = null;
+      return;
+    }
+    if (_diagnosticTimer != null) return;
+    _diagnosticFrames = _detector.performance.completedFrames;
+    _diagnosticAtMs = _frameClock.elapsedMilliseconds;
+    _diagnosticTimer = Timer.periodic(const Duration(seconds: 1), (_) {
+      final now = _frameClock.elapsedMilliseconds;
+      final metrics = _detector.performance;
+      final elapsed = now - _diagnosticAtMs;
+      final fps = elapsed > 0
+          ? (metrics.completedFrames - _diagnosticFrames) * 1000 / elapsed
+          : 0.0;
+      _diagnosticFrames = metrics.completedFrames;
+      _diagnosticAtMs = now;
+      final latency = metrics.endToEnd.snapshot;
+      final nativeMs = (metrics.latest?.inferenceUs ?? 0) / 1000;
+      var memory = 'n/a';
+      try {
+        memory =
+            '${(ProcessInfo.currentRss / (1024 * 1024)).toStringAsFixed(1)} MiB';
+      } catch (_) {
+        // RSS is platform-dependent; never present buffer sizes as process RAM.
+      }
+      _diagnostics.value =
+          'AI ${fps.toStringAsFixed(1)} fps · nhận kết quả '
+          '${latency.meanMs.toStringAsFixed(0)} ms (p95 ${latency.p95Ms.toStringAsFixed(0)})\n'
+          'Model ${nativeMs.toStringAsFixed(0)} ms · RSS $memory';
+    });
   }
 
   void _syncMockTimer() {
@@ -291,8 +310,10 @@ class _CameraScreenState extends State<CameraScreen>
   }
 
   void _invalidateScene({bool duringBuild = false}) {
+    _sceneFreshness.cancel();
     final generation = ++_frameGeneration;
     _tracker.reset();
+    _speech.retainAlerts();
     _scene = SceneAssessment.empty;
     _lastFrameRotation = null;
     _lastFrameOrientation = null;
@@ -308,6 +329,16 @@ class _CameraScreenState extends State<CameraScreen>
     } else {
       _sceneNotifier.value = _scene;
     }
+  }
+
+  void _expireScene() {
+    if (_disposed) return;
+    // Camera frames may still arrive while AI is stalled. Do not let the last
+    // accepted scene remain available to manual descriptions indefinitely.
+    _tracker.reset();
+    _speech.retainAlerts();
+    _scene = SceneAssessment.empty;
+    _sceneNotifier.value = _scene;
   }
 
   @override
@@ -350,6 +381,7 @@ class _CameraScreenState extends State<CameraScreen>
     _isDetecting = true;
     _lastDetectionMs = now;
     final generation = _frameGeneration;
+    final capturedAt = _frameEpoch.add(Duration(milliseconds: now));
 
     // finally: lỗi ở 1 frame không được làm kẹt cờ → nếu kẹt, nhận diện + nút "Xung quanh" chết hẳn
     try {
@@ -370,11 +402,20 @@ class _CameraScreenState extends State<CameraScreen>
           controller != _controller ||
           rotation != _rotationDegrees ||
           orientation != controller.value.deviceOrientation ||
+          _frameClock.elapsedMilliseconds - now > _maxFrameAgeMs ||
           sw != _screenWidth ||
           sh != _screenHeight) {
         return;
       }
-      _runPipeline(results, image: image, rotation: rotation);
+      _runPipeline(
+        results,
+        image: image,
+        rotation: rotation,
+        capturedAt: capturedAt,
+        observationAge: Duration(
+          milliseconds: _frameClock.elapsedMilliseconds - now,
+        ),
+      );
     } catch (e, stack) {
       debugPrint('Lỗi xử lý frame: $e\n$stack');
     } finally {
@@ -387,11 +428,23 @@ class _CameraScreenState extends State<CameraScreen>
     List<Recognition> detections, {
     CameraImage? image,
     int rotation = 0,
+    DateTime? capturedAt,
+    Duration observationAge = Duration.zero,
   }) {
+    if (!_sceneFreshness.accept(observationAge)) return;
     final now = DateTime.now();
     final frame = Size(_screenWidth, _screenHeight);
-    final tracks = _tracker.update(detections, frame, now);
+    final tracks = _tracker.update(detections, frame, capturedAt ?? now);
     final scene = _engine.assess(tracks, frame);
+    _speech.retainAlerts(
+      subject: scene.alert?.subject,
+      text: scene.alert?.message,
+      priority: switch (scene.alert?.level) {
+        AlertLevel.danger => SpeechPriority.danger,
+        AlertLevel.caution => SpeechPriority.caution,
+        _ => null,
+      },
+    );
     _scene = scene;
     _sceneNotifier.value = scene;
 
@@ -628,7 +681,7 @@ class _CameraScreenState extends State<CameraScreen>
         ),
       ];
     } else {
-      // Ghế giữa (cách ~2m), người sát bên trái → nên đi chếch sang phải
+      // Ghế giữa khung hình, người sát bên trái → cảnh báo chậm lại.
       recs = [
         Recognition(
           56,
@@ -652,14 +705,17 @@ class _CameraScreenState extends State<CameraScreen>
   @override
   void dispose() {
     _disposed = true;
+    _diagnosticTimer?.cancel();
+    _diagnostics.dispose();
     WidgetsBinding.instance.removeObserver(this);
     _mockTimer?.cancel();
     _describeFallback?.cancel();
     _invalidateScene();
+    _sceneFreshness.dispose();
     _frameClock.stop();
     _sceneNotifier.dispose();
     _syncWakelock();
-    unawaited(_cameraSession.dispose());
+    unawaited(_cameraFeed.dispose());
     unawaited(_disposeServices());
     super.dispose();
   }
@@ -737,7 +793,11 @@ class _CameraScreenState extends State<CameraScreen>
                           _hasError = false;
                           _statusText = 'Đang thử lại...';
                         });
-                        _initAll();
+                        if (_servicesReady) {
+                          unawaited(_cameraFeed.retry());
+                        } else {
+                          unawaited(_initAll());
+                        }
                       },
                       child: const Text('Thử lại'),
                     ),
@@ -777,7 +837,7 @@ class _CameraScreenState extends State<CameraScreen>
                 child: cameraReady && !_isMockTest
                     ? RotatedBox(
                         quarterTurns: _debugRotationOffset ~/ 90,
-                        child: CameraPreview(controller),
+                        child: CameraFeedPreview(feed: _cameraFeed),
                       )
                     : const ColoredBox(color: Color(0xFF1A1A2E)),
               ),
@@ -867,6 +927,19 @@ class _CameraScreenState extends State<CameraScreen>
                       ],
                     ),
                     const SizedBox(height: 8),
+                    if (!kReleaseMode && !_isMockTest)
+                      ExcludeSemantics(
+                        child: ValueListenableBuilder<String>(
+                          valueListenable: _diagnostics,
+                          builder: (_, text, _) => Text(
+                            text,
+                            style: const TextStyle(
+                              color: Colors.white70,
+                              fontSize: 11,
+                            ),
+                          ),
+                        ),
+                      ),
                     if (!_speech.vietnameseAvailable) ...[
                       _voiceMissingBanner(),
                       const SizedBox(height: 8),

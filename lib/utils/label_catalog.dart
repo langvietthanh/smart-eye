@@ -70,13 +70,44 @@ const Map<String, String> labelVi = {
 };
 
 const _groundHazards = {'manhole', 'pothole', 'stairs', 'hole'};
-const _vehicles = {'bicycle', 'car', 'motorbike', 'motorcycle', 'bus', 'train', 'truck'};
-const _obstacles = {
-  'bench', 'chair', 'sofa', 'couch', 'pottedplant', 'potted plant', 'diningtable',
-  'dining table', 'bed', 'toilet', 'tvmonitor', 'tv', 'refrigerator', 'fire hydrant',
-  'stop sign', 'traffic light', 'parking meter', 'suitcase',
+const _vehicles = {
+  'bicycle',
+  'car',
+  'motorbike',
+  'motorcycle',
+  'bus',
+  'train',
+  'truck',
 };
-const _animals = {'dog', 'cat', 'horse', 'cow', 'sheep', 'elephant', 'bear', 'zebra', 'giraffe'};
+const _obstacles = {
+  'bench',
+  'chair',
+  'sofa',
+  'couch',
+  'pottedplant',
+  'potted plant',
+  'diningtable',
+  'dining table',
+  'bed',
+  'toilet',
+  'tvmonitor',
+  'tv',
+  'refrigerator',
+  'fire hydrant',
+  // Traffic signs/lights identify the sign or light, not a ground-level pole.
+  'parking meter', 'suitcase',
+};
+const _animals = {
+  'dog',
+  'cat',
+  'horse',
+  'cow',
+  'sheep',
+  'elephant',
+  'bear',
+  'zebra',
+  'giraffe',
+};
 
 ObjectCategory categoryOf(String labelEn) {
   if (labelEn == 'person') return ObjectCategory.person;
@@ -88,4 +119,5 @@ ObjectCategory categoryOf(String labelEn) {
 }
 
 /// Viết hoa chữ cái đầu câu
-String capitalize(String s) => s.isEmpty ? s : s[0].toUpperCase() + s.substring(1);
+String capitalize(String s) =>
+    s.isEmpty ? s : s[0].toUpperCase() + s.substring(1);

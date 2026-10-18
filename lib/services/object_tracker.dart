@@ -3,11 +3,15 @@ import 'dart:ui';
 
 import '../models/Recognition.dart';
 import '../models/tracked_object.dart';
+import '../models/scene_info.dart';
+import '../utils/label_catalog.dart';
+import 'visual_proximity.dart';
 
 /// CN5 — Tracker IoU + centroid: gán ID cho vật qua các frame.
 ///
 /// Hysteresis xuất hiện/biến mất:
-/// - Vật chỉ được "xác nhận" sau [minHits] frame liên tiếp → lọc nhận diện nhảy lung tung
+/// - Thường xác nhận sau [minHits] frame; vật lớn chắn phía trước có thể xác nhận
+///   sau 2 frame liên tiếp có confidence >= 0.4 để cảnh báo sớm.
 /// - Vật chỉ bị xoá sau [maxMisses] frame mất liên tiếp → không báo lại khi AI chớp mất 1 frame
 class ObjectTracker {
   static const int minHits = 3;
@@ -15,6 +19,7 @@ class ObjectTracker {
   static const double _iouMatch = 0.3;
   static const double _centroidMatch = 0.15; // theo tỉ lệ đường chéo khung
   static const double _smooth = 0.5; // hệ số EMA làm mượt box
+  static const Duration maxObservationGap = Duration(milliseconds: 750);
 
   final List<TrackedObject> _tracks = [];
   int _nextId = 1;
@@ -26,6 +31,12 @@ class ObjectTracker {
     Size frame,
     DateTime now,
   ) {
+    if (frame.width <= 0 || frame.height <= 0) return [];
+    _tracks.removeWhere(
+      (track) =>
+          track.lastSeen != null &&
+          now.difference(track.lastSeen!) > maxObservationGap,
+    );
     final diag = sqrt(frame.width * frame.width + frame.height * frame.height);
 
     // Tất cả cặp (track, detection) cùng lớp có thể ghép, xếp theo độ khớp giảm dần
@@ -55,10 +66,14 @@ class ObjectTracker {
       final track = _tracks[p.t];
       final det = detections[p.d];
       track.box = Rect.lerp(track.box, det.location, _smooth)!;
+      track.observedBox = det.location;
       track.score = det.score;
+      track.confirmationConfidence = track.hits == 0
+          ? det.score
+          : min(track.confirmationConfidence, det.score);
       track.hits++;
       track.misses = 0;
-      track.addHistory(now, track.box.height / frame.height);
+      track.addHistory(now, VisualProximity.sizeRatio(det.location, frame));
     }
 
     for (int t = 0; t < _tracks.length; t++) {
@@ -66,7 +81,8 @@ class ObjectTracker {
       _tracks[t].misses++;
       // Vật chưa xác nhận phải bắt đầu lại chuỗi frame liên tiếp khi bị mất.
       // Vật đã xác nhận vẫn giữ trạng thái qua các frame AI chớp mất.
-      _tracks[t].hits = _tracks[t].hits >= minHits ? minHits : 0;
+      _tracks[t].hits = _tracks[t].confirmed ? minHits : 0;
+      if (!_tracks[t].confirmed) _tracks[t].history.clear();
     }
     _tracks.removeWhere((t) => t.misses > maxMisses);
 
@@ -81,11 +97,21 @@ class ObjectTracker {
           labelVi: det.label,
           box: det.location,
           score: det.score,
-        )..addHistory(now, det.location.height / frame.height),
+        )..addHistory(now, VisualProximity.sizeRatio(det.location, frame)),
       );
     }
 
-    return _tracks.where((t) => t.hits >= minHits && t.misses <= 2).toList();
+    for (final track in _tracks) {
+      final earlyWarning =
+          track.hits >= 2 &&
+          track.confirmationConfidence >= 0.4 &&
+          categoryOf(track.labelEn) != ObjectCategory.other &&
+          VisualProximity.inPath(track.observedBox, frame) &&
+          VisualProximity.occupancy(track.observedBox, frame) >=
+              VisualProximity.nearEnter;
+      if (track.hits >= minHits || earlyWarning) track.confirmed = true;
+    }
+    return _tracks.where((t) => t.confirmed && t.misses <= 2).toList();
   }
 
   void reset() => _tracks.clear();
