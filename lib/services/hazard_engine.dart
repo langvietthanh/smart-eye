@@ -4,55 +4,52 @@ import 'dart:ui';
 import '../models/scene_info.dart';
 import '../models/tracked_object.dart';
 import '../utils/label_catalog.dart';
+import 'visual_proximity.dart';
 
-/// F2 — Rules engine (CN4) + Free-space 3 cột (CN6) + Khoảng cách theo % box (CN7).
-///
-/// Nguyên tắc an toàn:
-/// - Mỗi frame chỉ chọn ĐÚNG 1 cảnh báo quan trọng nhất ("nói ít, đúng lúc").
-/// - Khi vật rất gần ngay trước mặt → luôn nói "Dừng lại" trước, chỉ gợi ý hướng
-///   khi phía đó thật sự trống (ưu tiên dừng lại hơn chỉ sai hướng).
+/// Relative visual risk. Bounding boxes cannot measure metres or prove that an
+/// undetected part of the scene is safe to walk through.
 class HazardEngine {
-  // CN7 — ngưỡng % chiều cao box / khung, có vùng trễ (hysteresis) để không nhảy mức
-  static const double nearEnter = 0.60;
-  static const double nearExit = 0.52;
-  static const double mediumEnter = 0.30;
-  static const double mediumExit = 0.25;
-
-  /// Box to thêm ≥ 25% trong ~1–2 giây → coi là đang tới gần
-  static const double approachGrowth = 1.25;
-
-  /// Vật chiếm ≥ 40% bề rộng cột giữa → coi là nằm trên lối đi
-  static const double _pathOverlap = 0.4;
+  static const double nearEnter = VisualProximity.nearEnter;
+  static const double nearExit = VisualProximity.nearExit;
+  static const double mediumEnter = VisualProximity.mediumEnter;
+  static const double mediumExit = VisualProximity.mediumExit;
+  static const double approachGrowth = 1.18;
+  static const double _predictionSeconds = 0.8;
 
   SceneAssessment assess(List<TrackedObject> tracks, Size frame) {
     if (frame.width <= 0 || frame.height <= 0) return SceneAssessment.empty;
-
-    final objects = tracks.map((t) => _describe(t, frame)).toList();
-    final load = _columnLoad(objects, frame);
-    final alert = _decide(objects, load, frame);
-    return SceneAssessment(objects: objects, columnLoad: load, alert: alert);
+    final objects = tracks.map((track) => _describe(track, frame)).toList();
+    return SceneAssessment(
+      objects: objects,
+      columnLoad: _columnLoad(objects, frame),
+      alert: _decide(objects, frame),
+    );
   }
 
-  // ---------------------------------------------------------------------------
-  // Mô tả từng vật
-  // ---------------------------------------------------------------------------
-
-  ObjectInfo _describe(TrackedObject t, Size frame) {
-    final ratio = t.box.height / frame.height;
-    final distance = distanceWithHysteresis(t.distanceLevel, ratio);
-    t.distanceLevel = distance;
-
-    final category = categoryOf(t.labelEn);
-    final canApproach = category == ObjectCategory.vehicle ||
-        category == ObjectCategory.animal ||
-        category == ObjectCategory.person;
-
+  ObjectInfo _describe(TrackedObject track, Size frame) {
+    final ratio = VisualProximity.occupancy(track.observedBox, frame);
+    final distance = distanceWithHysteresis(track.distanceLevel, ratio);
+    track.distanceLevel = distance;
+    final category = categoryOf(track.labelEn);
+    // Includes the user approaching a stationary obstacle. Growth in the image
+    // does not identify which object is moving in the physical world.
+    final approaching =
+        track.misses == 0 &&
+        category != ObjectCategory.other &&
+        track.growth >= approachGrowth &&
+        track.occupancyGrowthPerSecond >= 0.06;
     return ObjectInfo(
-      track: t,
-      pos: hPosOf(t.box, frame),
+      track: track,
+      pos: hPosOf(track.observedBox, frame),
       distance: distance,
       category: category,
-      approaching: canApproach && distance != DistanceLevel.far && t.growth >= approachGrowth,
+      approaching: approaching,
+      // Forecast crossing an image-occupancy threshold, not a collision time.
+      closingQuickly:
+          approaching &&
+          distance != DistanceLevel.far &&
+          ratio + track.occupancyGrowthPerSecond * _predictionSeconds >=
+              nearEnter,
     );
   }
 
@@ -63,93 +60,81 @@ class HazardEngine {
     return HPos.center;
   }
 
-  static DistanceLevel distanceWithHysteresis(DistanceLevel? prev, double ratio) {
-    final nearT = prev == DistanceLevel.near ? nearExit : nearEnter;
-    final mediumT = (prev == DistanceLevel.near || prev == DistanceLevel.medium) ? mediumExit : mediumEnter;
-    if (ratio >= nearT) return DistanceLevel.near;
-    if (ratio >= mediumT) return DistanceLevel.medium;
-    return DistanceLevel.far;
-  }
-
-  // ---------------------------------------------------------------------------
-  // CN6 — Free-space: chia 3 cột, cộng trọng số vật cản gần/vừa
-  // ---------------------------------------------------------------------------
+  static DistanceLevel distanceWithHysteresis(
+    DistanceLevel? prev,
+    double ratio,
+  ) => VisualProximity.level(prev, ratio);
 
   List<double> _columnLoad(List<ObjectInfo> objects, Size frame) {
     final load = [0.0, 0.0, 0.0];
     final colW = frame.width / 3;
-    for (final o in objects) {
-      if (!o.isRelevant || o.distance == DistanceLevel.far) continue;
-      final weight = o.distance == DistanceLevel.near ? 2.0 : 1.0;
-      for (int c = 0; c < 3; c++) {
-        if (_overlapWidth(o.track.box, c * colW, (c + 1) * colW) >= 0.25 * colW) {
-          load[c] += weight;
-        }
+    for (final object in objects) {
+      if (!object.isRelevant ||
+          object.track.misses != 0 ||
+          !VisualProximity.reachesWalkingRegion(
+            object.track.observedBox,
+            frame,
+          ) ||
+          object.distance == DistanceLevel.far) {
+        continue;
+      }
+      final weight = object.distance == DistanceLevel.near ? 2.0 : 1.0;
+      for (int col = 0; col < 3; col++) {
+        final box = object.track.observedBox;
+        final overlap = max(
+          0.0,
+          min(box.right, (col + 1) * colW) - max(box.left, col * colW),
+        );
+        if (overlap >= 0.25 * colW) load[col] += weight;
       }
     }
     return load;
   }
 
-  static double _overlapWidth(Rect box, double l, double r) =>
-      max(0.0, min(box.right, r) - max(box.left, l));
-
-  bool _inPath(ObjectInfo o, Size frame) {
-    final colW = frame.width / 3;
-    return o.pos == HPos.center || _overlapWidth(o.track.box, colW, 2 * colW) >= _pathOverlap * colW;
-  }
-
-  // ---------------------------------------------------------------------------
-  // CN4 — Rules: chọn 1 cảnh báo quan trọng nhất
-  // ---------------------------------------------------------------------------
-
-  HazardAlert? _decide(List<ObjectInfo> objects, List<double> load, Size frame) {
-    ({ObjectInfo obj, AlertLevel level, bool inPath})? best;
-
-    for (final o in objects) {
-      if (!o.isRelevant) continue;
-      final inPath = _inPath(o, frame);
-      final level = _levelOf(o, inPath);
+  HazardAlert? _decide(List<ObjectInfo> objects, Size frame) {
+    ({ObjectInfo object, AlertLevel level, bool inPath})? best;
+    for (final object in objects) {
+      // Keep briefly occluded tracks for display, but never dispatch a new
+      // warning from a box absent in the current observation.
+      if (!object.isRelevant || object.track.misses != 0) continue;
+      final inPath = VisualProximity.inPath(object.track.observedBox, frame);
+      final level = _levelOf(object, inPath);
       if (level == AlertLevel.info) continue;
-      if (best == null || _rank(o, level) > _rank(best.obj, best.level)) {
-        best = (obj: o, level: level, inPath: inPath);
+      if (best == null ||
+          _rank(object, level, inPath) >
+              _rank(best.object, best.level, best.inPath)) {
+        best = (object: object, level: level, inPath: inPath);
       }
     }
     if (best == null) return null;
-
-    final side = best.inPath ? _freeSide(best.obj, load, frame) : Guidance.none;
-    final guidance = best.level == AlertLevel.danger && best.inPath ? Guidance.stop : side;
     return HazardAlert(
       level: best.level,
-      guidance: guidance,
-      subject: 'track:${best.obj.track.id}',
-      message: _message(best.obj, best.level, best.inPath, side),
+      guidance: best.level == AlertLevel.danger
+          ? Guidance.stop
+          : Guidance.slowDown,
+      subject: 'track:${best.object.track.id}',
+      message: _message(best.object, best.level, best.inPath),
     );
   }
 
-  AlertLevel _levelOf(ObjectInfo o, bool inPath) {
-    final near = o.distance == DistanceLevel.near;
-    final medium = o.distance == DistanceLevel.medium;
-    switch (o.category) {
-      case ObjectCategory.groundHazard:
-        // Hố ga / bậc thang: gậy có thể dò được nhưng rủi ro cao → báo sớm
-        if (!inPath) return near ? AlertLevel.caution : AlertLevel.info;
-        return o.distance == DistanceLevel.far ? AlertLevel.caution : AlertLevel.danger;
-      case ObjectCategory.vehicle:
-        if (o.approaching) return inPath ? AlertLevel.danger : AlertLevel.caution;
-        if (inPath) return near ? AlertLevel.danger : (medium ? AlertLevel.caution : AlertLevel.info);
-        return near ? AlertLevel.caution : AlertLevel.info;
-      case ObjectCategory.obstacle:
-      case ObjectCategory.animal:
-        if (!inPath) return AlertLevel.info;
-        return near ? AlertLevel.danger : (medium ? AlertLevel.caution : AlertLevel.info);
-      case ObjectCategory.person:
-        // Người đi cùng chiều ở 2 mét là chuyện bình thường → chỉ báo khi rất gần hoặc đang lao tới
-        if (!inPath) return AlertLevel.info;
-        if (near) return AlertLevel.danger;
-        return o.approaching ? AlertLevel.caution : AlertLevel.info;
-      case ObjectCategory.other:
-        return AlertLevel.info;
+  AlertLevel _levelOf(ObjectInfo object, bool inPath) {
+    final near = object.distance == DistanceLevel.near;
+    final medium = object.distance == DistanceLevel.medium;
+    if (object.category == ObjectCategory.other) return AlertLevel.info;
+    if (object.category == ObjectCategory.groundHazard) {
+      if (!inPath) return near ? AlertLevel.caution : AlertLevel.info;
+      return object.distance == DistanceLevel.far
+          ? AlertLevel.caution
+          : AlertLevel.danger;
     }
+    if (inPath) {
+      if (near || object.closingQuickly) return AlertLevel.danger;
+      if (medium || object.approaching) return AlertLevel.caution;
+    } else if (object.category == ObjectCategory.vehicle &&
+        (near || object.approaching)) {
+      return AlertLevel.caution;
+    }
+    return AlertLevel.info;
   }
 
   static const _categoryRank = {
@@ -161,49 +146,24 @@ class HazardEngine {
     ObjectCategory.other: 0,
   };
 
-  int _rank(ObjectInfo o, AlertLevel level) =>
-      level.index * 100 + _categoryRank[o.category]! * 10 + (2 - o.distance.index);
+  int _rank(ObjectInfo object, AlertLevel level, bool inPath) =>
+      level.index * 1000 +
+      (inPath ? 100 : 0) +
+      _categoryRank[object.category]! * 10 +
+      (2 - object.distance.index);
 
-  /// Phía nên né sang (trái/phải), hoặc [Guidance.slowDown] nếu cả 2 bên đều bị chắn
-  Guidance _freeSide(ObjectInfo o, List<double> load, Size frame) {
-    final leftFree = load[HPos.left.index] < 1.0;
-    final rightFree = load[HPos.right.index] < 1.0;
-    if (leftFree && rightFree) {
-      // Né về phía xa tâm vật hơn
-      return o.track.box.center.dx > frame.width / 2 ? Guidance.goLeft : Guidance.goRight;
-    }
-    if (leftFree) return Guidance.goLeft;
-    if (rightFree) return Guidance.goRight;
-    return Guidance.slowDown;
-  }
-
-  /// [side]: phía trống để né (chỉ có nghĩa khi vật nằm trên lối đi)
-  String _message(ObjectInfo o, AlertLevel level, bool inPath, Guidance side) {
-    final where = inPath ? 'phía trước' : o.pos.vi;
-    final label = o.label;
-
+  String _message(ObjectInfo object, AlertLevel level, bool inPath) {
+    final where = inPath
+        ? switch (object.pos) {
+            HPos.left => 'phía trước, lệch trái',
+            HPos.right => 'phía trước, lệch phải',
+            HPos.center => 'ngay phía trước',
+          }
+        : object.pos.vi;
+    final movement = object.approaching ? ', đang gần hơn' : '';
     if (level == AlertLevel.danger) {
-      final head = o.category == ObjectCategory.groundHazard
-          ? 'Dừng lại! Có $label $where!'
-          : o.approaching
-              ? 'Dừng lại! ${capitalize(label)} đang tới gần $where!'
-              : 'Dừng lại! ${capitalize(label)} $where, rất gần.';
-      // Chỉ nêu thông tin phía trống, không ra lệnh rẽ khi đang nguy hiểm
-      return switch (side) {
-        Guidance.goLeft => '$head Bên trái trống.',
-        Guidance.goRight => '$head Bên phải trống.',
-        _ => head,
-      };
+      return 'Dừng lại! ${capitalize(object.label)} $where$movement.';
     }
-
-    final head = o.approaching
-        ? 'Cẩn thận, $label đang tới gần $where'
-        : 'Cẩn thận, $label $where, ${o.distance.vi}';
-    return switch (side) {
-      Guidance.goLeft => '$head. Đi chếch sang trái.',
-      Guidance.goRight => '$head. Đi chếch sang phải.',
-      Guidance.slowDown => '$head. Đi chậm lại.',
-      _ => '$head.',
-    };
+    return 'Chú ý, ${object.label} $where$movement. Đi chậm lại.';
   }
 }

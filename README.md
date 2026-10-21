@@ -9,13 +9,15 @@
 | | Chức năng | Cài đặt trong code |
 |---|---|---|
 | F1 🔴 | Nhìn & nhận diện | YOLOv8n INT8 + TFLite on-device (`detector_service.dart`) |
-| F2 🔴 | Cảnh báo + chỉ hướng | Tracker IoU/centroid (CN5), rules engine (CN4), free-space 3 cột (CN6), khoảng cách theo % chiều cao box (CN7) |
+| F2 🔴 | Cảnh báo + vị trí | Tracker IoU/centroid (CN5), rules engine (CN4), tải vật thể ở 3 cột (CN6), mức gần tương đối theo kích thước và diễn biến box (CN7); không đo số mét |
 | F3 🟠 | Mô tả + nói ra | Caption template (CN8), flutter_tts tiếng Việt (CN9), Speech Manager ưu tiên/barge-in/dedupe (CN10) — mặc định **chỉ mô tả khi được hỏi** |
 | F4 🟡 | Lưu lịch sử | Event log JSONL (CN11), ảnh ghi nhớ thumbnail + GPS (CN12), recap template (CN13), tự dọn: tối đa 20 chuyến / 30 ngày / 40 ảnh mỗi chuyến |
 
-**Nguyên tắc "nói ít, đúng lúc":** mỗi frame chỉ chọn 1 cảnh báo quan trọng nhất; vật phải xuất hiện ≥ 3 frame mới được báo;
+**Nguyên tắc "nói ít, đúng lúc":** mỗi frame chỉ chọn 1 cảnh báo quan trọng nhất; thông thường xác nhận sau 3 frame liên tiếp, vật lớn chắn phía trước có thể xác nhận sau 2 frame đều đạt confidence ≥ 0.4;
 cùng 1 vật chỉ nhắc lại sau 6 giây (nguy hiểm) / 10 giây (chú ý) trừ khi mức nguy hiểm tăng; cảnh báo nguy hiểm ngắt lời mọi câu khác;
-khi vật rất gần ngay trước mặt luôn nói **"Dừng lại"** và chỉ nêu phía trống, không ra lệnh rẽ.
+khi vật chiếm nhiều khung hình phía trước hoặc đang lớn nhanh sẽ nói **"Dừng lại"**, kèm tên vật và vị trí. Cảnh báo chú ý không chờ khoảng lặng 2 giây. App không suy diễn số mét hay lối đi an toàn từ chỗ chưa nhận diện được vật.
+
+Đánh giá tốc độ, RAM, dung lượng và giới hạn hiện tại: [APP-PROCESSING-ASSESSMENT.md](APP-PROCESSING-ASSESSMENT.md).
 
 ### Cách dùng trên màn hình chính
 - **Chạm 2 lần vào màn hình** hoặc nút **Xung quanh**: nghe mô tả xung quanh (F3 on-demand).
@@ -34,7 +36,7 @@ smart_eye/
 │   ├── 📁 models/yolov8n_int8.tflite   # Model YOLOv8 Quantized INT8
 │   └── 📁 labels/coco.txt             # 80 nhãn vật thể chuẩn COCO
 ├── 📁 lib/
-│   ├── 📄 main.dart                    # Khởi tạo ứng dụng & danh sách Camera
+│   ├── 📄 main.dart                    # Khởi tạo ứng dụng
 │   ├── 📁 models/
 │   │   ├── Recognition.dart            # Kết quả nhận diện 1 frame
 │   │   ├── tracked_object.dart         # Vật được theo dõi qua nhiều frame
@@ -65,7 +67,7 @@ smart_eye/
 
 ## 🚀 Hướng Dẫn Chạy Trên Thiết Bị Android Thật (Khuyên Dùng)
 
-Chạy ứng dụng trên thiết bị Android phần cứng thật sẽ cho **hiệu năng cao nhất (15-30 FPS)**, đúng góc dọc camera và đọc âm thanh trực tiếp qua loa điện thoại.
+Nên chạy trên thiết bị Android thật để kiểm tra độ trễ nhận diện, góc dọc camera và âm thanh qua loa điện thoại. App lấy mẫu AI cách nhau ít nhất **150 ms** (trần khoảng **6,7 frame/giây**, tốc độ thực tế phụ thuộc máy); tốc độ preview camera độc lập với tốc độ chạy AI.
 
 ### Bước 1: Chuẩn bị điện thoại
 1. Vào **Cài đặt** (Settings) trên điện thoại Android $\rightarrow$ **Thông tin điện thoại** (About Phone).
@@ -115,10 +117,10 @@ flutter run
 
 ### 💡 Các Tiện Ích Hỗ Trợ Test Trên Màn Hình App:
 
-- **🧪 Nút `Test UI` (Góc dưới bên phải)**:
+- **🧪 Nút `Test UI` trên màn hình lỗi camera/loading khi model đã sẵn sàng**:
   - Bấm nút này để kích hoạt chế độ **Giả lập** (lặp mỗi 8 giây, chạy qua đúng pipeline tracker → rules → giọng nói):
-    1. Xe máy phía trước to dần → *"Dừng lại! Xe máy đang tới gần phía trước!"*
-    2. Ghế ở giữa cách ~2m, người sát bên trái → *"Cẩn thận, ghế phía trước, cách khoảng 2 mét. Đi chếch sang phải."*
+    1. Xe máy phía trước to dần → *"Dừng lại! Xe máy ngay phía trước, đang gần hơn."*
+    2. Ghế ở giữa, người sát bên trái → *"Chú ý, ghế ngay phía trước. Đi chậm lại."*
   - Không cần camera — nút cũng có ở màn hình loading nếu camera lỗi.
 - **🔄 Xoay màn hình**: app tự xoay theo hướng điện thoại — preview, khung vật thể, 3 cột free-space và ảnh đưa vào AI xoay cùng nhau (tính từ góc cảm biến camera + hướng máy), không cần bấm nút.
 
@@ -156,7 +158,8 @@ rồi cài từ Windows bằng **Sideloadly**.
 - Nếu app báo **thiếu giọng tiếng Việt**: *Cài đặt → Trợ năng → Nội dung được đọc → Giọng nói → Tiếng Việt*.
 
 ### Danh sách kiểm tra trên iPhone
-- [ ] Dòng thông số dưới màn hình có số ms và "max …%" thay đổi theo cảnh (AI đang chạy)
+- [ ] Hình camera và khung nhận diện tiếp tục cập nhật sau 10 lần về màn hình chính rồi quay lại
+- [ ] Với bản debug/profile: chỉ số FPS, ms/p95 và RSS cập nhật; bản release ẩn thông số kỹ thuật
 - [ ] Hướng camera vào người / ô tô → hiện khung, hình đứng thẳng
 - [ ] Gạt nút im lặng → vẫn nghe cảnh báo
 - [ ] Xoay ngang / dọc → khung vật vẫn khớp hình
@@ -183,6 +186,17 @@ rồi cài từ Windows bằng **Sideloadly**.
 ```bash
 flutter test
 ```
+
+### Luồng xử lý thời gian thực
+- Một isolate sống xuyên suốt phiên nhận diện giữ model, chuyển ảnh, chạy TFLite và lọc box; luồng giao diện chỉ nhận kết quả.
+- Chỉ xử lý một frame tại một thời điểm, không xếp hàng frame cũ. Bộ đệm tensor được tái sử dụng; ảnh JPEG ghi nhớ được mã hóa ở isolate riêng khi cần.
+- Chỉ cập nhật lớp khung nhận diện khi có kết quả; không rebuild cả màn hình camera mỗi frame.
+- Luồng ảnh được dừng trước khi hủy camera khi app ra nền, mở lịch sử hoặc bật giả lập. Khi quay lại, camera và preview được tạo mới. Nếu luồng im lặng 4 giây, app thử mở lại một lần rồi hiện lỗi có nút thử lại.
+- Kết quả đang chạy bị bỏ nếu camera, hướng máy hoặc màn hình đã thay đổi. Cảnh quá 750 ms kể từ lúc nhận frame được xóa, kể cả khi AI không trả thêm kết quả; cảnh báo đang chờ được cập nhật theo vật và mức nguy hiểm hiện tại.
+- Bản debug/profile hiển thị FPS hoàn tất xử lý, độ trễ nhận kết quả trung bình/p95 của tối đa 120 mẫu và RSS. Độ trễ này chưa gồm camera thu ảnh, dựng giao diện hoặc âm thanh TTS thực sự phát ra.
+- Các test bao phủ chuyển màu/quantization, giao tiếp isolate và đóng tài nguyên, vòng đời camera, tracker và thứ tự ngắt/phát giọng nói.
+
+Kiểm tra trên điện thoại bằng `flutter run --profile`: xoay máy khi đang nhận diện, ra nền rồi quay lại nhiều lần, mở/đóng lịch sử và yêu cầu mô tả lúc có cảnh báo. Dùng Flutter DevTools để đo độ trễ/khung hình; unit test trên máy tính không thay thế phép đo hiệu năng hay kiểm tra delegate TFLite trên Android/iOS.
 
 ### Đánh giá model trên COCO (COCO128)
 ```bash

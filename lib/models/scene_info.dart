@@ -3,7 +3,7 @@ import 'tracked_object.dart';
 /// Vị trí ngang của vật trong khung hình (chia 3 cột — CN6)
 enum HPos { left, center, right }
 
-/// Mức khoảng cách ước lượng từ % chiều cao box (CN7)
+/// Mức chiếm ảnh tương đối; không phải khoảng cách vật lý đã đo.
 enum DistanceLevel { near, medium, far }
 
 /// Nhóm vật thể — quyết định mức độ nguy hiểm (CN4)
@@ -17,18 +17,18 @@ enum Guidance { none, goLeft, goRight, stop, slowDown }
 
 extension HPosText on HPos {
   String get vi => switch (this) {
-        HPos.left => 'bên trái',
-        HPos.center => 'phía trước',
-        HPos.right => 'bên phải',
-      };
+    HPos.left => 'bên trái',
+    HPos.center => 'phía trước',
+    HPos.right => 'bên phải',
+  };
 }
 
 extension DistanceText on DistanceLevel {
   String get vi => switch (this) {
-        DistanceLevel.near => 'rất gần',
-        DistanceLevel.medium => 'cách khoảng 2 mét',
-        DistanceLevel.far => 'ở xa',
-      };
+    DistanceLevel.near => 'có thể rất gần',
+    DistanceLevel.medium => 'có thể ở gần',
+    DistanceLevel.far => 'chưa rõ khoảng cách',
+  };
 }
 
 /// Thông tin 1 vật sau khi qua rules engine: vị trí, khoảng cách, loại, đang tới gần?
@@ -38,6 +38,7 @@ class ObjectInfo {
   final DistanceLevel distance;
   final ObjectCategory category;
   final bool approaching;
+  final bool closingQuickly;
 
   const ObjectInfo({
     required this.track,
@@ -45,6 +46,7 @@ class ObjectInfo {
     required this.distance,
     required this.category,
     required this.approaching,
+    this.closingQuickly = false,
   });
 
   String get label => track.labelVi;
@@ -74,11 +76,15 @@ class HazardAlert {
 class SceneAssessment {
   final List<ObjectInfo> objects;
 
-  /// Trọng số vật cản của 3 cột [trái, giữa, phải] — 0 là trống
+  /// Trọng số vật đã nhận diện trong 3 cột. 0 không chứng minh lối đi an toàn.
   final List<double> columnLoad;
   final HazardAlert? alert;
 
-  const SceneAssessment({required this.objects, required this.columnLoad, this.alert});
+  const SceneAssessment({
+    required this.objects,
+    required this.columnLoad,
+    this.alert,
+  });
 
   static const empty = SceneAssessment(objects: [], columnLoad: [0, 0, 0]);
 

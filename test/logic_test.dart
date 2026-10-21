@@ -10,7 +10,8 @@ import 'package:smart_eye/services/object_tracker.dart';
 
 const frame = Size(400, 800);
 
-Recognition rec(String en, String vi, int id, Rect r) => Recognition(id, vi, 0.9, r, labelEn: en);
+Recognition rec(String en, String vi, int id, Rect r) =>
+    Recognition(id, vi, 0.9, r, labelEn: en);
 
 /// Box nằm giữa, cao [ratio] khung hình
 Rect centerBox(double ratio, {double cx = 200, double aspect = 0.5}) {
@@ -20,8 +21,13 @@ Rect centerBox(double ratio, {double cx = 200, double aspect = 0.5}) {
 }
 
 /// Chạy [frames] frame với cùng 1 danh sách detection, trả về đánh giá cuối
-SceneAssessment run(ObjectTracker tracker, HazardEngine engine, List<Recognition> dets,
-    {int frames = 4, DateTime? start}) {
+SceneAssessment run(
+  ObjectTracker tracker,
+  HazardEngine engine,
+  List<Recognition> dets, {
+  int frames = 4,
+  DateTime? start,
+}) {
   var t = start ?? DateTime(2026);
   var scene = SceneAssessment.empty;
   for (int i = 0; i < frames; i++) {
@@ -59,38 +65,79 @@ void main() {
       }
       expect(tracker.update([], frame, t0), isEmpty);
     });
+
+    test('nhận diện chập chờn không cộng dồn thành vật đã xác nhận', () {
+      final tracker = ObjectTracker();
+      final d = [rec('car', 'xe ô tô', 2, centerBox(0.3))];
+      final t0 = DateTime(2026);
+      for (int i = 0; i < 4; i++) {
+        expect(tracker.update(d, frame, t0), isEmpty);
+        expect(tracker.update([], frame, t0), isEmpty);
+      }
+      expect(tracker.update(d, frame, t0), isEmpty);
+      expect(tracker.update(d, frame, t0), isEmpty);
+      expect(tracker.update(d, frame, t0), hasLength(1));
+    });
+
+    test('vật đã xác nhận giữ ID khi xuất hiện lại sau vài frame mất', () {
+      final tracker = ObjectTracker();
+      final d = [rec('car', 'xe ô tô', 2, centerBox(0.3))];
+      final t0 = DateTime(2026);
+      tracker.update(d, frame, t0);
+      tracker.update(d, frame, t0);
+      final id = tracker.update(d, frame, t0).single.id;
+      for (int i = 0; i < 3; i++) {
+        tracker.update([], frame, t0);
+      }
+      expect(tracker.update(d, frame, t0).single.id, id);
+    });
   });
 
   group('HazardEngine (CN4/CN6/CN7)', () {
     test('khoảng cách theo % box có vùng trễ', () {
-      expect(HazardEngine.distanceWithHysteresis(null, 0.65), DistanceLevel.near);
-      expect(HazardEngine.distanceWithHysteresis(null, 0.55), DistanceLevel.medium);
-      // Đang "gần" thì phải xuống dưới 0.52 mới đổi mức
-      expect(HazardEngine.distanceWithHysteresis(DistanceLevel.near, 0.55), DistanceLevel.near);
+      expect(
+        HazardEngine.distanceWithHysteresis(null, 0.65),
+        DistanceLevel.near,
+      );
+      expect(
+        HazardEngine.distanceWithHysteresis(null, 0.42),
+        DistanceLevel.medium,
+      );
+      // Vùng trễ tránh nhảy mức khi chiếm ảnh dao động quanh ngưỡng.
+      expect(
+        HazardEngine.distanceWithHysteresis(DistanceLevel.near, 0.42),
+        DistanceLevel.near,
+      );
       expect(HazardEngine.distanceWithHysteresis(null, 0.1), DistanceLevel.far);
     });
 
     test('vật cản rất gần ngay phía trước → Dừng lại', () {
-      final scene = run(ObjectTracker(), HazardEngine(), [rec('chair', 'ghế', 56, centerBox(0.7))]);
+      final scene = run(ObjectTracker(), HazardEngine(), [
+        rec('chair', 'ghế', 56, centerBox(0.7)),
+      ]);
       expect(scene.alert?.level, AlertLevel.danger);
       expect(scene.alert?.guidance, Guidance.stop);
       expect(scene.alert?.message, startsWith('Dừng lại!'));
     });
 
-    test('vật cản cách ~2m ở giữa, bên trái có người → gợi ý đi sang phải', () {
+    test('vật ở giữa → đi chậm, không suy diễn mét hay chỉ đường trống', () {
       final scene = run(ObjectTracker(), HazardEngine(), [
         rec('chair', 'ghế', 56, centerBox(0.4)),
         rec('person', 'người', 0, Rect.fromLTWH(10, 100, 110, 600)),
       ]);
       expect(scene.alert?.level, AlertLevel.caution);
-      expect(scene.alert?.guidance, Guidance.goRight);
+      expect(scene.alert?.guidance, Guidance.slowDown);
+      expect(scene.alert?.message, 'Chú ý, ghế ngay phía trước. Đi chậm lại.');
+      expect(scene.alert?.message, isNot(contains('mét')));
       expect(scene.isColumnFree(HPos.left), isFalse);
       expect(scene.isColumnFree(HPos.right), isTrue);
     });
 
-    test('người đi phía trước ở 2m không bị báo (nói ít)', () {
-      final scene = run(ObjectTracker(), HazardEngine(), [rec('person', 'người', 0, centerBox(0.4))]);
-      expect(scene.alert, isNull);
+    test('người chắn phía trước được báo chú ý sớm', () {
+      final scene = run(ObjectTracker(), HazardEngine(), [
+        rec('person', 'người', 0, centerBox(0.4)),
+      ]);
+      expect(scene.alert?.level, AlertLevel.caution);
     });
 
     test('xe máy phình to dần → đang tới gần → nguy hiểm', () {
@@ -100,16 +147,25 @@ void main() {
       var scene = SceneAssessment.empty;
       for (int i = 0; i < 10; i++) {
         final ratio = 0.3 + i * 0.02; // vẫn dưới ngưỡng "gần"
-        scene = engine.assess(tracker.update([rec('motorcycle', 'xe máy', 3, centerBox(ratio))], frame, t), frame);
+        scene = engine.assess(
+          tracker.update(
+            [rec('motorcycle', 'xe máy', 3, centerBox(ratio))],
+            frame,
+            t,
+          ),
+          frame,
+        );
         t = t.add(const Duration(milliseconds: 150));
       }
       expect(scene.objects.single.approaching, isTrue);
       expect(scene.alert?.level, AlertLevel.danger);
-      expect(scene.alert?.message, contains('đang tới gần'));
+      expect(scene.alert?.message, contains('đang gần hơn'));
     });
 
     test('vật không liên quan (cốc) không gây cảnh báo', () {
-      final scene = run(ObjectTracker(), HazardEngine(), [rec('cup', 'cốc', 41, centerBox(0.7))]);
+      final scene = run(ObjectTracker(), HazardEngine(), [
+        rec('cup', 'cốc', 41, centerBox(0.7)),
+      ]);
       expect(scene.alert, isNull);
     });
   });
@@ -122,12 +178,15 @@ void main() {
         rec('motorcycle', 'xe máy', 3, centerBox(0.15, cx: 350)),
       ]);
       final text = CaptionBuilder.describeScene(scene);
-      expect(text, contains('Phía trước có 2 người, gần nhất cách khoảng 2 mét.'));
-      expect(text, contains('Bên phải có xe máy, ở xa.'));
+      expect(text, contains('Phía trước có 2 người, gần nhất có thể ở gần.'));
+      expect(text, contains('Bên phải có xe máy, chưa rõ khoảng cách.'));
     });
 
     test('không có gì → câu ngắn', () {
-      expect(CaptionBuilder.describeScene(SceneAssessment.empty), 'Phía trước không thấy vật cản nào.');
+      expect(
+        CaptionBuilder.describeScene(SceneAssessment.empty),
+        'Chưa nhận diện được vật thể. Chưa xác định được lối đi an toàn.',
+      );
     });
 
     test('recap chuyến đi', () {

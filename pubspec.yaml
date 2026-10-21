@@ -43,6 +43,7 @@ dependencies:
   wakelock_plus: ^1.8.0
 
 dev_dependencies:
+  camera_platform_interface: ^2.13.1
   flutter_test:
     sdk: flutter
 
