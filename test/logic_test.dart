@@ -100,12 +100,12 @@ void main() {
         DistanceLevel.near,
       );
       expect(
-        HazardEngine.distanceWithHysteresis(null, 0.55),
+        HazardEngine.distanceWithHysteresis(null, 0.42),
         DistanceLevel.medium,
       );
-      // Đang "gần" thì phải xuống dưới 0.52 mới đổi mức
+      // Vùng trễ tránh nhảy mức khi chiếm ảnh dao động quanh ngưỡng.
       expect(
-        HazardEngine.distanceWithHysteresis(DistanceLevel.near, 0.55),
+        HazardEngine.distanceWithHysteresis(DistanceLevel.near, 0.42),
         DistanceLevel.near,
       );
       expect(HazardEngine.distanceWithHysteresis(null, 0.1), DistanceLevel.far);
@@ -120,22 +120,24 @@ void main() {
       expect(scene.alert?.message, startsWith('Dừng lại!'));
     });
 
-    test('vật cản cách ~2m ở giữa, bên trái có người → gợi ý đi sang phải', () {
+    test('vật ở giữa → đi chậm, không suy diễn mét hay chỉ đường trống', () {
       final scene = run(ObjectTracker(), HazardEngine(), [
         rec('chair', 'ghế', 56, centerBox(0.4)),
         rec('person', 'người', 0, Rect.fromLTWH(10, 100, 110, 600)),
       ]);
       expect(scene.alert?.level, AlertLevel.caution);
-      expect(scene.alert?.guidance, Guidance.goRight);
+      expect(scene.alert?.guidance, Guidance.slowDown);
+      expect(scene.alert?.message, 'Chú ý, ghế ngay phía trước. Đi chậm lại.');
+      expect(scene.alert?.message, isNot(contains('mét')));
       expect(scene.isColumnFree(HPos.left), isFalse);
       expect(scene.isColumnFree(HPos.right), isTrue);
     });
 
-    test('người đi phía trước ở 2m không bị báo (nói ít)', () {
+    test('người chắn phía trước được báo chú ý sớm', () {
       final scene = run(ObjectTracker(), HazardEngine(), [
         rec('person', 'người', 0, centerBox(0.4)),
       ]);
-      expect(scene.alert, isNull);
+      expect(scene.alert?.level, AlertLevel.caution);
     });
 
     test('xe máy phình to dần → đang tới gần → nguy hiểm', () {
@@ -157,7 +159,7 @@ void main() {
       }
       expect(scene.objects.single.approaching, isTrue);
       expect(scene.alert?.level, AlertLevel.danger);
-      expect(scene.alert?.message, contains('đang tới gần'));
+      expect(scene.alert?.message, contains('đang gần hơn'));
     });
 
     test('vật không liên quan (cốc) không gây cảnh báo', () {
@@ -176,17 +178,14 @@ void main() {
         rec('motorcycle', 'xe máy', 3, centerBox(0.15, cx: 350)),
       ]);
       final text = CaptionBuilder.describeScene(scene);
-      expect(
-        text,
-        contains('Phía trước có 2 người, gần nhất cách khoảng 2 mét.'),
-      );
-      expect(text, contains('Bên phải có xe máy, ở xa.'));
+      expect(text, contains('Phía trước có 2 người, gần nhất có thể ở gần.'));
+      expect(text, contains('Bên phải có xe máy, chưa rõ khoảng cách.'));
     });
 
     test('không có gì → câu ngắn', () {
       expect(
         CaptionBuilder.describeScene(SceneAssessment.empty),
-        'Phía trước không thấy vật cản nào.',
+        'Chưa nhận diện được vật thể. Chưa xác định được lối đi an toàn.',
       );
     });
 

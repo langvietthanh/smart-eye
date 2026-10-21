@@ -6,12 +6,14 @@ class CameraSession<T extends Object> {
     required this._close,
     required this._onChanged,
     required this._onError,
+    this._activate,
   });
 
   final Future<T> Function() _open;
   final Future<void> Function(T) _close;
   final void Function(T?) _onChanged;
   final void Function(Object, StackTrace) _onError;
+  final Future<void> Function(T)? _activate;
   Future<void> _operations = Future.value();
   T? _resource;
   bool _active = false;
@@ -32,6 +34,13 @@ class CameraSession<T extends Object> {
     if (_disposed) return _operations;
     _disposed = true;
     _active = false;
+    _generation++;
+    return _enqueue();
+  }
+
+  /// Replace a failed/stalled camera even if the screen is still active.
+  Future<void> restart() {
+    if (_disposed) return _operations;
     _generation++;
     return _enqueue();
   }
@@ -65,5 +74,15 @@ class CameraSession<T extends Object> {
     _resource = resource;
     _resourceGeneration = generation;
     _onChanged(resource);
+    try {
+      // Publish the initialized controller before subscribing to camera frames.
+      // The very first frame therefore belongs to the current controller.
+      if (_active && generation == _generation) await _activate?.call(resource);
+    } catch (_) {
+      _resource = null;
+      _onChanged(null);
+      await _close(resource);
+      rethrow;
+    }
   }
 }

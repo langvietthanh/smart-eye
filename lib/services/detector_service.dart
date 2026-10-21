@@ -10,6 +10,7 @@ import 'package:tflite_flutter/tflite_flutter.dart';
 import '../models/Recognition.dart';
 import '../utils/image_utils.dart';
 import '../utils/label_catalog.dart';
+import 'performance_metrics.dart';
 import 'processing_worker.dart';
 
 /// Dịch vụ nhận diện vật thể dùng YOLOv8 TFLite.
@@ -29,6 +30,7 @@ class DetectorService {
   int lastFrameMs = 0;
   double lastMaxScore = 0;
   String lastMaxLabel = '';
+  final DetectorPerformance performance = DetectorPerformance();
 
   Future<void> loadModel() {
     if (_disposed) return Future.error(StateError('Detector is disposed'));
@@ -66,18 +68,34 @@ class DetectorService {
     int rotationDegrees = 90,
   }) async {
     final worker = _worker;
-    if (_disposed || worker == null || _busy) return [];
+    if (_disposed || worker == null) {
+      performance.skippedUnavailable++;
+      return [];
+    }
+    if (_busy) {
+      performance.skippedBusy++;
+      return [];
+    }
     _busy = true;
+    final watch = Stopwatch()..start();
     try {
       final result = await worker.run(
         _DetectionRequest(image, screenWidth, screenHeight, rotationDegrees),
       );
+      watch.stop();
       if (_disposed) return [];
-      lastFrameMs = result.elapsedMs;
+      performance.record(
+        result.timings.withEndToEnd(watch.elapsedMicroseconds),
+      );
+      lastFrameMs = result.timings.workerUs ~/ 1000;
       lastMaxScore = result.maxScore;
       lastMaxLabel = result.maxLabel;
       return result.detections;
+    } catch (_) {
+      performance.failedFrames++;
+      rethrow;
     } finally {
+      watch.stop();
       _busy = false;
     }
   }
@@ -110,12 +128,12 @@ class _DetectionRequest {
 class _DetectionResult {
   const _DetectionResult(
     this.detections,
-    this.elapsedMs,
+    this.timings,
     this.maxScore,
     this.maxLabel,
   );
   final List<Recognition> detections;
-  final int elapsedMs;
+  final DetectionTimings timings;
   final double maxScore;
   final String maxLabel;
 }
@@ -280,11 +298,14 @@ class _DetectorProcessor
         outputBuffer: _inputBuffer,
       );
       if (inputBytes == null) throw StateError('Frame camera không hợp lệ');
+      final preprocessedAt = watch.elapsedMicroseconds;
 
       // Fixed-size input: copy directly into the allocated tensor. runInference
       // would allocate and copy through an extra native buffer on every frame.
       _inputTensor.data = inputBytes;
+      final copiedAt = watch.elapsedMicroseconds;
       _interpreter!.invoke();
+      final inferredAt = watch.elapsedMicroseconds;
       _frameCount++;
 
       final results = _parseOutput(
@@ -292,8 +313,27 @@ class _DetectorProcessor
         screenWidth: request.width,
         screenHeight: request.height,
       );
-      lastFrameMs = watch.elapsedMilliseconds;
-      return _DetectionResult(results, lastFrameMs, lastMaxScore, lastMaxLabel);
+      final finishedAt = watch.elapsedMicroseconds;
+      lastFrameMs = finishedAt ~/ 1000;
+      final timings = DetectionTimings(
+        preprocessUs: preprocessedAt,
+        inputCopyUs: copiedAt - preprocessedAt,
+        inferenceUs: inferredAt - copiedAt,
+        postprocessUs: finishedAt - inferredAt,
+        workerUs: finishedAt,
+        endToEndUs: 0, // Filled after the result returns to the UI isolate.
+      );
+      if (kDebugMode && _frameCount % 30 == 0) {
+        debugPrint(
+          '[Frame $_frameCount] ${lastFrameMs}ms, '
+          'pre=${(timings.preprocessUs / 1000).toStringAsFixed(1)} '
+          'copy=${(timings.inputCopyUs / 1000).toStringAsFixed(1)} '
+          'infer=${(timings.inferenceUs / 1000).toStringAsFixed(1)} '
+          'post=${(timings.postprocessUs / 1000).toStringAsFixed(1)}ms, '
+          'max=${(lastMaxScore * 100).toStringAsFixed(1)}% ($lastMaxLabel)',
+        );
+      }
+      return _DetectionResult(results, timings, lastMaxScore, lastMaxLabel);
     } finally {
       watch.stop();
     }
@@ -395,13 +435,6 @@ class _DetectorProcessor
     lastMaxLabel = maxOverallClass >= 0
         ? (labelVi[_labels[maxOverallClass]] ?? _labels[maxOverallClass])
         : '';
-    if (_frameCount % 10 == 0) {
-      final maxLabel = maxOverallClass >= 0 ? _labels[maxOverallClass] : 'none';
-      debugPrint(
-        '[Frame $_frameCount] ${lastFrameMs}ms, Max score: ${(maxOverallScore * 100).toStringAsFixed(1)}% ($maxLabel), Candidates: ${candidates.length}',
-      );
-    }
-
     // Non-Maximum Suppression
     return _applyNMS(candidates);
   }

@@ -1,17 +1,13 @@
 import 'package:flutter/material.dart';
-import 'package:camera/camera.dart';
+
 import 'screens/camera_screen.dart';
 
-/// Danh sách camera của thiết bị — dùng toàn cục
-late List<CameraDescription> cameras;
-
-Future<void> main() async {
+void main() {
   // Đảm bảo các plugin được khởi tạo trước khi app chạy
   WidgetsFlutterBinding.ensureInitialized();
 
-  // Lấy danh sách camera có trên thiết bị
-  cameras = await availableCameras();
-
+  // Camera discovery belongs to the screen's retryable lifecycle. A plugin or
+  // permission failure must not prevent the app and its error UI from starting.
   runApp(const SmartEyeApp());
 }
 

@@ -46,6 +46,168 @@ SpeechManager managerFor(WidgetTester tester, FakeTts tts) =>
     SpeechManager.forTesting(tts: tts, now: tester.binding.clock.now);
 
 void main() {
+  testWidgets('changed position replaces a queued alert at the same priority', (
+    tester,
+  ) async {
+    final tts = FakeTts();
+    final manager = managerFor(tester, tts);
+    manager.say('Mô tả', SpeechPriority.description);
+    tts.stopGate = Completer<void>();
+    manager.say('Xe bên trái', SpeechPriority.caution, subject: 'track:1');
+    manager.retainAlerts(
+      subject: 'track:1',
+      priority: SpeechPriority.caution,
+      text: 'Xe bên phải',
+    );
+    expect(
+      manager.say('Xe bên phải', SpeechPriority.caution, subject: 'track:1'),
+      isTrue,
+    );
+    tts.stopGate!.complete();
+    await tester.pump();
+    expect(tts.spoken, ['Mô tả', 'Xe bên phải']);
+    await manager.stopAll();
+  });
+
+  testWidgets('lower scene risk replaces a pending stop for the same subject', (
+    tester,
+  ) async {
+    final tts = FakeTts();
+    final manager = managerFor(tester, tts);
+    manager.say('Mô tả', SpeechPriority.description);
+    tts.stopGate = Completer<void>();
+    var dangerDispatched = false;
+    manager.say(
+      'Dừng lại',
+      SpeechPriority.danger,
+      subject: 'track:1',
+      onStart: () => dangerDispatched = true,
+    );
+    manager.retainAlerts(subject: 'track:1', priority: SpeechPriority.caution);
+    expect(manager.canSay(SpeechPriority.caution, subject: 'track:1'), isTrue);
+    manager.say('Đi chậm lại', SpeechPriority.caution, subject: 'track:1');
+    tts.stopGate!.complete();
+    await tester.pump();
+
+    expect(tts.spoken, ['Mô tả', 'Đi chậm lại']);
+    expect(dangerDispatched, isFalse);
+    await manager.stopAll();
+  });
+
+  testWidgets('danger replaces pending caution for the same subject', (
+    tester,
+  ) async {
+    final tts = FakeTts();
+    final manager = managerFor(tester, tts);
+    manager.say('Mô tả', SpeechPriority.description);
+    tts.stopGate = Completer<void>();
+    var cautionDispatched = false;
+    manager.say(
+      'Đi chậm lại',
+      SpeechPriority.caution,
+      subject: 'track:1',
+      onStart: () => cautionDispatched = true,
+    );
+    manager.say('Dừng lại', SpeechPriority.danger, subject: 'track:1');
+    expect(manager.canSay(SpeechPriority.caution, subject: 'track:1'), isFalse);
+    tts.stopGate!.complete();
+    await tester.pump();
+    tts.finish();
+    await tester.pump();
+
+    expect(tts.spoken, ['Mô tả', 'Dừng lại']);
+    expect(cautionDispatched, isFalse);
+    await manager.stopAll();
+  });
+
+  testWidgets('caution starts immediately after a completed description', (
+    tester,
+  ) async {
+    final tts = FakeTts();
+    final manager = managerFor(tester, tts);
+    manager.say('Mô tả', SpeechPriority.description);
+    tts.finish();
+    await tester.pump();
+
+    manager.say('Đi chậm lại', SpeechPriority.caution, subject: 'track:1');
+    expect(tts.spoken, ['Mô tả', 'Đi chậm lại']);
+    await manager.stopAll();
+  });
+
+  testWidgets(
+    'caution interrupts lower priority without waiting for quiet gap',
+    (tester) async {
+      final tts = FakeTts();
+      final manager = managerFor(tester, tts);
+      manager.say('Mô tả', SpeechPriority.description);
+      tts.finish();
+      await tester.pump();
+      manager.say('Nghe lại', SpeechPriority.playback);
+      tts.stopGate = Completer<void>();
+      manager.say('Đi chậm lại', SpeechPriority.caution, subject: 'track:1');
+      expect(tts.spoken, ['Mô tả', 'Nghe lại']);
+
+      tts.stopGate!.complete();
+      await tester.pump();
+      expect(tts.spoken, ['Mô tả', 'Nghe lại', 'Đi chậm lại']);
+      await manager.stopAll();
+    },
+  );
+
+  testWidgets(
+    'scene invalidation drops queued alerts but keeps manual description',
+    (tester) async {
+      final tts = FakeTts();
+      final manager = managerFor(tester, tts);
+      manager.say('Dừng lại', SpeechPriority.danger);
+      final caution = manager.sayAndWait('Cảnh báo cũ', SpeechPriority.caution);
+      final description = manager.sayAndWait(
+        'Mô tả khi hỏi',
+        SpeechPriority.description,
+      );
+      manager.retainAlerts();
+      expect(await caution, isFalse);
+
+      tts.finish();
+      await tester.pump();
+      await tester.pump(const Duration(seconds: 2));
+      expect(tts.spoken, ['Dừng lại', 'Mô tả khi hỏi']);
+      tts.finish();
+      await tester.pump();
+      expect(await description, isTrue);
+      await manager.stopAll();
+    },
+  );
+
+  testWidgets(
+    'retaining the current subject drops an old queued alert during stop',
+    (tester) async {
+      final tts = FakeTts();
+      final manager = managerFor(tester, tts);
+      manager.say('Mô tả', SpeechPriority.description);
+      tts.stopGate = Completer<void>();
+      manager.say('Vật cản cũ', SpeechPriority.caution, subject: 'track:1');
+      manager.say(
+        'Vật cản hiện tại',
+        SpeechPriority.danger,
+        subject: 'track:2',
+      );
+      manager.retainAlerts(subject: 'track:2');
+      tts.stopGate!.complete();
+      await tester.pump();
+
+      expect(tts.spoken, ['Mô tả', 'Vật cản hiện tại']);
+      tts.finish();
+      await tester.pump();
+      expect(tts.spoken, ['Mô tả', 'Vật cản hiện tại']);
+      expect(
+        manager.canSay(SpeechPriority.caution, subject: 'track:1'),
+        isTrue,
+      );
+      await manager.stopAll();
+    },
+  );
+
   testWidgets('danger waits for native stop before interrupting description', (
     tester,
   ) async {
