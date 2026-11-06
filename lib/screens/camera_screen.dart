@@ -87,6 +87,7 @@ class _CameraScreenState extends State<CameraScreen>
   final DetectorService _detector = DetectorService();
   final DepthService _depth = DepthService();
   final DepthWarning _depthWarning = DepthWarning();
+  final StepWarning _stepWarning = StepWarning();
   static const int _minDepthIntervalMs = 300;
   int _lastDepthMs = -300;
   double? _boxProximity;
@@ -425,6 +426,7 @@ class _CameraScreenState extends State<CameraScreen>
     _boxProximity = null;
     _depthProximity = null;
     _depthWarning.reset();
+    _stepWarning.reset();
     _pulse.stop();
   }
 
@@ -560,6 +562,12 @@ class _CameraScreenState extends State<CameraScreen>
       atMs: _frameClock.elapsedMilliseconds,
     );
     _updatePulse();
+    final step = _stepWarning.update(reading.step);
+    if (step != null) {
+      // A step's raised surface can also read as "closer"; announce the step.
+      _announceStep(step.kind, step.level);
+      return;
+    }
     final level = _depthWarning.update(reading.center);
     // The detector's alert names the obstacle; depth only covers the rest.
     if (level == AlertLevel.info || _scene.alert != null) return;
@@ -581,6 +589,40 @@ class _CameraScreenState extends State<CameraScreen>
       subject: subject,
       onStart: () {
         if (isDanger) HapticFeedback.heavyImpact();
+        log();
+      },
+    );
+  }
+
+  void _announceStep(StepKind kind, AlertLevel level) {
+    final isDanger = level == AlertLevel.danger;
+    final priority = isDanger ? SpeechPriority.danger : SpeechPriority.caution;
+    final subject = 'depth:step:${kind.name}';
+    if (!_speech.canSay(priority, subject: subject)) return;
+    _lastAlertAt = DateTime.now();
+    final text = switch (kind) {
+      StepKind.down => 'Dừng lại! Có bậc xuống phía trước. Dò bằng gậy.',
+      StepKind.up when isDanger =>
+        'Dừng lại! Bậc lên ngay phía trước. Dò bằng gậy.',
+      StepKind.up => 'Chú ý, phía trước có bậc lên. Đi chậm lại.',
+    };
+    final log = _eventLogger(
+      isDanger ? TripEventType.danger : TripEventType.caution,
+      text,
+    );
+    _speech.say(
+      text,
+      priority,
+      subject: subject,
+      onStart: () {
+        // Double pulse: a step feels different from an obstacle.
+        HapticFeedback.heavyImpact();
+        unawaited(
+          Future.delayed(
+            const Duration(milliseconds: 180),
+            HapticFeedback.heavyImpact,
+          ),
+        );
         log();
       },
     );
