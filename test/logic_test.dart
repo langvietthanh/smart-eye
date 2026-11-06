@@ -7,6 +7,7 @@ import 'package:smart_eye/models/trip.dart';
 import 'package:smart_eye/services/caption_builder.dart';
 import 'package:smart_eye/services/hazard_engine.dart';
 import 'package:smart_eye/services/object_tracker.dart';
+import 'package:smart_eye/utils/label_catalog.dart';
 
 const frame = Size(400, 800);
 
@@ -203,5 +204,15 @@ void main() {
         'gặp 3 cảnh báo nguy hiểm.',
       );
     });
+  });
+
+  test('detector keeps every categorised class and signs, drops the rest', () {
+    for (final label in ['cow', 'horse', 'suitcase', 'chair', 'car']) {
+      expect(isDetectionRelevant(label), isTrue, reason: label);
+    }
+    expect(isDetectionRelevant('traffic light'), isTrue);
+    expect(isDetectionRelevant('stop sign'), isTrue);
+    expect(isDetectionRelevant('cup'), isFalse);
+    expect(isDetectionRelevant('book'), isFalse);
   });
 }

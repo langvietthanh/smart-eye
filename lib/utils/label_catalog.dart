@@ -118,6 +118,13 @@ ObjectCategory categoryOf(String labelEn) {
   return ObjectCategory.other;
 }
 
+/// Classes the detector keeps. Traffic lights and stop signs are not
+/// obstacles but are still worth mentioning in descriptions.
+bool isDetectionRelevant(String labelEn) =>
+    labelEn == 'traffic light' ||
+    labelEn == 'stop sign' ||
+    categoryOf(labelEn) != ObjectCategory.other;
+
 /// Viết hoa chữ cái đầu câu
 String capitalize(String s) =>
     s.isEmpty ? s : s[0].toUpperCase() + s.substring(1);
