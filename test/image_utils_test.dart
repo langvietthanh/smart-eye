@@ -490,4 +490,8 @@ void main() {
       130,
     ]);
   });
+
+  test('meanLuma averages a sampled grid of the frame', () {
+    expect(ImageUtils.meanLuma(grayImage(), grid: 2), closeTo(25, 0.01));
+  });
 }

@@ -5,6 +5,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:camera/camera.dart';
+import 'package:sensors_plus/sensors_plus.dart';
 import 'package:wakelock_plus/wakelock_plus.dart';
 
 import '../models/Recognition.dart';
@@ -19,7 +20,9 @@ import '../services/hazard_engine.dart';
 import '../services/history_service.dart';
 import '../services/location_service.dart';
 import '../services/object_tracker.dart';
+import '../services/proximity_pulse.dart';
 import '../services/scene_freshness.dart';
+import '../services/sight_monitor.dart';
 import '../services/speech_manager.dart';
 import '../utils/image_utils.dart';
 import 'history_screen.dart';
@@ -86,6 +89,14 @@ class _CameraScreenState extends State<CameraScreen>
   final SpeechManager _speech = SpeechManager.instance;
   final HistoryService _history = HistoryService.instance;
   final LocationService _location = LocationService();
+  final SightMonitor _sight = SightMonitor();
+  Timer? _sightTimer;
+  StreamSubscription<AccelerometerEvent>? _tilt;
+  SightProblem? _sightProblem;
+  final ProximityPulse _pulse = ProximityPulse(
+    onPulse: (strong) =>
+        strong ? HapticFeedback.heavyImpact() : HapticFeedback.mediumImpact(),
+  );
 
   SceneAssessment _scene = SceneAssessment.empty;
   final ValueNotifier<SceneAssessment> _sceneNotifier = ValueNotifier(
@@ -242,10 +253,66 @@ class _CameraScreenState extends State<CameraScreen>
 
   Future<void> _syncCamera() {
     _syncWakelock();
+    _syncSight();
     _syncMockTimer();
     _syncDiagnostics();
     return _cameraFeed.setActive(
       !_disposed && !_paused && !_isMockTest && _servicesReady,
+    );
+  }
+
+  /// Watches for states where the app cannot see the path, so silence is
+  /// never mistaken for a clear way ahead.
+  void _syncSight() {
+    if (_wantsCamera) {
+      if (_sightTimer != null) return;
+      _sight.start(DateTime.now());
+      _tilt =
+          accelerometerEventStream(
+            samplingPeriod: SensorInterval.normalInterval,
+          ).listen(
+            (e) => _sight.onAccelerometer(e.x, e.y, e.z),
+            onError: (Object e) => debugPrint('Không đọc được độ nghiêng: $e'),
+            cancelOnError: true,
+          );
+      _sightTimer = Timer.periodic(
+        const Duration(milliseconds: 500),
+        (_) => _checkSight(),
+      );
+    } else {
+      _sightTimer?.cancel();
+      _sightTimer = null;
+      unawaited(_tilt?.cancel());
+      _tilt = null;
+      _sight.stop();
+      _sightProblem = null;
+      _pulse.stop();
+    }
+  }
+
+  void _checkSight() {
+    if (_disposed) return;
+    final problem = _sight.check(DateTime.now());
+    final previous = _sightProblem;
+    _sightProblem = problem;
+    if (problem == null) {
+      if (previous?.isBlind ?? false) {
+        _speech.say('Đã nhìn thấy lại.', SpeechPriority.caution);
+      }
+      return;
+    }
+    if (problem.isBlind) _pulse.stop();
+    final priority = problem.isBlind
+        ? SpeechPriority.danger
+        : SpeechPriority.caution;
+    // Speech cooldown per subject repeats the warning while the problem lasts.
+    final subject = 'sight:${problem.name}';
+    if (!_speech.canSay(priority, subject: subject)) return;
+    _speech.say(
+      problem.message,
+      priority,
+      subject: subject,
+      onStart: problem.isBlind ? HapticFeedback.vibrate : null,
     );
   }
 
@@ -315,6 +382,7 @@ class _CameraScreenState extends State<CameraScreen>
     _tracker.reset();
     _speech.retainAlerts();
     _scene = SceneAssessment.empty;
+    _pulse.stop();
     _lastFrameRotation = null;
     _lastFrameOrientation = null;
     _pendingDescribe = false;
@@ -338,6 +406,7 @@ class _CameraScreenState extends State<CameraScreen>
     _tracker.reset();
     _speech.retainAlerts();
     _scene = SceneAssessment.empty;
+    _pulse.stop();
     _sceneNotifier.value = _scene;
   }
 
@@ -407,6 +476,7 @@ class _CameraScreenState extends State<CameraScreen>
           sh != _screenHeight) {
         return;
       }
+      _sight.onResult(DateTime.now(), _detector.lastMeanLuma);
       _runPipeline(
         results,
         image: image,
@@ -447,6 +517,7 @@ class _CameraScreenState extends State<CameraScreen>
     );
     _scene = scene;
     _sceneNotifier.value = scene;
+    _pulse.update(ProximityPulse.pathOccupancy(scene, frame));
 
     final alert = scene.alert;
     if (alert != null) {
@@ -710,6 +781,7 @@ class _CameraScreenState extends State<CameraScreen>
     WidgetsBinding.instance.removeObserver(this);
     _mockTimer?.cancel();
     _describeFallback?.cancel();
+    _syncSight();
     _invalidateScene();
     _sceneFreshness.dispose();
     _frameClock.stop();

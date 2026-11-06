@@ -25,6 +25,9 @@ khi vật chiếm nhiều khung hình phía trước hoặc đang lớn nhanh s�
 - Nút **Lịch sử**: danh sách chuyến đi, nghe tóm tắt, xem ảnh ghi nhớ, nghe lại toàn bộ.
 - Chip **Đầy đủ / Yên lặng**: chế độ yên lặng chỉ báo khi nguy hiểm.
 - Chip **Mô tả khi hỏi / Tự mô tả**: bật tự mô tả tần suất thấp (~45 giây, chỉ khi không có cảnh báo gần đây).
+- **Rung liên tục kiểu cảm biến lùi xe**: có vật trong lối đi phía trước thì máy rung, vật càng gần rung càng dày. Không rung chỉ có nghĩa là không *nhận ra* vật nào, không chứng minh đường trống.
+- **Báo khi app không nhìn được**: camera/AI ngừng trả kết quả quá 1,5 giây, phòng quá tối hoặc camera bị che → nói "Dừng lại!" và rung dài; máy chĩa xuống sàn / lên trần → nhắc nâng hoặc hạ máy.
+- Thử nghiệm trong phòng: xem [INDOOR-TEST-PROTOCOL.md](INDOOR-TEST-PROTOCOL.md).
 
 ---
 

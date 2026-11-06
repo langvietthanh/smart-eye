@@ -30,6 +30,8 @@ class DetectorService {
   int lastFrameMs = 0;
   double lastMaxScore = 0;
   String lastMaxLabel = '';
+  /// Mean brightness of the last processed frame; null if it could not be read.
+  double? lastMeanLuma;
   final DetectorPerformance performance = DetectorPerformance();
 
   Future<void> loadModel() {
@@ -90,6 +92,7 @@ class DetectorService {
       lastFrameMs = result.timings.workerUs ~/ 1000;
       lastMaxScore = result.maxScore;
       lastMaxLabel = result.maxLabel;
+      lastMeanLuma = result.meanLuma;
       return result.detections;
     } catch (_) {
       performance.failedFrames++;
@@ -131,11 +134,13 @@ class _DetectionResult {
     this.timings,
     this.maxScore,
     this.maxLabel,
+    this.meanLuma,
   );
   final List<Recognition> detections;
   final DetectionTimings timings;
   final double maxScore;
   final String maxLabel;
+  final double? meanLuma;
 }
 
 class _DetectorProcessor
@@ -333,7 +338,13 @@ class _DetectorProcessor
           'max=${(lastMaxScore * 100).toStringAsFixed(1)}% ($lastMaxLabel)',
         );
       }
-      return _DetectionResult(results, timings, lastMaxScore, lastMaxLabel);
+      return _DetectionResult(
+        results,
+        timings,
+        lastMaxScore,
+        lastMaxLabel,
+        ImageUtils.meanLuma(request.image),
+      );
     } finally {
       watch.stop();
     }
