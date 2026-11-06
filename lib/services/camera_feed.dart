@@ -4,12 +4,15 @@ import 'dart:io';
 import 'package:camera/camera.dart';
 import 'package:flutter/widgets.dart';
 
+import '../widgets/camera_feed_preview.dart';
 import 'camera_session.dart';
+import 'feed_handle.dart';
 
 /// Owns the camera's platform lifecycle independently from AI, GPS and speech.
 /// Route visibility and OS foreground state must both permit capture.
 class CameraFeed extends ValueNotifier<CameraController?>
-    with WidgetsBindingObserver {
+    with WidgetsBindingObserver
+    implements FrameSource {
   CameraFeed({
     required this._onFrame,
     required this._onChanged,
@@ -49,6 +52,10 @@ class CameraFeed extends ValueNotifier<CameraController?>
 
   bool get _shouldRun => _active && _foreground && !_failed && !_disposed;
 
+  @override
+  Widget buildPreview() => CameraFeedPreview(feed: this);
+
+  @override
   Future<void> setActive(bool active) {
     if (_active != active) {
       _active = active;
@@ -58,6 +65,7 @@ class CameraFeed extends ValueNotifier<CameraController?>
     return _session.setActive(_shouldRun);
   }
 
+  @override
   Future<void> retry() {
     _failed = false;
     _automaticRestarts = 0;

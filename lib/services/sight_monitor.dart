@@ -2,14 +2,16 @@ import 'dart:math';
 
 /// Why the app cannot currently see the path. Silence must never be mistaken
 /// for a clear path, so every one of these is announced.
-enum SightProblem { noResults, tooDark, pointingDown, pointingUp }
+enum SightProblem { noResults, tooDark, pointingDown, pointingUp, noDepth }
 
 extension SightProblemText on SightProblem {
   String get message => switch (this) {
-    SightProblem.noResults => 'Dừng lại! Camera không hoạt động, không thấy đường.',
+    SightProblem.noResults =>
+      'Dừng lại! Camera không hoạt động, không thấy đường.',
     SightProblem.tooDark => 'Dừng lại! Quá tối, không nhìn rõ.',
     SightProblem.pointingDown => 'Máy đang chĩa xuống sàn. Nâng máy lên.',
     SightProblem.pointingUp => 'Máy đang chĩa lên cao. Hạ máy xuống.',
+    SightProblem.noDepth => 'Không đo được khoảng cách phía trước.',
   };
 
   /// Blind states stop the user; aiming problems only ask to adjust.
@@ -31,17 +33,36 @@ class SightMonitor {
   static const downExit = 45.0;
   static const upEnter = -20.0;
   static const upExit = -10.0;
+  // LiDAR only: how long the depth sensor may be unreadable or silent.
+  static const noDepthAfter = Duration(seconds: 1);
 
   DateTime? _deadline;
   bool _dark = false;
   double? _pitch;
   bool _down = false;
   bool _up = false;
+  bool _depthEnabled = false;
+  DateTime? _depthDeadline;
 
   /// Camera/AI (re)started: allow time for the first result.
-  void start(DateTime now) => _deadline = now.add(startGrace);
+  void start(DateTime now) {
+    _deadline = now.add(startGrace);
+    _depthDeadline = now.add(startGrace);
+  }
 
-  void stop() => _deadline = null;
+  void stop() {
+    _deadline = null;
+    _depthDeadline = null;
+  }
+
+  /// A metric depth sensor is in use: its silence must be announced too.
+  void enableDepth(bool enabled) => _depthEnabled = enabled;
+
+  /// [known] is false when the reading had too little trustworthy depth.
+  void onDepth(DateTime at, {required bool known}) {
+    if (_depthDeadline == null || !known) return;
+    _depthDeadline = at.add(noDepthAfter);
+  }
 
   bool get active => _deadline != null;
 
@@ -69,6 +90,10 @@ class SightMonitor {
     if (_dark) return SightProblem.tooDark;
     if (_down) return SightProblem.pointingDown;
     if (_up) return SightProblem.pointingUp;
+    final depthDeadline = _depthDeadline;
+    if (_depthEnabled && depthDeadline != null && now.isAfter(depthDeadline)) {
+      return SightProblem.noDepth;
+    }
     return null;
   }
 
