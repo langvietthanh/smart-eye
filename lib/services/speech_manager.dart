@@ -124,9 +124,10 @@ class SpeechManager {
   Future<bool> sayAndWait(
     String text,
     SpeechPriority priority, {
+    String? subject,
     bool force = false,
   }) {
-    final req = _enqueue(text, priority, null, force, null);
+    final req = _enqueue(text, priority, subject, force, null);
     return req?.result.future ?? Future.value(false);
   }
 
@@ -259,14 +260,17 @@ class SpeechManager {
     if (!r.result.isCompleted) r.result.complete(false);
   }
 
-  /// Bỏ cảnh báo đang chờ khi cảnh đã đổi, giữ lại cảnh báo của [subject] và
-  /// [priority]/[text] nếu có. Mức cảnh báo hoặc vị trí đổi cũng phải bỏ câu cũ.
-  /// Không truyền [subject] để bỏ toàn bộ cảnh báo đang chờ. Câu đang đọc và
-  /// các yêu cầu mô tả/nghe lại do người dùng chủ động vẫn được giữ nguyên.
+  /// Bỏ cảnh báo YOLO (chủ thể bắt đầu bằng `track:`) đang chờ khi cảnh đã đổi,
+  /// giữ lại cảnh báo của [subject] và [priority]/[text] nếu có. Cảnh báo độ sâu
+  /// (`depth:`), thị giác (`sight:`) hoặc câu không có chủ thể được giữ nguyên.
   void retainAlerts({String? subject, SpeechPriority? priority, String? text}) {
     _queue.removeWhere((request) {
-      final obsolete =
+      final isTrackAlert =
           request.priority.index >= SpeechPriority.caution.index &&
+          request.subject != null &&
+          request.subject!.startsWith('track:');
+      final obsolete =
+          isTrackAlert &&
           (subject == null ||
               request.subject != subject ||
               (priority != null && request.priority != priority) ||

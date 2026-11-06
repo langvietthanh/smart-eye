@@ -75,7 +75,11 @@ void main() {
     m.onDepth(at(800), known: false);
     expect(m.check(at(900)), isNull);
     expect(m.check(at(1100)), SightProblem.noDepth);
-    expect(SightProblem.noDepth.isBlind, isFalse);
+    expect(SightProblem.noDepth.isBlind, isFalse);
+    expect(
+      SightProblem.noDepth.message,
+      'Không đo được khoảng cách. Đi chậm, dùng gậy.',
+    );
     m.onDepth(at(1200), known: true);
     expect(m.check(at(1300)), isNull);
   });

@@ -1,3 +1,5 @@
+// ignore_for_file: file_names
+
 import 'package:flutter/material.dart';
 
 /// Lớp đại diện cho một vật thể AI phát hiện được

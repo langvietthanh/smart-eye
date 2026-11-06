@@ -11,7 +11,7 @@ extension SightProblemText on SightProblem {
     SightProblem.tooDark => 'Dừng lại! Quá tối, không nhìn rõ.',
     SightProblem.pointingDown => 'Máy đang chĩa xuống sàn. Nâng máy lên.',
     SightProblem.pointingUp => 'Máy đang chĩa lên cao. Hạ máy xuống.',
-    SightProblem.noDepth => 'Không đo được khoảng cách phía trước.',
+    SightProblem.noDepth => 'Không đo được khoảng cách. Đi chậm, dùng gậy.',
   };
 
   /// Blind states stop the user; aiming problems only ask to adjust.
