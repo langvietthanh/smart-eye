@@ -14,6 +14,7 @@ import 'processing_worker.dart';
 /// own background isolate, run less often than object detection.
 class DepthService {
   static const String _modelPath = 'assets/models/midas_small.tflite';
+  // Weights stored as float16 (tool/tflite_fp16_weights.py); I/O stays float32.
 
   ProcessingWorker<_DepthRequest, DepthReading?>? _worker;
   Future<void>? _loading;

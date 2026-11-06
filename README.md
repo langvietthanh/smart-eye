@@ -38,7 +38,7 @@ khi vật chiếm nhiều khung hình phía trước hoặc đang lớn nhanh s�
 smart_eye/
 ├── 📁 assets/
 │   ├── 📁 models/yolov8n_int8.tflite   # Model YOLOv8 Quantized INT8
-│   │   └── midas_small.tflite        # MiDaS v2.1 small (MIT, isl-org/MiDaS), độ sâu tương đối 256×256
+│   │   └── midas_small.tflite        # MiDaS v2.1 small (MIT, isl-org/MiDaS), trọng số fp16 (tool/tflite_fp16_weights.py), 256×256
 │   └── 📁 labels/coco.txt             # 80 nhãn vật thể chuẩn COCO
 ├── 📁 lib/
 │   ├── 📄 main.dart                    # Khởi tạo ứng dụng
@@ -81,7 +81,7 @@ Nên chạy trên thiết bị Android thật để kiểm tra độ trễ nhậ
 4. Dùng cáp USB cắm điện thoại vào máy tính.
 
 ### Bước 2: Clone & Chạy lệnh
-1. Cài **Git LFS** trước (model độ sâu `midas_small.tflite` 66 MB lưu bằng LFS; thiếu LFS thì file chỉ là con trỏ vài dòng và app báo không tải được cảm biến độ sâu):
+1. Cài **Git LFS** trước (model độ sâu `midas_small.tflite` 33 MB lưu bằng LFS; thiếu LFS thì file chỉ là con trỏ vài dòng và app báo không tải được cảm biến độ sâu):
    ```bash
    brew install git-lfs   # Windows: tải tại https://git-lfs.com
    git lfs install
