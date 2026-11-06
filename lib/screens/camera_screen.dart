@@ -12,11 +12,11 @@ import '../models/Recognition.dart';
 import '../models/scene_info.dart';
 import '../models/trip.dart';
 import '../widgets/bounding_box_painter.dart';
-import '../widgets/camera_feed_preview.dart';
 import '../services/caption_builder.dart';
 import '../services/camera_feed.dart';
 import '../services/depth_analysis.dart';
 import '../services/depth_service.dart';
+import '../services/feed_handle.dart';
 import '../services/detector_service.dart';
 import '../services/hazard_engine.dart';
 import '../services/history_service.dart';
@@ -52,9 +52,12 @@ class _CameraScreenState extends State<CameraScreen>
   static const Duration _autoDescribeEvery = Duration(seconds: 45);
   static const Duration _calmAfterAlert = Duration(seconds: 10);
 
-  CameraController? _controller;
+  FeedHandle? _handle;
   bool _isDetecting = false;
-  late final CameraFeed _cameraFeed;
+
+  /// Chosen once services are ready: ARKit LiDAR when supported, else the
+  /// camera plugin.
+  FrameSource? _feed;
   bool _foreground = true;
   bool _disposed = false;
   bool _servicesReady = false;
@@ -125,16 +128,13 @@ class _CameraScreenState extends State<CameraScreen>
   /// và hướng điện thoại (xem [ImageUtils.frameRotation]). Xoay điện thoại thì preview, khung vật,
   /// 3 cột và ảnh đưa vào AI cùng xoay theo màn hình, không cần bấm nút.
   int get _rotationDegrees {
-    final controller = _controller;
-    final camera = controller?.description;
-    if (camera == null) return 90;
+    final handle = _handle;
+    if (handle == null) return 90;
     final auto = ImageUtils.frameRotation(
       isIOS: Platform.isIOS,
-      sensorOrientation: camera.sensorOrientation,
-      deviceDegrees:
-          _deviceDegrees[controller?.value.deviceOrientation ??
-              DeviceOrientation.portraitUp]!,
-      frontCamera: camera.lensDirection == CameraLensDirection.front,
+      sensorOrientation: handle.sensorOrientation,
+      deviceDegrees: _deviceDegrees[handle.deviceOrientation]!,
+      frontCamera: handle.isFrontCamera,
     );
     return (auto + _debugRotationOffset) % 360;
   }
@@ -168,23 +168,32 @@ class _CameraScreenState extends State<CameraScreen>
     _foreground =
         WidgetsBinding.instance.lifecycleState == null ||
         WidgetsBinding.instance.lifecycleState == AppLifecycleState.resumed;
-    _cameraFeed = CameraFeed(
-      onFrame: _onCameraFrame,
-      onChanged: _cameraChanged,
-      onError: (error, stack) {
-        debugPrint('Lỗi camera: $error\n$stack');
-        if (mounted && !_disposed && _wantsCamera) {
-          setState(() {
-            _hasError = true;
-            _statusText = 'Lỗi camera: $error';
-          });
-        }
-      },
-    );
     // Dùng addPostFrameCallback để UI render trước, rồi mới init
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (mounted && !_disposed) unawaited(_initAll());
     });
+  }
+
+  void _onFeedError(Object error, StackTrace stack) {
+    debugPrint('Lỗi camera: $error\n$stack');
+    if (mounted && !_disposed && _wantsCamera) {
+      setState(() {
+        _hasError = true;
+        _statusText = 'Lỗi camera: $error';
+      });
+    }
+  }
+
+  /// The camera backend; created once, before the camera is first opened.
+  FrameSource _createFeed() {
+    return CameraFeed(
+      onFrame: (controller, image) =>
+          _onCameraFrame(CameraControllerHandle(controller), image),
+      onChanged: (controller) => _cameraChanged(
+        controller == null ? null : CameraControllerHandle(controller),
+      ),
+      onError: _onFeedError,
+    );
   }
 
   bool get _wantsCamera =>
@@ -237,6 +246,7 @@ class _CameraScreenState extends State<CameraScreen>
       _locationStart ??= _location.start().then<void>((_) {});
 
       // 4. Khởi động camera
+      _feed ??= _createFeed();
       _servicesReady = true;
       if (mounted) setState(() => _statusText = 'Đang mở camera...');
       await _syncCamera();
@@ -252,8 +262,8 @@ class _CameraScreenState extends State<CameraScreen>
     }
   }
 
-  void _cameraChanged(CameraController? controller) {
-    _controller = controller;
+  void _cameraChanged(FeedHandle? controller) {
+    _handle = controller;
     _invalidateScene();
     if (mounted && !_disposed) {
       setState(() {
@@ -278,9 +288,10 @@ class _CameraScreenState extends State<CameraScreen>
     _syncSight();
     _syncMockTimer();
     _syncDiagnostics();
-    return _cameraFeed.setActive(
-      !_disposed && !_paused && !_isMockTest && _servicesReady,
-    );
+    return _feed?.setActive(
+          !_disposed && !_paused && !_isMockTest && _servicesReady,
+        ) ??
+        Future.value();
   }
 
   /// Watches for states where the app cannot see the path, so silence is
@@ -392,7 +403,7 @@ class _CameraScreenState extends State<CameraScreen>
                 !_disposed &&
                 _foreground &&
                 !_paused &&
-                (_isMockTest || _controller != null),
+                (_isMockTest || _handle != null),
           ),
         )
         .catchError((Object e) => debugPrint('Không đổi được wakelock: $e'));
@@ -455,13 +466,10 @@ class _CameraScreenState extends State<CameraScreen>
   // Pipeline
   // ---------------------------------------------------------------------------
 
-  Future<void> _onCameraFrame(
-    CameraController controller,
-    CameraImage image,
-  ) async {
-    if (!_wantsCamera || controller != _controller || !_modelLoaded) return;
+  Future<void> _onCameraFrame(FeedHandle controller, CameraImage image) async {
+    if (!_wantsCamera || controller != _handle || !_modelLoaded) return;
     final rotation = _rotationDegrees;
-    final orientation = controller.value.deviceOrientation;
+    final orientation = controller.deviceOrientation;
     if (_lastFrameRotation != null &&
         (_lastFrameRotation != rotation ||
             _lastFrameOrientation != orientation)) {
@@ -498,9 +506,9 @@ class _CameraScreenState extends State<CameraScreen>
       if (!_wantsCamera ||
           !mounted ||
           generation != _frameGeneration ||
-          controller != _controller ||
+          controller != _handle ||
           rotation != _rotationDegrees ||
-          orientation != controller.value.deviceOrientation ||
+          orientation != controller.deviceOrientation ||
           _frameClock.elapsedMilliseconds - now > _maxFrameAgeMs ||
           sw != _screenWidth ||
           sh != _screenHeight) {
@@ -524,11 +532,7 @@ class _CameraScreenState extends State<CameraScreen>
   }
 
   /// Depth runs in its own isolate at a lower rate than object detection.
-  void _maybeRunDepth(
-    CameraController controller,
-    CameraImage image,
-    int rotation,
-  ) {
+  void _maybeRunDepth(FeedHandle controller, CameraImage image, int rotation) {
     if (!_depth.isLoaded || _depth.busy) return;
     final startedAt = _frameClock.elapsedMilliseconds;
     if (startedAt - _lastDepthMs < _minDepthIntervalMs) return;
@@ -541,7 +545,7 @@ class _CameraScreenState extends State<CameraScreen>
             if (reading == null ||
                 !_wantsCamera ||
                 generation != _frameGeneration ||
-                controller != _controller ||
+                controller != _handle ||
                 _frameClock.elapsedMilliseconds - startedAt > _maxFrameAgeMs) {
               return;
             }
@@ -748,7 +752,7 @@ class _CameraScreenState extends State<CameraScreen>
 
   void _requestDescribe() {
     HapticFeedback.selectionClick();
-    if (_isMockTest || _controller == null || _paused) {
+    if (_isMockTest || _handle == null || _paused) {
       _describe(null, manual: true);
       return;
     }
@@ -902,7 +906,7 @@ class _CameraScreenState extends State<CameraScreen>
     _frameClock.stop();
     _sceneNotifier.dispose();
     _syncWakelock();
-    unawaited(_cameraFeed.dispose());
+    unawaited(_feed?.dispose());
     unawaited(_disposeServices());
     super.dispose();
   }
@@ -946,8 +950,8 @@ class _CameraScreenState extends State<CameraScreen>
     }
     _screenWidth = size.width;
     _screenHeight = size.height;
-    final controller = _controller;
-    final cameraReady = controller != null && controller.value.isInitialized;
+    final handle = _handle;
+    final cameraReady = handle != null && handle.isInitialized;
 
     // Loading / Error screen
     if (!cameraReady && !_isMockTest) {
@@ -982,7 +986,7 @@ class _CameraScreenState extends State<CameraScreen>
                           _statusText = 'Đang thử lại...';
                         });
                         if (_servicesReady) {
-                          unawaited(_cameraFeed.retry());
+                          unawaited(_feed?.retry());
                         } else {
                           unawaited(_initAll());
                         }
@@ -1025,7 +1029,7 @@ class _CameraScreenState extends State<CameraScreen>
                 child: cameraReady && !_isMockTest
                     ? RotatedBox(
                         quarterTurns: _debugRotationOffset ~/ 90,
-                        child: CameraFeedPreview(feed: _cameraFeed),
+                        child: _feed?.buildPreview(),
                       )
                     : const ColoredBox(color: Color(0xFF1A1A2E)),
               ),
