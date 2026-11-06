@@ -64,4 +64,30 @@ void main() {
     expect(m.check(at(10)), SightProblem.tooDark);
     expect(m.check(at(2000)), SightProblem.noResults);
   });
+
+  test('LiDAR depth that stays unreadable is announced', () {
+    final m = SightMonitor()
+      ..enableDepth(true)
+      ..start(t0);
+    m.onResult(at(0), 120);
+    m.onDepth(at(0), known: true);
+    m.onResult(at(1000), 120);
+    m.onDepth(at(800), known: false);
+    expect(m.check(at(900)), isNull);
+    expect(m.check(at(1100)), SightProblem.noDepth);
+    expect(SightProblem.noDepth.isBlind, isFalse);
+    m.onDepth(at(1200), known: true);
+    expect(m.check(at(1300)), isNull);
+  });
+
+  test('depth silence is ignored without LiDAR and loses to darkness', () {
+    final plain = SightMonitor()..start(t0);
+    plain.onResult(at(5000), 120);
+    expect(plain.check(at(5100)), isNull);
+    final m = SightMonitor()
+      ..enableDepth(true)
+      ..start(t0);
+    m.onResult(at(5000), 10);
+    expect(m.check(at(5100)), SightProblem.tooDark);
+  });
 }
