@@ -2,7 +2,9 @@ import 'dart:math';
 import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
+import 'package:smart_eye/models/scene_info.dart';
 import 'package:smart_eye/services/lidar_analysis.dart';
+import 'package:smart_eye/services/proximity_pulse.dart';
 
 /// Axis-aligned box in world metres: x right, y up (floor at 0), z forward.
 class Box {
@@ -98,6 +100,8 @@ double distanceOf(LidarReading r) {
 }
 
 void main() {
+  group('warning', warningTests);
+
   test('wall at 1.5 m reads 1.5 m at any tilt and hold', () {
     for (final pitch in [0.0, 15.0, 35.0]) {
       for (final roll in [0.0, 90.0]) {
@@ -178,5 +182,47 @@ void main() {
     );
     expect(distanceOf(r), closeTo(0.4, 0.05));
     expect(a.floorHeight, closeTo(-1.0, 0.05));
+  });
+}
+
+void warningTests() {
+  AlertLevel feed(LidarWarning w, List<double?> metres) {
+    var level = AlertLevel.info;
+    for (final m in metres) {
+      level = w.update(m == null ? const LidarClear() : LidarObstacle(m));
+    }
+    return level;
+  }
+
+  test('caution needs two readings under 2 m', () {
+    final w = LidarWarning();
+    expect(feed(w, [2.1]), AlertLevel.info);
+    expect(feed(w, [1.9]), AlertLevel.info);
+    expect(feed(w, [1.9]), AlertLevel.caution);
+  });
+
+  test('hysteresis holds levels until the exit distance', () {
+    final w = LidarWarning();
+    expect(feed(w, [1.9, 1.9, 2.1, 2.15]), AlertLevel.caution);
+    expect(feed(w, [2.3]), AlertLevel.info);
+    expect(feed(w, [0.9, 0.9, 1.1]), AlertLevel.danger);
+    expect(feed(w, [1.3, 1.3]), AlertLevel.caution);
+    expect(feed(w, [null]), AlertLevel.info);
+  });
+
+  test('a single unknown frame does not break the streak', () {
+    final w = LidarWarning();
+    feed(w, [1.5]);
+    expect(w.update(const LidarUnknown()), AlertLevel.info);
+    expect(feed(w, [1.5]), AlertLevel.caution);
+  });
+
+  test('pulse proximity from metres', () {
+    expect(ProximityPulse.fromDistance(null), isNull);
+    expect(ProximityPulse.fromDistance(3), isNull);
+    expect(ProximityPulse.fromDistance(2.5), 0);
+    expect(ProximityPulse.fromDistance(1.75), closeTo(0.5, 1e-9));
+    expect(ProximityPulse.fromDistance(1.0), 1);
+    expect(ProximityPulse.fromDistance(0.3), 1);
   });
 }

@@ -1,6 +1,8 @@
 import 'dart:math';
 import 'dart:typed_data';
 
+import '../models/scene_info.dart';
+
 /// One ARKit scene-depth sample in sensor coordinates (not rotated).
 class LidarDepthFrame {
   const LidarDepthFrame({
@@ -194,5 +196,37 @@ class LidarAnalysis {
         return;
       }
     }
+  }
+}
+
+/// Metric warning levels with hysteresis, so standing near a threshold does
+/// not flip the alert every frame. As with MiDaS, two consecutive
+/// non-info readings (DepthWarning) are needed before warning.
+class LidarWarning {
+  static const cautionEnter = 2.0;
+  static const cautionExit = 2.2;
+  static const dangerEnter = 1.0;
+  static const dangerExit = 1.2;
+
+  AlertLevel _raw = AlertLevel.info;
+  int _streak = 0;
+
+  AlertLevel update(LidarReading reading) {
+    // One unreadable frame neither raises nor clears the warning; a lasting
+    // gap is announced by the sight monitor instead.
+    if (reading is LidarUnknown) return AlertLevel.info;
+    final d = reading is LidarObstacle ? reading.distance : double.infinity;
+    _raw = d < dangerEnter || (_raw == AlertLevel.danger && d <= dangerExit)
+        ? AlertLevel.danger
+        : d < cautionEnter || (_raw != AlertLevel.info && d <= cautionExit)
+        ? AlertLevel.caution
+        : AlertLevel.info;
+    _streak = _raw == AlertLevel.info ? 0 : _streak + 1;
+    return _streak >= 2 ? _raw : AlertLevel.info;
+  }
+
+  void reset() {
+    _raw = AlertLevel.info;
+    _streak = 0;
   }
 }
