@@ -15,6 +15,8 @@ import '../widgets/bounding_box_painter.dart';
 import '../widgets/camera_feed_preview.dart';
 import '../services/caption_builder.dart';
 import '../services/camera_feed.dart';
+import '../services/depth_analysis.dart';
+import '../services/depth_service.dart';
 import '../services/detector_service.dart';
 import '../services/hazard_engine.dart';
 import '../services/history_service.dart';
@@ -83,6 +85,12 @@ class _CameraScreenState extends State<CameraScreen>
   final DateTime _frameEpoch = DateTime.now();
 
   final DetectorService _detector = DetectorService();
+  final DepthService _depth = DepthService();
+  final DepthWarning _depthWarning = DepthWarning();
+  static const int _minDepthIntervalMs = 300;
+  int _lastDepthMs = -300;
+  double? _boxProximity;
+  ({double? proximity, int atMs})? _depthProximity;
   final ObjectTracker _tracker = ObjectTracker();
   final HazardEngine _engine = HazardEngine();
   late final SceneFreshness _sceneFreshness;
@@ -203,6 +211,20 @@ class _CameraScreenState extends State<CameraScreen>
         if (mounted) setState(() => _modelLoaded = true);
       }
 
+      // 2b. Depth is optional: without it walls/doors are not seen, say so.
+      if (!_depth.isLoaded) {
+        try {
+          await _depth.loadModel();
+        } catch (e, stack) {
+          debugPrint('Không tải được model độ sâu: $e\n$stack');
+          _speech.say(
+            'Không tải được cảm biến độ sâu. App sẽ không thấy tường và cửa.',
+            SpeechPriority.caution,
+          );
+        }
+        if (_disposed) return;
+      }
+
       // 3. Lịch sử chuyến đi + GPS (không bắt buộc)
       await _history.startTrip();
       _trip = _history.currentTrip;
@@ -286,7 +308,7 @@ class _CameraScreenState extends State<CameraScreen>
       _tilt = null;
       _sight.stop();
       _sightProblem = null;
-      _pulse.stop();
+      _clearProximity();
     }
   }
 
@@ -301,7 +323,7 @@ class _CameraScreenState extends State<CameraScreen>
       }
       return;
     }
-    if (problem.isBlind) _pulse.stop();
+    if (problem.isBlind) _clearProximity();
     final priority = problem.isBlind
         ? SpeechPriority.danger
         : SpeechPriority.caution;
@@ -382,7 +404,7 @@ class _CameraScreenState extends State<CameraScreen>
     _tracker.reset();
     _speech.retainAlerts();
     _scene = SceneAssessment.empty;
-    _pulse.stop();
+    _clearProximity();
     _lastFrameRotation = null;
     _lastFrameOrientation = null;
     _pendingDescribe = false;
@@ -399,6 +421,13 @@ class _CameraScreenState extends State<CameraScreen>
     }
   }
 
+  void _clearProximity() {
+    _boxProximity = null;
+    _depthProximity = null;
+    _depthWarning.reset();
+    _pulse.stop();
+  }
+
   void _expireScene() {
     if (_disposed) return;
     // Camera frames may still arrive while AI is stalled. Do not let the last
@@ -406,7 +435,7 @@ class _CameraScreenState extends State<CameraScreen>
     _tracker.reset();
     _speech.retainAlerts();
     _scene = SceneAssessment.empty;
-    _pulse.stop();
+    _clearProximity();
     _sceneNotifier.value = _scene;
   }
 
@@ -440,6 +469,7 @@ class _CameraScreenState extends State<CameraScreen>
     }
     _lastFrameRotation = rotation;
     _lastFrameOrientation = orientation;
+    _maybeRunDepth(controller, image, rotation);
     if (_isDetecting) return;
 
     final now = _frameClock.elapsedMilliseconds;
@@ -493,6 +523,88 @@ class _CameraScreenState extends State<CameraScreen>
     }
   }
 
+  /// Depth runs in its own isolate at a lower rate than object detection.
+  void _maybeRunDepth(
+    CameraController controller,
+    CameraImage image,
+    int rotation,
+  ) {
+    if (!_depth.isLoaded || _depth.busy) return;
+    final startedAt = _frameClock.elapsedMilliseconds;
+    if (startedAt - _lastDepthMs < _minDepthIntervalMs) return;
+    _lastDepthMs = startedAt;
+    final generation = _frameGeneration;
+    unawaited(
+      _depth
+          .analyze(image, rotation)
+          .then((reading) {
+            if (reading == null ||
+                !_wantsCamera ||
+                generation != _frameGeneration ||
+                controller != _controller ||
+                _frameClock.elapsedMilliseconds - startedAt > _maxFrameAgeMs) {
+              return;
+            }
+            _onDepth(reading);
+          })
+          .catchError((Object e) => debugPrint('Lỗi xử lý độ sâu: $e')),
+    );
+  }
+
+  void _onDepth(DepthReading reading) {
+    // Dark frames and floor/ceiling views give meaningless depth; the sight
+    // monitor already tells the user what to fix.
+    if (_sight.check(DateTime.now()) != null) return;
+    _depthProximity = (
+      proximity: ProximityPulse.fromCloseness(reading.center),
+      atMs: _frameClock.elapsedMilliseconds,
+    );
+    _updatePulse();
+    final level = _depthWarning.update(reading.center);
+    // The detector's alert names the obstacle; depth only covers the rest.
+    if (level == AlertLevel.info || _scene.alert != null) return;
+    final isDanger = level == AlertLevel.danger;
+    final priority = isDanger ? SpeechPriority.danger : SpeechPriority.caution;
+    const subject = 'depth:center';
+    if (!_speech.canSay(priority, subject: subject)) return;
+    _lastAlertAt = DateTime.now();
+    final text = isDanger
+        ? 'Dừng lại! Có vật cản ngay phía trước.'
+        : 'Chú ý, có vật ở phía trước. Đi chậm lại.';
+    final log = _eventLogger(
+      isDanger ? TripEventType.danger : TripEventType.caution,
+      text,
+    );
+    _speech.say(
+      text,
+      priority,
+      subject: subject,
+      onStart: () {
+        if (isDanger) HapticFeedback.heavyImpact();
+        log();
+      },
+    );
+  }
+
+  /// Pulses follow whichever source sees the closer obstacle; a depth reading
+  /// older than the scene lifetime no longer counts.
+  void _updatePulse() {
+    final depth = _depthProximity;
+    final depthValue =
+        depth != null &&
+            _frameClock.elapsedMilliseconds - depth.atMs <= _maxFrameAgeMs
+        ? depth.proximity
+        : null;
+    final box = _boxProximity;
+    _pulse.update(
+      box == null
+          ? depthValue
+          : depthValue == null
+          ? box
+          : (box > depthValue ? box : depthValue),
+    );
+  }
+
   /// Retain the frame and its rotation together for asynchronous memory encoding.
   void _runPipeline(
     List<Recognition> detections, {
@@ -517,7 +629,10 @@ class _CameraScreenState extends State<CameraScreen>
     );
     _scene = scene;
     _sceneNotifier.value = scene;
-    _pulse.update(ProximityPulse.pathOccupancy(scene, frame));
+    _boxProximity = ProximityPulse.fromOccupancy(
+      ProximityPulse.pathOccupancy(scene, frame),
+    );
+    _updatePulse();
 
     final alert = scene.alert;
     if (alert != null) {
@@ -798,6 +913,7 @@ class _CameraScreenState extends State<CameraScreen>
     await _initialization;
     await _cleanup(_speech.stopAll);
     await _cleanup(_detector.dispose);
+    await _cleanup(_depth.dispose);
     await _locationStart;
     await _cleanup(_location.stop);
     await _eventWrites;

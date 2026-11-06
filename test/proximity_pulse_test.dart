@@ -29,14 +29,23 @@ SceneAssessment scene(List<ObjectInfo> objects) =>
 void main() {
   const frame = Size(300, 600);
 
-  test('interval: silent when far, faster when nearer', () {
+  test('occupancy and depth closeness map to 0..1 proximity', () {
+    expect(ProximityPulse.fromOccupancy(null), isNull);
+    expect(ProximityPulse.fromOccupancy(0.1), isNull);
+    expect(ProximityPulse.fromOccupancy(0.2), 0);
+    expect(ProximityPulse.fromOccupancy(0.45), 1);
+    expect(ProximityPulse.fromOccupancy(0.9), 1);
+    expect(ProximityPulse.fromCloseness(0.5), isNull);
+    expect(ProximityPulse.fromCloseness(0.6), 0);
+    expect(ProximityPulse.fromCloseness(0.9), 1);
+  });
+
+  test('interval: silent without proximity, faster when nearer', () {
     expect(ProximityPulse.intervalFor(null), isNull);
-    expect(ProximityPulse.intervalFor(0.1), isNull);
-    expect(ProximityPulse.intervalFor(0.2), ProximityPulse.slowest);
-    final mid = ProximityPulse.intervalFor(0.33)!;
+    expect(ProximityPulse.intervalFor(0), ProximityPulse.slowest);
+    final mid = ProximityPulse.intervalFor(0.5)!;
     expect(mid < ProximityPulse.slowest && mid > ProximityPulse.fastest, isTrue);
-    expect(ProximityPulse.intervalFor(0.45), ProximityPulse.fastest);
-    expect(ProximityPulse.intervalFor(0.9), ProximityPulse.fastest);
+    expect(ProximityPulse.intervalFor(1), ProximityPulse.fastest);
   });
 
   test('path occupancy ignores off-path, irrelevant and unobserved objects', () {
@@ -71,14 +80,14 @@ void main() {
   testWidgets('pulses immediately, repeats, and stops', (tester) async {
     final pulses = <bool>[];
     final pulse = ProximityPulse(onPulse: pulses.add);
-    pulse.update(0.5);
+    pulse.update(1);
     expect(pulses, [true]);
     await tester.pump(ProximityPulse.fastest);
     expect(pulses, [true, true]);
-    pulse.update(0.1);
+    pulse.update(null);
     await tester.pump(const Duration(seconds: 2));
     expect(pulses.length, 2);
-    pulse.update(0.2);
+    pulse.update(0);
     expect(pulses, [true, true, false]);
     pulse.stop();
     await tester.pump(const Duration(seconds: 2));

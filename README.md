@@ -27,6 +27,7 @@ khi vật chiếm nhiều khung hình phía trước hoặc đang lớn nhanh s�
 - Chip **Mô tả khi hỏi / Tự mô tả**: bật tự mô tả tần suất thấp (~45 giây, chỉ khi không có cảnh báo gần đây).
 - **Rung liên tục kiểu cảm biến lùi xe**: có vật trong lối đi phía trước thì máy rung, vật càng gần rung càng dày. Không rung chỉ có nghĩa là không *nhận ra* vật nào, không chứng minh đường trống.
 - **Báo khi app không nhìn được**: camera/AI ngừng trả kết quả quá 1,5 giây, phòng quá tối hoặc camera bị che → nói "Dừng lại!" và rung dài; máy chĩa xuống sàn / lên trần → nhắc nâng hoặc hạ máy.
+- **Thấy vật cản không có tên** (tường, cửa, tủ, thùng đồ): model độ sâu MiDaS v2.1 small chạy song song với YOLO (~3 lần/giây). So độ gần của vùng phía trước ngang ngực với mảng sàn ngay trước chân; gần bằng nhau thì báo *"Dừng lại! Có vật cản ngay phía trước."* Độ sâu là tương đối, không phải mét.
 - Thử nghiệm trong phòng: xem [INDOOR-TEST-PROTOCOL.md](INDOOR-TEST-PROTOCOL.md).
 
 ---
@@ -37,6 +38,7 @@ khi vật chiếm nhiều khung hình phía trước hoặc đang lớn nhanh s�
 smart_eye/
 ├── 📁 assets/
 │   ├── 📁 models/yolov8n_int8.tflite   # Model YOLOv8 Quantized INT8
+│   │   └── midas_small.tflite        # MiDaS v2.1 small (MIT, isl-org/MiDaS), độ sâu tương đối 256×256
 │   └── 📁 labels/coco.txt             # 80 nhãn vật thể chuẩn COCO
 ├── 📁 lib/
 │   ├── 📄 main.dart                    # Khởi tạo ứng dụng
