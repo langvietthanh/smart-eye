@@ -19,6 +19,8 @@ import '../services/depth_service.dart';
 import '../services/feed_handle.dart';
 import '../services/detector_service.dart';
 import '../services/hazard_engine.dart';
+import '../services/lidar_analysis.dart';
+import '../services/lidar_feed.dart';
 import '../services/history_service.dart';
 import '../services/location_service.dart';
 import '../services/object_tracker.dart';
@@ -28,6 +30,11 @@ import '../services/sight_monitor.dart';
 import '../services/speech_manager.dart';
 import '../utils/image_utils.dart';
 import 'history_screen.dart';
+
+/// Field-test overlay (fps, LiDAR distance, thermal): always in debug builds,
+/// and in release builds made with --dart-define=SMART_EYE_DIAGNOSTICS=true.
+const bool _diagnosticsEnabled =
+    !kReleaseMode || bool.fromEnvironment('SMART_EYE_DIAGNOSTICS');
 
 // A top-level callback prevents compute from capturing the widget, controller,
 // detector or any other unsendable platform state.
@@ -90,6 +97,14 @@ class _CameraScreenState extends State<CameraScreen>
   final DetectorService _detector = DetectorService();
   final DepthService _depth = DepthService();
   final DepthWarning _depthWarning = DepthWarning();
+
+  /// iPhones with LiDAR measure metres directly; MiDaS is then not loaded.
+  bool _useLidar = false;
+  static const int _thermalCritical = 3; // ProcessInfo.ThermalState.critical
+  final LidarDepthService _lidarDepth = LidarDepthService();
+  final LidarWarning _lidarWarning = LidarWarning();
+  String _lidarStatus = '';
+  int _lidarReadings = 0;
   static const int _minDepthIntervalMs = 300;
   int _lastDepthMs = -300;
   double? _boxProximity;
@@ -174,6 +189,14 @@ class _CameraScreenState extends State<CameraScreen>
 
   /// The camera backend; created once, before the camera is first opened.
   FrameSource _createFeed() {
+    if (_useLidar) {
+      return LidarFeed(
+        onFrame: _onCameraFrame,
+        onDepth: _onLidarDepth,
+        onChanged: _cameraChanged,
+        onError: _onFeedError,
+      );
+    }
     return CameraFeed(
       onFrame: (controller, image) =>
           _onCameraFrame(CameraControllerHandle(controller), image),
@@ -209,7 +232,18 @@ class _CameraScreenState extends State<CameraScreen>
       }
 
       // 2b. Depth is optional: without it walls/doors are not seen, say so.
-      if (!_depth.isLoaded) {
+      // LiDAR (iPhone Pro) gives metres and replaces the MiDaS estimate.
+      if (_feed == null && Platform.isIOS && await LidarFeed.isSupported()) {
+        try {
+          await _lidarDepth.start();
+          _useLidar = true;
+          _sight.enableDepth(true);
+        } catch (e, stack) {
+          debugPrint('Không khởi động được LiDAR: $e\n$stack');
+        }
+        if (_disposed) return;
+      }
+      if (!_useLidar && !_depth.isLoaded) {
         try {
           await _depth.loadModel();
         } catch (e, stack) {
@@ -323,6 +357,12 @@ class _CameraScreenState extends State<CameraScreen>
       return;
     }
     if (problem.isBlind) _clearProximity();
+    final message =
+        problem == SightProblem.noDepth &&
+            (_handle is LidarHandle) &&
+            (_handle as LidarHandle).thermalState >= _thermalCritical
+        ? 'Máy quá nóng, không đo được khoảng cách. Hãy để máy nguội.'
+        : problem.message;
     final priority = problem.isBlind
         ? SpeechPriority.danger
         : SpeechPriority.caution;
@@ -330,7 +370,7 @@ class _CameraScreenState extends State<CameraScreen>
     final subject = 'sight:${problem.name}';
     if (!_speech.canSay(priority, subject: subject)) return;
     _speech.say(
-      problem.message,
+      message,
       priority,
       subject: subject,
       onStart: problem.isBlind ? HapticFeedback.vibrate : null,
@@ -338,7 +378,7 @@ class _CameraScreenState extends State<CameraScreen>
   }
 
   void _syncDiagnostics() {
-    if (kReleaseMode || !_wantsCamera) {
+    if (!_diagnosticsEnabled || !_wantsCamera) {
       _diagnosticTimer?.cancel();
       _diagnosticTimer = null;
       return;
@@ -367,7 +407,9 @@ class _CameraScreenState extends State<CameraScreen>
       _diagnostics.value =
           'AI ${fps.toStringAsFixed(1)} fps · nhận kết quả '
           '${latency.meanMs.toStringAsFixed(0)} ms (p95 ${latency.p95Ms.toStringAsFixed(0)})\n'
-          'Model ${nativeMs.toStringAsFixed(0)} ms · RSS $memory';
+          'Model ${nativeMs.toStringAsFixed(0)} ms · RSS $memory'
+          '${_useLidar ? '\nLiDAR $_lidarReadings Hz · $_lidarStatus' : ''}';
+      _lidarReadings = 0;
     });
   }
 
@@ -424,6 +466,7 @@ class _CameraScreenState extends State<CameraScreen>
     _boxProximity = null;
     _depthProximity = null;
     _depthWarning.reset();
+    _lidarWarning.reset();
     _pulse.stop();
   }
 
@@ -552,7 +595,59 @@ class _CameraScreenState extends State<CameraScreen>
       atMs: _frameClock.elapsedMilliseconds,
     );
     _updatePulse();
-    final level = _depthWarning.update(reading.center);
+    _announceDepth(_depthWarning.update(reading.center));
+  }
+
+  /// LiDAR depth packets arrive ~10 Hz; analysis runs off the UI isolate and
+  /// a packet that arrives while it is busy is dropped.
+  void _onLidarDepth(LidarDepthFrame frame) {
+    if (!_wantsCamera || _lidarDepth.busy) return;
+    final handle = _handle;
+    final generation = _frameGeneration;
+    final startedAt = _frameClock.elapsedMilliseconds;
+    unawaited(
+      _lidarDepth
+          .analyze(frame)
+          .then((reading) {
+            if (reading == null ||
+                !_wantsCamera ||
+                generation != _frameGeneration ||
+                handle != _handle ||
+                _frameClock.elapsedMilliseconds - startedAt > _maxFrameAgeMs) {
+              return;
+            }
+            _onLidarReading(reading, thermal: frame.thermalState);
+          })
+          .catchError((Object e) => debugPrint('Lỗi xử lý LiDAR: $e')),
+    );
+  }
+
+  void _onLidarReading(LidarReading reading, {required int thermal}) {
+    final now = DateTime.now();
+    _lidarReadings++;
+    _sight.onDepth(now, known: reading is! LidarUnknown);
+    final distance = reading is LidarObstacle ? reading.distance : null;
+    _lidarStatus =
+        '${switch (reading) {
+          LidarObstacle(:final distance) => '${distance.toStringAsFixed(2)} m',
+          LidarClear() => 'thông ≤ ${LidarAnalysis.maxForward.toStringAsFixed(0)} m',
+          LidarUnknown() => 'không đo được',
+        }} · nhiệt $thermal';
+    // Aiming and blind problems are announced by the sight monitor; a gap in
+    // depth itself must not block the next reading from clearing it.
+    final problem = _sight.check(now);
+    if (problem != null && problem != SightProblem.noDepth) return;
+    _depthProximity = (
+      proximity: ProximityPulse.fromDistance(distance),
+      atMs: _frameClock.elapsedMilliseconds,
+    );
+    _updatePulse();
+    _announceDepth(_lidarWarning.update(reading), metres: distance);
+  }
+
+  /// Speaks a class-agnostic depth warning unless the detector already names
+  /// the obstacle. [metres] is known only with LiDAR.
+  void _announceDepth(AlertLevel level, {double? metres}) {
     // The detector's alert names the obstacle; depth only covers the rest.
     if (level == AlertLevel.info || _scene.alert != null) return;
     final isDanger = level == AlertLevel.danger;
@@ -562,6 +657,8 @@ class _CameraScreenState extends State<CameraScreen>
     _lastAlertAt = DateTime.now();
     final text = isDanger
         ? 'Dừng lại! Có vật cản ngay phía trước.'
+        : metres != null
+        ? 'Chú ý, vật cản phía trước khoảng ${_spokenMetres(metres)} mét. Đi chậm lại.'
         : 'Chú ý, có vật ở phía trước. Đi chậm lại.';
     final log = _eventLogger(
       isDanger ? TripEventType.danger : TripEventType.caution,
@@ -576,6 +673,14 @@ class _CameraScreenState extends State<CameraScreen>
         log();
       },
     );
+  }
+
+  /// Rounded to half a metre with a Vietnamese decimal comma: "1,5".
+  static String _spokenMetres(double metres) {
+    final half = (metres * 2).round() / 2;
+    return half == half.roundToDouble()
+        ? half.toStringAsFixed(0)
+        : half.toStringAsFixed(1).replaceAll('.', ',');
   }
 
   /// Pulses follow whichever source sees the closer obstacle; a depth reading
@@ -906,6 +1011,7 @@ class _CameraScreenState extends State<CameraScreen>
     await _cleanup(_speech.stopAll);
     await _cleanup(_detector.dispose);
     await _cleanup(_depth.dispose);
+    await _cleanup(_lidarDepth.dispose);
     await _locationStart;
     await _cleanup(_location.stop);
     await _eventWrites;
@@ -1107,7 +1213,7 @@ class _CameraScreenState extends State<CameraScreen>
                       ],
                     ),
                     const SizedBox(height: 8),
-                    if (!kReleaseMode && !_isMockTest)
+                    if (_diagnosticsEnabled && !_isMockTest)
                       ExcludeSemantics(
                         child: ValueListenableBuilder<String>(
                           valueListenable: _diagnostics,

@@ -18,6 +18,7 @@ class LidarDepthFrame {
     required this.upY,
     required this.upZ,
     this.trackingAvailable = true,
+    this.thermalState = 0,
   });
 
   final int width;
@@ -38,6 +39,9 @@ class LidarDepthFrame {
 
   /// False while ARKit tracking is not available: gravity is unreliable.
   final bool trackingAvailable;
+
+  /// ProcessInfo.ThermalState raw value: 0 nominal … 3 critical.
+  final int thermalState;
 }
 
 sealed class LidarReading {

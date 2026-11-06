@@ -171,6 +171,7 @@ final class LidarCameraPlugin: NSObject, FlutterPlugin, FlutterStreamHandler,
       var event = event
       if event["type"] as? String == "frame" {
         event["orientation"] = self.orientation
+        event["thermal"] = ProcessInfo.processInfo.thermalState.rawValue
       }
       self.sink?(event)
     }

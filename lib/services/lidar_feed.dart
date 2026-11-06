@@ -17,6 +17,9 @@ class LidarHandle implements FeedHandle {
   LidarHandle(this.textureId);
 
   final int textureId;
+
+  /// ProcessInfo.ThermalState raw value from the latest frame.
+  int thermalState = 0;
   DeviceOrientation _orientation = DeviceOrientation.portraitUp;
 
   static const _orientations = {
@@ -234,6 +237,8 @@ class LidarFeed extends ValueNotifier<FeedHandle?>
         _receivedFrame = true;
         _automaticRestarts = 0;
         if (handle.updateOrientation(event['orientation'])) notifyListeners();
+        final thermal = event['thermal'];
+        if (thermal is int) handle.thermalState = thermal;
         final image = frameImage(event);
         try {
           if (image != null) _onFrame(handle, image);
@@ -345,6 +350,7 @@ class LidarFeed extends ValueNotifier<FeedHandle?>
       upY: ups[1]!,
       upZ: ups[2]!,
       trackingAvailable: e['tracking'] != false,
+      thermalState: e['thermal'] is int ? e['thermal'] as int : 0,
     );
   }
 
