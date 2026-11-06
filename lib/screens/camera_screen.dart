@@ -117,25 +117,13 @@ class _CameraScreenState extends State<CameraScreen>
   double _screenWidth = 0;
   double _screenHeight = 0;
 
-  static const Map<DeviceOrientation, int> _deviceDegrees = {
-    DeviceOrientation.portraitUp: 0,
-    DeviceOrientation.landscapeLeft: 90,
-    DeviceOrientation.portraitDown: 180,
-    DeviceOrientation.landscapeRight: 270,
-  };
-
   /// Góc cần xoay ảnh camera để AI thấy thế giới đứng thẳng — tự tính theo nền tảng, góc cảm biến
   /// và hướng điện thoại (xem [ImageUtils.frameRotation]). Xoay điện thoại thì preview, khung vật,
   /// 3 cột và ảnh đưa vào AI cùng xoay theo màn hình, không cần bấm nút.
   int get _rotationDegrees {
     final handle = _handle;
     if (handle == null) return 90;
-    final auto = ImageUtils.frameRotation(
-      isIOS: Platform.isIOS,
-      sensorOrientation: handle.sensorOrientation,
-      deviceDegrees: _deviceDegrees[handle.deviceOrientation]!,
-      frontCamera: handle.isFrontCamera,
-    );
+    final auto = handle.frameRotation;
     return (auto + _debugRotationOffset) % 360;
   }
 
