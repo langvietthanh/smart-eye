@@ -205,6 +205,22 @@ class ImageUtils {
   // ---------------------------------------------------------------------------
 
   /// Chọn cách đọc 1 pixel RGB theo định dạng frame (nhận biết qua số lớp — plane)
+  /// Mean luma (0..255) from a coarse grid; enough to detect a dark or
+  /// covered camera without touching every pixel. Null for unsupported frames.
+  static double? meanLuma(CameraImage image, {int grid = 24}) {
+    final read = _readerFor(image);
+    if (read == null || image.width <= 0 || image.height <= 0) return null;
+    double sum = 0;
+    for (int gy = 0; gy < grid; gy++) {
+      final y = (gy * 2 + 1) * image.height ~/ (grid * 2);
+      for (int gx = 0; gx < grid; gx++) {
+        final rgb = read((gx * 2 + 1) * image.width ~/ (grid * 2), y);
+        sum += 0.299 * (rgb >> 16) + 0.587 * ((rgb >> 8) & 255) + 0.114 * (rgb & 255);
+      }
+    }
+    return sum / (grid * grid);
+  }
+
   static _PixelReader? _readerFor(CameraImage image) {
     final planes = image.planes;
 

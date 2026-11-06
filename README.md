@@ -25,6 +25,10 @@ khi vật chiếm nhiều khung hình phía trước hoặc đang lớn nhanh s�
 - Nút **Lịch sử**: danh sách chuyến đi, nghe tóm tắt, xem ảnh ghi nhớ, nghe lại toàn bộ.
 - Chip **Đầy đủ / Yên lặng**: chế độ yên lặng chỉ báo khi nguy hiểm.
 - Chip **Mô tả khi hỏi / Tự mô tả**: bật tự mô tả tần suất thấp (~45 giây, chỉ khi không có cảnh báo gần đây).
+- **Rung liên tục kiểu cảm biến lùi xe**: có vật trong lối đi phía trước thì máy rung, vật càng gần rung càng dày. Không rung chỉ có nghĩa là không *nhận ra* vật nào, không chứng minh đường trống.
+- **Báo khi app không nhìn được**: camera/AI ngừng trả kết quả quá 1,5 giây, phòng quá tối hoặc camera bị che → nói "Dừng lại!" và rung dài; máy chĩa xuống sàn / lên trần → nhắc nâng hoặc hạ máy.
+- **Thấy vật cản không có tên** (tường, cửa, tủ, thùng đồ): model độ sâu MiDaS v2.1 small chạy song song với YOLO (~3 lần/giây). So độ gần của vùng phía trước ngang ngực với mảng sàn ngay trước chân; gần bằng nhau thì báo *"Dừng lại! Có vật cản ngay phía trước."* Độ sâu là tương đối, không phải mét.
+- Thử nghiệm trong phòng: xem [INDOOR-TEST-PROTOCOL.md](INDOOR-TEST-PROTOCOL.md).
 
 ---
 
@@ -34,6 +38,7 @@ khi vật chiếm nhiều khung hình phía trước hoặc đang lớn nhanh s�
 smart_eye/
 ├── 📁 assets/
 │   ├── 📁 models/yolov8n_int8.tflite   # Model YOLOv8 Quantized INT8
+│   │   └── midas_small.tflite        # MiDaS v2.1 small (MIT, isl-org/MiDaS), trọng số fp16 (tool/tflite_fp16_weights.py), 256×256
 │   └── 📁 labels/coco.txt             # 80 nhãn vật thể chuẩn COCO
 ├── 📁 lib/
 │   ├── 📄 main.dart                    # Khởi tạo ứng dụng
@@ -76,24 +81,30 @@ Nên chạy trên thiết bị Android thật để kiểm tra độ trễ nhậ
 4. Dùng cáp USB cắm điện thoại vào máy tính.
 
 ### Bước 2: Clone & Chạy lệnh
-1. Mở Terminal / PowerShell tại thư mục muốn lưu dự án và gõ:
+1. Cài **Git LFS** trước (model độ sâu `midas_small.tflite` 33 MB lưu bằng LFS; thiếu LFS thì file chỉ là con trỏ vài dòng và app báo không tải được cảm biến độ sâu):
+   ```bash
+   brew install git-lfs   # Windows: tải tại https://git-lfs.com
+   git lfs install
+   ```
+   Clone trước khi cài LFS thì chạy thêm `git lfs pull` trong thư mục dự án.
+2. Mở Terminal / PowerShell tại thư mục muốn lưu dự án và gõ:
    ```bash
    git clone <link_repository_of_project>
    cd smart_eye
    ```
-2. Tải các thư viện phụ thuộc:
+3. Tải các thư viện phụ thuộc:
    ```bash
    flutter pub get
    ```
-3. Kiểm tra máy tính đã nhận diện điện thoại:
+4. Kiểm tra máy tính đã nhận diện điện thoại:
    ```bash
    flutter devices
    ```
-4. Tiến hành chạy ứng dụng lên điện thoại:
+5. Tiến hành chạy ứng dụng lên điện thoại:
    ```bash
    flutter run
    ```
-5. Trên điện thoại, chọn **"Cho phép" (Allow)** khi được yêu cầu cấp quyền Camera.
+6. Trên điện thoại, chọn **"Cho phép" (Allow)** khi được yêu cầu cấp quyền Camera.
 
 ---
 

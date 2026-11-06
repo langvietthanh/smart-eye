@@ -41,6 +41,7 @@ dependencies:
   geolocator: ^14.0.3
   image: ^4.10.1
   wakelock_plus: ^1.8.0
+  sensors_plus: ^6.1.1
 
 dev_dependencies:
   camera_platform_interface: ^2.13.1
