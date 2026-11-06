@@ -81,24 +81,30 @@ Nên chạy trên thiết bị Android thật để kiểm tra độ trễ nhậ
 4. Dùng cáp USB cắm điện thoại vào máy tính.
 
 ### Bước 2: Clone & Chạy lệnh
-1. Mở Terminal / PowerShell tại thư mục muốn lưu dự án và gõ:
+1. Cài **Git LFS** trước (model độ sâu `midas_small.tflite` 66 MB lưu bằng LFS; thiếu LFS thì file chỉ là con trỏ vài dòng và app báo không tải được cảm biến độ sâu):
+   ```bash
+   brew install git-lfs   # Windows: tải tại https://git-lfs.com
+   git lfs install
+   ```
+   Clone trước khi cài LFS thì chạy thêm `git lfs pull` trong thư mục dự án.
+2. Mở Terminal / PowerShell tại thư mục muốn lưu dự án và gõ:
    ```bash
    git clone <link_repository_of_project>
    cd smart_eye
    ```
-2. Tải các thư viện phụ thuộc:
+3. Tải các thư viện phụ thuộc:
    ```bash
    flutter pub get
    ```
-3. Kiểm tra máy tính đã nhận diện điện thoại:
+4. Kiểm tra máy tính đã nhận diện điện thoại:
    ```bash
    flutter devices
    ```
-4. Tiến hành chạy ứng dụng lên điện thoại:
+5. Tiến hành chạy ứng dụng lên điện thoại:
    ```bash
    flutter run
    ```
-5. Trên điện thoại, chọn **"Cho phép" (Allow)** khi được yêu cầu cấp quyền Camera.
+6. Trên điện thoại, chọn **"Cho phép" (Allow)** khi được yêu cầu cấp quyền Camera.
 
 ---
 
