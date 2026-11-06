@@ -140,7 +140,11 @@ class _DetectionResult {
 
 class _DetectorProcessor
     implements IsolateProcessor<_DetectionRequest, _DetectionResult> {
-  _DetectorProcessor(this._modelBytes, this._labels);
+  _DetectorProcessor(this._modelBytes, this._labels)
+    : _relevantClasses = {
+        for (int i = 0; i < _labels.length; i++)
+          if (isDetectionRelevant(_labels[i])) i,
+      };
 
   Uint8List? _modelBytes;
   final List<String> _labels;
@@ -151,13 +155,12 @@ class _DetectorProcessor
   static const double _confidenceThreshold = 0.25;
   static const double _iouThreshold = 0.45;
 
-  // Các class ID liên quan đến an toàn/di chuyển của người mù
-  static const Set<int> _relevantClasses = {
-    0, 1, 2, 3, 5, 6, 7, // person, bicycle, car, motorcycle, bus, train, truck
-    9, 10, 11, 13, // traffic light, fire hydrant, stop sign, bench
-    15, 16, // cat, dog
-    56, 57, 58, 60, // chair, couch, potted plant, dining table
-  };
+  // Derived from label_catalog so the filter and hazard categories cannot drift.
+  final Set<int> _relevantClasses;
+
+  // Coordinate units are a property of the exported model; decided once from
+  // the first frame because anchor centres always span the whole input.
+  bool? _normalizedCoords;
 
   Interpreter? _interpreter;
   late Uint8List _inputBuffer;
@@ -373,6 +376,20 @@ class _DetectorProcessor
       }
     }
 
+    final bool isNormalized = _normalizedCoords ??= () {
+      double maxCx = 0;
+      for (int i = 0; i < numAnchors; i++) {
+        maxCx = max(maxCx, value(0, i));
+      }
+      return maxCx <= 1.5;
+    }();
+    final double scaleX = isNormalized
+        ? screenWidth
+        : (screenWidth / _inputSize);
+    final double scaleY = isNormalized
+        ? screenHeight
+        : (screenHeight / _inputSize);
+
     final List<Recognition> candidates = [];
     double maxOverallScore = 0.0;
     int maxOverallClass = -1;
@@ -402,15 +419,6 @@ class _DetectorProcessor
       final double cy = value(1, i);
       final double bw = value(2, i);
       final double bh = value(3, i);
-
-      // Tự động phát hiện tọa độ là chuẩn hóa [0..1] hay pixel [0..inputSize]
-      final bool isNormalized = (cx <= 1.5 && bw <= 1.5);
-      final double scaleX = isNormalized
-          ? screenWidth
-          : (screenWidth / _inputSize);
-      final double scaleY = isNormalized
-          ? screenHeight
-          : (screenHeight / _inputSize);
 
       final double left = ((cx - bw / 2) * scaleX).clamp(0, screenWidth);
       final double top = ((cy - bh / 2) * scaleY).clamp(0, screenHeight);
