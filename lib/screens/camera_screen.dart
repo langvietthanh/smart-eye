@@ -30,6 +30,7 @@ import '../services/scene_freshness.dart';
 import '../services/sight_monitor.dart';
 import '../services/speech_manager.dart';
 import '../utils/image_utils.dart';
+import '../utils/label_catalog.dart';
 import 'history_screen.dart';
 
 /// Field-test overlay (fps, LiDAR distance, thermal): always in debug builds,
@@ -352,8 +353,9 @@ class _CameraScreenState extends State<CameraScreen>
     final previous = _sightProblem;
     _sightProblem = problem;
     if (problem == null) {
-      if (previous?.isBlind ?? false) {
-        _speech.say('Đã nhìn thấy lại.', SpeechPriority.caution);
+      final recovery = sightRecoveryText(previous);
+      if (recovery != null) {
+        _speech.say(recovery, SpeechPriority.caution);
       }
       return;
     }
@@ -364,7 +366,7 @@ class _CameraScreenState extends State<CameraScreen>
             (_handle as LidarHandle).thermalState >= _thermalCritical
         ? 'Máy quá nóng, không đo được khoảng cách. Hãy để máy nguội.'
         : problem.message;
-    final priority = problem.isBlind
+    final priority = problem.stopsUser
         ? SpeechPriority.danger
         : SpeechPriority.caution;
     // Speech cooldown per subject repeats the warning while the problem lasts.
@@ -374,7 +376,7 @@ class _CameraScreenState extends State<CameraScreen>
       message,
       priority,
       subject: subject,
-      onStart: problem.isBlind ? HapticFeedback.vibrate : null,
+      onStart: problem.stopsUser ? HapticFeedback.vibrate : null,
     );
   }
 
@@ -703,9 +705,12 @@ class _CameraScreenState extends State<CameraScreen>
     Duration observationAge = Duration.zero,
   }) {
     if (!_sceneFreshness.accept(observationAge)) return;
+    final filtered = detections
+        .where((d) => !ignoredLabels.contains(d.labelEn))
+        .toList();
     final now = DateTime.now();
     final frame = Size(_screenWidth, _screenHeight);
-    final tracks = _tracker.update(detections, frame, capturedAt ?? now);
+    final tracks = _tracker.update(filtered, frame, capturedAt ?? now);
     final scene = _engine.assess(tracks, frame);
     _speech.retainAlerts(
       subject: scene.alert?.subject,
@@ -878,7 +883,7 @@ class _CameraScreenState extends State<CameraScreen>
     _lastDescribeAt = DateTime.now();
     _speech.say(
       _autoDescribe
-          ? 'Bật tự động mô tả, khoảng 1 phút 1 lần.'
+          ? 'Bật tự động mô tả, khoảng 45 giây một lần.'
           : 'Tắt tự động mô tả.',
       SpeechPriority.description,
       force: true,

@@ -9,15 +9,30 @@ extension SightProblemText on SightProblem {
     SightProblem.noResults =>
       'Dừng lại! Camera không hoạt động, không thấy đường.',
     SightProblem.tooDark => 'Dừng lại! Quá tối, không nhìn rõ.',
-    SightProblem.pointingDown => 'Máy đang chĩa xuống sàn. Nâng máy lên.',
-    SightProblem.pointingUp => 'Máy đang chĩa lên cao. Hạ máy xuống.',
+    SightProblem.pointingDown =>
+      'Dừng lại! Máy đang chĩa xuống sàn. Nâng máy lên.',
+    SightProblem.pointingUp => 'Dừng lại! Máy đang chĩa lên cao. Hạ máy xuống.',
     SightProblem.noDepth => 'Không đo được khoảng cách. Đi chậm, dùng gậy.',
   };
 
   /// Blind states stop the user; aiming problems only ask to adjust.
   bool get isBlind =>
       this == SightProblem.noResults || this == SightProblem.tooDark;
+
+  /// Whether the issue stops the user with danger priority and haptics.
+  bool get stopsUser =>
+      isBlind ||
+      this == SightProblem.pointingDown ||
+      this == SightProblem.pointingUp;
 }
+
+/// Trả về câu thông báo khi chuyển từ trạng thái lỗi [previous] về bình thường.
+String? sightRecoveryText(SightProblem? previous) => switch (previous) {
+  SightProblem.pointingDown || SightProblem.pointingUp =>
+    'Đã đúng hướng. Đi tiếp.',
+  SightProblem.noResults || SightProblem.tooDark => 'App đã nhìn thấy lại.',
+  SightProblem.noDepth || null => null,
+};
 
 /// Pure state machine fed by AI results and the accelerometer. The screen
 /// polls [check] on a timer so a stalled camera/detector is still noticed.

@@ -75,10 +75,14 @@ void main() {
     m.onDepth(at(800), known: false);
     expect(m.check(at(900)), isNull);
     expect(m.check(at(1100)), SightProblem.noDepth);
-    expect(SightProblem.noDepth.isBlind, isFalse);
-    expect(
-      SightProblem.noDepth.message,
-      'Không đo được khoảng cách. Đi chậm, dùng gậy.',
+    expect(SightProblem.noDepth.isBlind, isFalse);
+
+    expect(
+
+      SightProblem.noDepth.message,
+
+      'Không đo được khoảng cách. Đi chậm, dùng gậy.',
+
     );
     m.onDepth(at(1200), known: true);
     expect(m.check(at(1300)), isNull);
@@ -93,5 +97,48 @@ void main() {
       ..start(t0);
     m.onResult(at(5000), 10);
     expect(m.check(at(5100)), SightProblem.tooDark);
+  });
+
+  test('aiming problems have updated message and stopsUser', () {
+    expect(
+      SightProblem.pointingDown.message,
+      'Dừng lại! Máy đang chĩa xuống sàn. Nâng máy lên.',
+    );
+    expect(
+      SightProblem.pointingUp.message,
+      'Dừng lại! Máy đang chĩa lên cao. Hạ máy xuống.',
+    );
+    expect(SightProblem.pointingDown.stopsUser, isTrue);
+    expect(SightProblem.pointingUp.stopsUser, isTrue);
+    expect(SightProblem.noResults.stopsUser, isTrue);
+    expect(SightProblem.tooDark.stopsUser, isTrue);
+    expect(SightProblem.noDepth.stopsUser, isFalse);
+
+    // isBlind remains only noResults and tooDark
+    expect(SightProblem.pointingDown.isBlind, isFalse);
+    expect(SightProblem.pointingUp.isBlind, isFalse);
+    expect(SightProblem.noResults.isBlind, isTrue);
+    expect(SightProblem.tooDark.isBlind, isTrue);
+  });
+
+  test('sightRecoveryText returns correct recovery messages', () {
+    expect(
+      sightRecoveryText(SightProblem.pointingDown),
+      'Đã đúng hướng. Đi tiếp.',
+    );
+    expect(
+      sightRecoveryText(SightProblem.pointingUp),
+      'Đã đúng hướng. Đi tiếp.',
+    );
+    expect(
+      sightRecoveryText(SightProblem.noResults),
+      'App đã nhìn thấy lại.',
+    );
+    expect(
+      sightRecoveryText(SightProblem.tooDark),
+      'App đã nhìn thấy lại.',
+    );
+    expect(sightRecoveryText(SightProblem.noDepth), isNull);
+    expect(sightRecoveryText(null), isNull);
   });
 }

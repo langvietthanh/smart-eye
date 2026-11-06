@@ -16,9 +16,9 @@ const Map<String, String> labelVi = {
   'truck': 'xe tải',
   'boat': 'thuyền',
   'traffic light': 'cột đèn giao thông',
-  'fire hydrant': 'trụ nước cứu hỏa',
+  'fire hydrant': 'trụ cứu hỏa',
   'stop sign': 'biển báo',
-  'parking meter': 'cột đồng hồ đỗ xe',
+  'parking meter': 'cột đỗ xe',
   'bench': 'ghế băng',
   'bird': 'chim',
   'cat': 'mèo',
@@ -51,7 +51,7 @@ const Map<String, String> labelVi = {
   'toilet': 'bồn cầu',
   'tvmonitor': 'ti vi',
   'tv': 'ti vi',
-  'laptop': 'máy tính xách tay',
+  'laptop': 'laptop',
   'mouse': 'chuột máy tính',
   'keyboard': 'bàn phím',
   'cell phone': 'điện thoại',
@@ -69,6 +69,8 @@ const Map<String, String> labelVi = {
   'hole': 'hố',
 };
 
+// Model COCO hiện tại không nhận ra hố ga, ổ gà, bậc thang, hố;
+// các nhãn này chỉ dùng khi đổi sang model khác.
 const _groundHazards = {'manhole', 'pothole', 'stairs', 'hole'};
 const _vehicles = {
   'bicycle',
@@ -104,9 +106,20 @@ const _animals = {
   'cow',
   'sheep',
   'elephant',
-  'bear',
   'zebra',
   'giraffe',
+};
+
+/// Các nhãn gần như chắc là nhận nhầm trong môi trường người khiếm thị di chuyển;
+/// được lọc bỏ trước khi đưa vào tracker.
+const ignoredLabels = {
+  'elephant',
+  'giraffe',
+  'zebra',
+  'bear',
+  'aeroplane',
+  'airplane',
+  'boat',
 };
 
 ObjectCategory categoryOf(String labelEn) {
