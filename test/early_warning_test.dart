@@ -28,7 +28,7 @@ void main() {
       );
       final scene = engine.assess(tracks, _frame);
       expect(scene.alert?.level, AlertLevel.danger);
-      expect(scene.alert?.message, 'Dừng lại! Ghế ngay phía trước.');
+      expect(scene.alert?.message, 'Dừng lại! Có ghế ngay phía trước.');
     },
   );
 
@@ -245,7 +245,7 @@ void main() {
         tracker.update([detection], _frame, DateTime(2026)),
         _frame,
       );
-      expect(scene.alert?.message, 'Chú ý, xe ô tô bên phải. Đi chậm lại.');
+      expect(scene.alert?.message, 'Chậm lại. Có xe ô tô bên phải.');
       expect(scene.alert?.message, isNot(contains('trống')));
       expect(scene.alert?.message, isNot(contains('mét')));
     },

@@ -14,6 +14,7 @@ import '../models/trip.dart';
 import '../widgets/bounding_box_painter.dart';
 import '../services/caption_builder.dart';
 import '../services/camera_feed.dart';
+import '../services/depth_alert.dart';
 import '../services/depth_analysis.dart';
 import '../services/depth_service.dart';
 import '../services/feed_handle.dart';
@@ -29,6 +30,7 @@ import '../services/scene_freshness.dart';
 import '../services/sight_monitor.dart';
 import '../services/speech_manager.dart';
 import '../utils/image_utils.dart';
+import '../utils/label_catalog.dart';
 import 'history_screen.dart';
 
 /// Field-test overlay (fps, LiDAR distance, thermal): always in debug builds,
@@ -351,8 +353,9 @@ class _CameraScreenState extends State<CameraScreen>
     final previous = _sightProblem;
     _sightProblem = problem;
     if (problem == null) {
-      if (previous?.isBlind ?? false) {
-        _speech.say('Đã nhìn thấy lại.', SpeechPriority.caution);
+      final recovery = sightRecoveryText(previous);
+      if (recovery != null) {
+        _speech.say(recovery, SpeechPriority.caution);
       }
       return;
     }
@@ -363,7 +366,7 @@ class _CameraScreenState extends State<CameraScreen>
             (_handle as LidarHandle).thermalState >= _thermalCritical
         ? 'Máy quá nóng, không đo được khoảng cách. Hãy để máy nguội.'
         : problem.message;
-    final priority = problem.isBlind
+    final priority = problem.stopsUser
         ? SpeechPriority.danger
         : SpeechPriority.caution;
     // Speech cooldown per subject repeats the warning while the problem lasts.
@@ -373,7 +376,7 @@ class _CameraScreenState extends State<CameraScreen>
       message,
       priority,
       subject: subject,
-      onStart: problem.isBlind ? HapticFeedback.vibrate : null,
+      onStart: problem.stopsUser ? HapticFeedback.vibrate : null,
     );
   }
 
@@ -646,20 +649,19 @@ class _CameraScreenState extends State<CameraScreen>
   }
 
   /// Speaks a class-agnostic depth warning unless the detector already names
-  /// the obstacle. [metres] is known only with LiDAR.
+  /// the obstacle with equal or higher urgency. [metres] is known only with LiDAR.
   void _announceDepth(AlertLevel level, {double? metres}) {
-    // The detector's alert names the obstacle; depth only covers the rest.
-    if (level == AlertLevel.info || _scene.alert != null) return;
+    final text = depthAlertText(
+      depthLevel: level,
+      detectorLevel: _scene.alert?.level,
+      metres: metres,
+    );
+    if (text == null) return;
     final isDanger = level == AlertLevel.danger;
     final priority = isDanger ? SpeechPriority.danger : SpeechPriority.caution;
     const subject = 'depth:center';
     if (!_speech.canSay(priority, subject: subject)) return;
     _lastAlertAt = DateTime.now();
-    final text = isDanger
-        ? 'Dừng lại! Có vật cản ngay phía trước.'
-        : metres != null
-        ? 'Chú ý, vật cản phía trước khoảng ${_spokenMetres(metres)} mét. Đi chậm lại.'
-        : 'Chú ý, có vật ở phía trước. Đi chậm lại.';
     final log = _eventLogger(
       isDanger ? TripEventType.danger : TripEventType.caution,
       text,
@@ -673,14 +675,6 @@ class _CameraScreenState extends State<CameraScreen>
         log();
       },
     );
-  }
-
-  /// Rounded to half a metre with a Vietnamese decimal comma: "1,5".
-  static String _spokenMetres(double metres) {
-    final half = (metres * 2).round() / 2;
-    return half == half.roundToDouble()
-        ? half.toStringAsFixed(0)
-        : half.toStringAsFixed(1).replaceAll('.', ',');
   }
 
   /// Pulses follow whichever source sees the closer obstacle; a depth reading
@@ -711,9 +705,12 @@ class _CameraScreenState extends State<CameraScreen>
     Duration observationAge = Duration.zero,
   }) {
     if (!_sceneFreshness.accept(observationAge)) return;
+    final filtered = detections
+        .where((d) => !ignoredLabels.contains(d.labelEn))
+        .toList();
     final now = DateTime.now();
     final frame = Size(_screenWidth, _screenHeight);
-    final tracks = _tracker.update(detections, frame, capturedAt ?? now);
+    final tracks = _tracker.update(filtered, frame, capturedAt ?? now);
     final scene = _engine.assess(tracks, frame);
     _speech.retainAlerts(
       subject: scene.alert?.subject,
@@ -886,7 +883,7 @@ class _CameraScreenState extends State<CameraScreen>
     _lastDescribeAt = DateTime.now();
     _speech.say(
       _autoDescribe
-          ? 'Bật tự động mô tả, khoảng 1 phút 1 lần.'
+          ? 'Bật tự động mô tả, khoảng 45 giây một lần.'
           : 'Tắt tự động mô tả.',
       SpeechPriority.description,
       force: true,

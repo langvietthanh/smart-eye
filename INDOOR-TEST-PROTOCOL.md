@@ -11,14 +11,14 @@ Mục tiêu: đo xem app báo **kịp** và **không bỏ sót** khi người d�
 ## Kịch bản (mỗi kịch bản 5 lần)
 | # | Bố trí | Ghi lại |
 |---|---|---|
-| 1 | Ghế ở giữa lối đi, tiến thẳng tới | Khoảng cách lúc bắt đầu rung, lúc nói "Chú ý", lúc nói "Dừng lại" |
+| 1 | Ghế ở giữa lối đi, tiến thẳng tới | Khoảng cách lúc bắt đầu rung, lúc nói "Chậm lại", lúc nói "Dừng lại" |
 | 2 | Ghế lệch trái / lệch phải | App có nói đúng phía không |
 | 3 | Bàn thấp và rộng (bàn trà) | Có báo không, báo ở khoảng cách nào |
 | 4 | Thùng carton, ba lô dưới sàn | COCO không nhận ra; chỉ model độ sâu báo *"Có vật cản ngay phía trước"*. Ghi khoảng cách lúc báo |
 | 5 | Đi thẳng vào tường hoặc cửa | Chỉ model độ sâu báo. Ghi khoảng cách lúc rung đầu tiên và lúc *"Dừng lại"* |
 | 6 | Tắt đèn phòng | Có nói "Quá tối" trong ~1 giây không |
 | 7 | Lấy tay che camera | Có nói "Quá tối" hoặc "Camera không hoạt động" không |
-| 8 | Cầm máy chĩa xuống sàn, rồi chĩa lên trần | Có nhắc "Nâng máy lên" / "Hạ máy xuống" không |
+| 8 | Cầm máy chĩa xuống sàn, rồi chĩa lên trần | Có cảnh báo "Dừng lại! Máy đang chĩa xuống sàn..." / "...chĩa lên cao..." không |
 | 9 | Phòng có 4–6 vật, đi từ cửa tới đích | Số lần va chạm (người quan sát chặn trước), số lần báo nhầm |
 
 ## Bảng ghi

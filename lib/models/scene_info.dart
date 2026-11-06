@@ -25,9 +25,9 @@ extension HPosText on HPos {
 
 extension DistanceText on DistanceLevel {
   String get vi => switch (this) {
-    DistanceLevel.near => 'có thể rất gần',
-    DistanceLevel.medium => 'có thể ở gần',
-    DistanceLevel.far => 'chưa rõ khoảng cách',
+    DistanceLevel.near => 'rất gần',
+    DistanceLevel.medium => 'khá gần',
+    DistanceLevel.far => 'còn xa',
   };
 }
 
