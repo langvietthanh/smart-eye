@@ -1,5 +1,4 @@
 import 'dart:async';
-import 'dart:typed_data';
 
 import 'package:camera/camera.dart';
 import 'package:camera_platform_interface/camera_platform_interface.dart'
@@ -50,20 +49,14 @@ class LidarFeed extends ValueNotifier<FeedHandle?>
     with WidgetsBindingObserver
     implements FrameSource {
   LidarFeed({
-    required void Function(FeedHandle, CameraImage) onFrame,
-    required void Function(LidarDepthFrame) onDepth,
-    required void Function(FeedHandle?) onChanged,
-    required void Function(Object, StackTrace) onError,
+    required this._onFrame,
+    required this._onDepth,
+    required this._onChanged,
+    required this._onError,
     this.frameTimeout = const Duration(seconds: 4),
-    MethodChannel methods = defaultMethods,
-    EventChannel events = defaultEvents,
-  }) : _onFrame = onFrame,
-       _onDepth = onDepth,
-       _onChanged = onChanged,
-       _onError = onError,
-       _methods = methods,
-       _events = events,
-       super(null) {
+    this._methods = defaultMethods,
+    this._events = defaultEvents,
+  }) : super(null) {
     _foreground =
         WidgetsBinding.instance.lifecycleState == null ||
         WidgetsBinding.instance.lifecycleState == AppLifecycleState.resumed;
