@@ -3,6 +3,7 @@ import 'dart:ui';
 
 import '../models/scene_info.dart';
 import 'depth_analysis.dart';
+import 'lidar_analysis.dart';
 import 'visual_proximity.dart';
 
 /// Parking-sensor style haptic feedback: the closer the nearest detected
@@ -28,6 +29,10 @@ class ProximityPulse {
   /// Depth closeness: starts below the caution threshold, full at danger.
   static double? fromCloseness(double? closeness) =>
       _scale(closeness, 0.6, DepthAnalysis.danger);
+
+  /// LiDAR metres: slow pulses from 2.5 m, full at the danger distance.
+  static double? fromDistance(double? metres) =>
+      metres == null ? null : _scale(-metres, -2.5, -LidarWarning.dangerEnter);
 
   static double? _scale(double? value, double start, double full) =>
       value == null || value < start

@@ -160,7 +160,11 @@ void main() {
       final tts = FakeTts();
       final manager = managerFor(tester, tts);
       manager.say('Dừng lại', SpeechPriority.danger);
-      final caution = manager.sayAndWait('Cảnh báo cũ', SpeechPriority.caution);
+      final caution = manager.sayAndWait(
+        'Cảnh báo cũ',
+        SpeechPriority.caution,
+        subject: 'track:1',
+      );
       final description = manager.sayAndWait(
         'Mô tả khi hỏi',
         SpeechPriority.description,
@@ -203,6 +207,152 @@ void main() {
       expect(
         manager.canSay(SpeechPriority.caution, subject: 'track:1'),
         isTrue,
+      );
+      await manager.stopAll();
+    },
+  );
+
+  testWidgets(
+    'retainAlerts only drops track alerts and retains depth alert',
+    (tester) async {
+      final tts = FakeTts();
+      final manager = managerFor(tester, tts);
+      manager.say('Đang nói', SpeechPriority.playback);
+      tts.stopGate = Completer<void>();
+
+      final track1 = manager.sayAndWait(
+        'Vật cản cũ',
+        SpeechPriority.caution,
+        subject: 'track:1',
+      );
+      final depth = manager.sayAndWait(
+        'Dừng lại! Có vật cản ngay phía trước.',
+        SpeechPriority.danger,
+        subject: 'depth:center',
+      );
+
+      // YOLO has no alert this frame (subject: null)
+      manager.retainAlerts();
+
+      expect(await track1, isFalse);
+
+      tts.stopGate!.complete();
+      await tester.pump();
+
+      while (manager.isBusy) {
+        tts.finish();
+        await tester.pump();
+        await tester.pump(const Duration(milliseconds: 100));
+      }
+
+      expect(await depth, isTrue);
+      expect(tts.spoken, [
+        'Đang nói',
+        'Dừng lại! Có vật cản ngay phía trước.',
+      ]);
+      await manager.stopAll();
+    },
+  );
+
+  testWidgets(
+    'retainAlerts only drops track alerts and retains sight and unassigned alerts',
+    (tester) async {
+      final tts = FakeTts();
+      final manager = managerFor(tester, tts);
+      manager.say('Đang nói', SpeechPriority.playback);
+      tts.stopGate = Completer<void>();
+
+      final trackDanger = manager.sayAndWait(
+        'Nguy hiểm cũ',
+        SpeechPriority.danger,
+        subject: 'track:1',
+      );
+      final sight = manager.sayAndWait(
+        'Không đo được khoảng cách. Đi chậm, dùng gậy.',
+        SpeechPriority.caution,
+        subject: 'sight:noDepth',
+      );
+
+      // YOLO has no alert this frame (subject: null)
+      manager.retainAlerts();
+
+      expect(await trackDanger, isFalse);
+
+      tts.stopGate!.complete();
+      await tester.pump();
+
+      while (manager.isBusy) {
+        tts.finish();
+        await tester.pump();
+        await tester.pump(const Duration(milliseconds: 100));
+      }
+
+      expect(await sight, isTrue);
+      expect(tts.spoken, [
+        'Đang nói',
+        'Không đo được khoảng cách. Đi chậm, dùng gậy.',
+      ]);
+
+      // Verify unassigned alert (subject == null) is also retained
+      final unassigned = manager.sayAndWait(
+        'Thông báo chung',
+        SpeechPriority.caution,
+      );
+      manager.retainAlerts();
+      while (manager.isBusy) {
+        tts.finish();
+        await tester.pump();
+        await tester.pump(const Duration(milliseconds: 100));
+      }
+      expect(await unassigned, isTrue);
+      expect(tts.spoken, contains('Thông báo chung'));
+
+      await manager.stopAll();
+    },
+  );
+
+  testWidgets(
+    'retainAlerts with another track subject drops old track alert but retains depth alert',
+    (tester) async {
+      final tts = FakeTts();
+      final manager = managerFor(tester, tts);
+      manager.say('Đang nói', SpeechPriority.playback);
+      tts.stopGate = Completer<void>();
+
+      final track1 = manager.sayAndWait(
+        'Vật cản cũ',
+        SpeechPriority.caution,
+        subject: 'track:1',
+      );
+      final depth = manager.sayAndWait(
+        'Dừng lại! Có vật cản ngay phía trước.',
+        SpeechPriority.danger,
+        subject: 'depth:center',
+      );
+
+      // YOLO alert changed to track:2
+      manager.retainAlerts(
+        subject: 'track:2',
+        priority: SpeechPriority.danger,
+        text: 'Dừng lại',
+      );
+
+      expect(await track1, isFalse);
+
+      tts.stopGate!.complete();
+      await tester.pump();
+
+      while (manager.isBusy) {
+        tts.finish();
+        await tester.pump();
+        await tester.pump(const Duration(milliseconds: 100));
+      }
+
+      expect(await depth, isTrue);
+      expect(tts.spoken, isNot(contains('Vật cản cũ')));
+      expect(
+        tts.spoken,
+        contains('Dừng lại! Có vật cản ngay phía trước.'),
       );
       await manager.stopAll();
     },

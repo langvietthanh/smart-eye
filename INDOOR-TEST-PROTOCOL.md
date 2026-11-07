@@ -11,7 +11,7 @@ Mục tiêu: đo xem app báo **kịp** và **không bỏ sót** khi người d�
 ## Kịch bản (mỗi kịch bản 5 lần)
 | # | Bố trí | Ghi lại |
 |---|---|---|
-| 1 | Ghế ở giữa lối đi, tiến thẳng tới | Khoảng cách lúc bắt đầu rung, lúc nói "Chú ý", lúc nói "Dừng lại" |
+| 1 | Ghế ở giữa lối đi, tiến thẳng tới | Khoảng cách lúc bắt đầu rung, lúc nói "Chậm lại", lúc nói "Dừng lại" |
 | 2 | Ghế lệch trái / lệch phải | App có nói đúng phía không |
 | 3 | Bàn thấp và rộng (bàn trà) | Có báo không, báo ở khoảng cách nào |
 | 4 | Thùng carton, ba lô dưới sàn | COCO không nhận ra; chỉ model độ sâu báo *"Có vật cản ngay phía trước"*. Ghi khoảng cách lúc báo |
@@ -19,7 +19,7 @@ Mục tiêu: đo xem app báo **kịp** và **không bỏ sót** khi người d�
 | 5b | **Bậc bục giảng**: đi tới bục cao 15–20 cm (có tường/bảng phía sau), rồi đứng trên bục đi về mép | Bậc lên: khoảng cách lúc nói *"Chú ý, phía trước có bậc lên"* và *"Dừng lại! Bậc lên ngay phía trước"*. Mép bục: khoảng cách lúc nói *"Dừng lại! Có bậc xuống phía trước"*. Thử cả bậc thấp ~10 cm (dự kiến bỏ sót) |
 | 6 | Tắt đèn phòng | Có nói "Quá tối" trong ~1 giây không |
 | 7 | Lấy tay che camera | Có nói "Quá tối" hoặc "Camera không hoạt động" không |
-| 8 | Cầm máy chĩa xuống sàn, rồi chĩa lên trần | Có nhắc "Nâng máy lên" / "Hạ máy xuống" không |
+| 8 | Cầm máy chĩa xuống sàn, rồi chĩa lên trần | Có cảnh báo "Dừng lại! Máy đang chĩa xuống sàn..." / "...chĩa lên cao..." không |
 | 9 | Phòng có 4–6 vật, đi từ cửa tới đích | Số lần va chạm (người quan sát chặn trước), số lần báo nhầm |
 
 ## Bảng ghi

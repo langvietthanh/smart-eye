@@ -41,8 +41,9 @@ jobs:
         run: |
           sed -i '' 's/PRODUCT_BUNDLE_IDENTIFIER = \(.*\);/PRODUCT_BUNDLE_IDENTIFIER = \1; CODE_SIGNING_ALLOWED = "NO"; CODE_SIGNING_REQUIRED = "NO"; DEVELOPMENT_TEAM = "V8VXY724Y2";/g' ios/Runner.xcodeproj/project.pbxproj
 
+      # Nhánh khác main: bật overlay chẩn đoán (fps, khoảng cách LiDAR, nhiệt) để thử thực địa
       - name: Build iOS (release, không ký)
-        run: flutter build ios --release --no-codesign
+        run: flutter build ios --release --no-codesign ${{ github.ref != 'refs/heads/main' && '--dart-define=SMART_EYE_DIAGNOSTICS=true' || '' }}
 
       - name: Đóng gói IPA
         run: |

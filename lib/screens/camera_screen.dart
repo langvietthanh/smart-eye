@@ -12,13 +12,16 @@ import '../models/Recognition.dart';
 import '../models/scene_info.dart';
 import '../models/trip.dart';
 import '../widgets/bounding_box_painter.dart';
-import '../widgets/camera_feed_preview.dart';
 import '../services/caption_builder.dart';
 import '../services/camera_feed.dart';
+import '../services/depth_alert.dart';
 import '../services/depth_analysis.dart';
 import '../services/depth_service.dart';
+import '../services/feed_handle.dart';
 import '../services/detector_service.dart';
 import '../services/hazard_engine.dart';
+import '../services/lidar_analysis.dart';
+import '../services/lidar_feed.dart';
 import '../services/history_service.dart';
 import '../services/location_service.dart';
 import '../services/object_tracker.dart';
@@ -27,7 +30,13 @@ import '../services/scene_freshness.dart';
 import '../services/sight_monitor.dart';
 import '../services/speech_manager.dart';
 import '../utils/image_utils.dart';
+import '../utils/label_catalog.dart';
 import 'history_screen.dart';
+
+/// Field-test overlay (fps, LiDAR distance, thermal): always in debug builds,
+/// and in release builds made with --dart-define=SMART_EYE_DIAGNOSTICS=true.
+const bool _diagnosticsEnabled =
+    !kReleaseMode || bool.fromEnvironment('SMART_EYE_DIAGNOSTICS');
 
 // A top-level callback prevents compute from capturing the widget, controller,
 // detector or any other unsendable platform state.
@@ -52,9 +61,12 @@ class _CameraScreenState extends State<CameraScreen>
   static const Duration _autoDescribeEvery = Duration(seconds: 45);
   static const Duration _calmAfterAlert = Duration(seconds: 10);
 
-  CameraController? _controller;
+  FeedHandle? _handle;
   bool _isDetecting = false;
-  late final CameraFeed _cameraFeed;
+
+  /// Chosen once services are ready: ARKit LiDAR when supported, else the
+  /// camera plugin.
+  FrameSource? _feed;
   bool _foreground = true;
   bool _disposed = false;
   bool _servicesReady = false;
@@ -88,6 +100,14 @@ class _CameraScreenState extends State<CameraScreen>
   final DepthService _depth = DepthService();
   final DepthWarning _depthWarning = DepthWarning();
   final StepWarning _stepWarning = StepWarning();
+
+  /// iPhones with LiDAR measure metres directly; MiDaS is then not loaded.
+  bool _useLidar = false;
+  static const int _thermalCritical = 3; // ProcessInfo.ThermalState.critical
+  final LidarDepthService _lidarDepth = LidarDepthService();
+  final LidarWarning _lidarWarning = LidarWarning();
+  String _lidarStatus = '';
+  int _lidarReadings = 0;
   static const int _minDepthIntervalMs = 300;
   int _lastDepthMs = -300;
   double? _boxProximity;
@@ -115,28 +135,13 @@ class _CameraScreenState extends State<CameraScreen>
   double _screenWidth = 0;
   double _screenHeight = 0;
 
-  static const Map<DeviceOrientation, int> _deviceDegrees = {
-    DeviceOrientation.portraitUp: 0,
-    DeviceOrientation.landscapeLeft: 90,
-    DeviceOrientation.portraitDown: 180,
-    DeviceOrientation.landscapeRight: 270,
-  };
-
   /// Góc cần xoay ảnh camera để AI thấy thế giới đứng thẳng — tự tính theo nền tảng, góc cảm biến
   /// và hướng điện thoại (xem [ImageUtils.frameRotation]). Xoay điện thoại thì preview, khung vật,
   /// 3 cột và ảnh đưa vào AI cùng xoay theo màn hình, không cần bấm nút.
   int get _rotationDegrees {
-    final controller = _controller;
-    final camera = controller?.description;
-    if (camera == null) return 90;
-    final auto = ImageUtils.frameRotation(
-      isIOS: Platform.isIOS,
-      sensorOrientation: camera.sensorOrientation,
-      deviceDegrees:
-          _deviceDegrees[controller?.value.deviceOrientation ??
-              DeviceOrientation.portraitUp]!,
-      frontCamera: camera.lensDirection == CameraLensDirection.front,
-    );
+    final handle = _handle;
+    if (handle == null) return 90;
+    final auto = handle.frameRotation;
     return (auto + _debugRotationOffset) % 360;
   }
 
@@ -169,23 +174,40 @@ class _CameraScreenState extends State<CameraScreen>
     _foreground =
         WidgetsBinding.instance.lifecycleState == null ||
         WidgetsBinding.instance.lifecycleState == AppLifecycleState.resumed;
-    _cameraFeed = CameraFeed(
-      onFrame: _onCameraFrame,
-      onChanged: _cameraChanged,
-      onError: (error, stack) {
-        debugPrint('Lỗi camera: $error\n$stack');
-        if (mounted && !_disposed && _wantsCamera) {
-          setState(() {
-            _hasError = true;
-            _statusText = 'Lỗi camera: $error';
-          });
-        }
-      },
-    );
     // Dùng addPostFrameCallback để UI render trước, rồi mới init
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (mounted && !_disposed) unawaited(_initAll());
     });
+  }
+
+  void _onFeedError(Object error, StackTrace stack) {
+    debugPrint('Lỗi camera: $error\n$stack');
+    if (mounted && !_disposed && _wantsCamera) {
+      setState(() {
+        _hasError = true;
+        _statusText = 'Lỗi camera: $error';
+      });
+    }
+  }
+
+  /// The camera backend; created once, before the camera is first opened.
+  FrameSource _createFeed() {
+    if (_useLidar) {
+      return LidarFeed(
+        onFrame: _onCameraFrame,
+        onDepth: _onLidarDepth,
+        onChanged: _cameraChanged,
+        onError: _onFeedError,
+      );
+    }
+    return CameraFeed(
+      onFrame: (controller, image) =>
+          _onCameraFrame(CameraControllerHandle(controller), image),
+      onChanged: (controller) => _cameraChanged(
+        controller == null ? null : CameraControllerHandle(controller),
+      ),
+      onError: _onFeedError,
+    );
   }
 
   bool get _wantsCamera =>
@@ -213,7 +235,18 @@ class _CameraScreenState extends State<CameraScreen>
       }
 
       // 2b. Depth is optional: without it walls/doors are not seen, say so.
-      if (!_depth.isLoaded) {
+      // LiDAR (iPhone Pro) gives metres and replaces the MiDaS estimate.
+      if (_feed == null && Platform.isIOS && await LidarFeed.isSupported()) {
+        try {
+          await _lidarDepth.start();
+          _useLidar = true;
+          _sight.enableDepth(true);
+        } catch (e, stack) {
+          debugPrint('Không khởi động được LiDAR: $e\n$stack');
+        }
+        if (_disposed) return;
+      }
+      if (!_useLidar && !_depth.isLoaded) {
         try {
           await _depth.loadModel();
         } catch (e, stack) {
@@ -238,6 +271,7 @@ class _CameraScreenState extends State<CameraScreen>
       _locationStart ??= _location.start().then<void>((_) {});
 
       // 4. Khởi động camera
+      _feed ??= _createFeed();
       _servicesReady = true;
       if (mounted) setState(() => _statusText = 'Đang mở camera...');
       await _syncCamera();
@@ -253,8 +287,8 @@ class _CameraScreenState extends State<CameraScreen>
     }
   }
 
-  void _cameraChanged(CameraController? controller) {
-    _controller = controller;
+  void _cameraChanged(FeedHandle? controller) {
+    _handle = controller;
     _invalidateScene();
     if (mounted && !_disposed) {
       setState(() {
@@ -279,9 +313,10 @@ class _CameraScreenState extends State<CameraScreen>
     _syncSight();
     _syncMockTimer();
     _syncDiagnostics();
-    return _cameraFeed.setActive(
-      !_disposed && !_paused && !_isMockTest && _servicesReady,
-    );
+    return _feed?.setActive(
+          !_disposed && !_paused && !_isMockTest && _servicesReady,
+        ) ??
+        Future.value();
   }
 
   /// Watches for states where the app cannot see the path, so silence is
@@ -319,28 +354,35 @@ class _CameraScreenState extends State<CameraScreen>
     final previous = _sightProblem;
     _sightProblem = problem;
     if (problem == null) {
-      if (previous?.isBlind ?? false) {
-        _speech.say('Đã nhìn thấy lại.', SpeechPriority.caution);
+      final recovery = sightRecoveryText(previous);
+      if (recovery != null) {
+        _speech.say(recovery, SpeechPriority.caution);
       }
       return;
     }
     if (problem.isBlind) _clearProximity();
-    final priority = problem.isBlind
+    final message =
+        problem == SightProblem.noDepth &&
+            (_handle is LidarHandle) &&
+            (_handle as LidarHandle).thermalState >= _thermalCritical
+        ? 'Máy quá nóng, không đo được khoảng cách. Hãy để máy nguội.'
+        : problem.message;
+    final priority = problem.stopsUser
         ? SpeechPriority.danger
         : SpeechPriority.caution;
     // Speech cooldown per subject repeats the warning while the problem lasts.
     final subject = 'sight:${problem.name}';
     if (!_speech.canSay(priority, subject: subject)) return;
     _speech.say(
-      problem.message,
+      message,
       priority,
       subject: subject,
-      onStart: problem.isBlind ? HapticFeedback.vibrate : null,
+      onStart: problem.stopsUser ? HapticFeedback.vibrate : null,
     );
   }
 
   void _syncDiagnostics() {
-    if (kReleaseMode || !_wantsCamera) {
+    if (!_diagnosticsEnabled || !_wantsCamera) {
       _diagnosticTimer?.cancel();
       _diagnosticTimer = null;
       return;
@@ -369,7 +411,9 @@ class _CameraScreenState extends State<CameraScreen>
       _diagnostics.value =
           'AI ${fps.toStringAsFixed(1)} fps · nhận kết quả '
           '${latency.meanMs.toStringAsFixed(0)} ms (p95 ${latency.p95Ms.toStringAsFixed(0)})\n'
-          'Model ${nativeMs.toStringAsFixed(0)} ms · RSS $memory';
+          'Model ${nativeMs.toStringAsFixed(0)} ms · RSS $memory'
+          '${_useLidar ? '\nLiDAR $_lidarReadings Hz · $_lidarStatus' : ''}';
+      _lidarReadings = 0;
     });
   }
 
@@ -393,7 +437,7 @@ class _CameraScreenState extends State<CameraScreen>
                 !_disposed &&
                 _foreground &&
                 !_paused &&
-                (_isMockTest || _controller != null),
+                (_isMockTest || _handle != null),
           ),
         )
         .catchError((Object e) => debugPrint('Không đổi được wakelock: $e'));
@@ -427,6 +471,7 @@ class _CameraScreenState extends State<CameraScreen>
     _depthProximity = null;
     _depthWarning.reset();
     _stepWarning.reset();
+    _lidarWarning.reset();
     _pulse.stop();
   }
 
@@ -457,13 +502,10 @@ class _CameraScreenState extends State<CameraScreen>
   // Pipeline
   // ---------------------------------------------------------------------------
 
-  Future<void> _onCameraFrame(
-    CameraController controller,
-    CameraImage image,
-  ) async {
-    if (!_wantsCamera || controller != _controller || !_modelLoaded) return;
+  Future<void> _onCameraFrame(FeedHandle controller, CameraImage image) async {
+    if (!_wantsCamera || controller != _handle || !_modelLoaded) return;
     final rotation = _rotationDegrees;
-    final orientation = controller.value.deviceOrientation;
+    final orientation = controller.deviceOrientation;
     if (_lastFrameRotation != null &&
         (_lastFrameRotation != rotation ||
             _lastFrameOrientation != orientation)) {
@@ -500,9 +542,9 @@ class _CameraScreenState extends State<CameraScreen>
       if (!_wantsCamera ||
           !mounted ||
           generation != _frameGeneration ||
-          controller != _controller ||
+          controller != _handle ||
           rotation != _rotationDegrees ||
-          orientation != controller.value.deviceOrientation ||
+          orientation != controller.deviceOrientation ||
           _frameClock.elapsedMilliseconds - now > _maxFrameAgeMs ||
           sw != _screenWidth ||
           sh != _screenHeight) {
@@ -526,11 +568,7 @@ class _CameraScreenState extends State<CameraScreen>
   }
 
   /// Depth runs in its own isolate at a lower rate than object detection.
-  void _maybeRunDepth(
-    CameraController controller,
-    CameraImage image,
-    int rotation,
-  ) {
+  void _maybeRunDepth(FeedHandle controller, CameraImage image, int rotation) {
     if (!_depth.isLoaded || _depth.busy) return;
     final startedAt = _frameClock.elapsedMilliseconds;
     if (startedAt - _lastDepthMs < _minDepthIntervalMs) return;
@@ -543,7 +581,7 @@ class _CameraScreenState extends State<CameraScreen>
             if (reading == null ||
                 !_wantsCamera ||
                 generation != _frameGeneration ||
-                controller != _controller ||
+                controller != _handle ||
                 _frameClock.elapsedMilliseconds - startedAt > _maxFrameAgeMs) {
               return;
             }
@@ -568,17 +606,70 @@ class _CameraScreenState extends State<CameraScreen>
       _announceStep(step.kind, step.level);
       return;
     }
-    final level = _depthWarning.update(reading.center);
-    // The detector's alert names the obstacle; depth only covers the rest.
-    if (level == AlertLevel.info || _scene.alert != null) return;
+    _announceDepth(_depthWarning.update(reading.center));
+  }
+
+  /// LiDAR depth packets arrive ~10 Hz; analysis runs off the UI isolate and
+  /// a packet that arrives while it is busy is dropped.
+  void _onLidarDepth(LidarDepthFrame frame) {
+    if (!_wantsCamera || _lidarDepth.busy) return;
+    final handle = _handle;
+    final generation = _frameGeneration;
+    final startedAt = _frameClock.elapsedMilliseconds;
+    unawaited(
+      _lidarDepth
+          .analyze(frame)
+          .then((reading) {
+            if (reading == null ||
+                !_wantsCamera ||
+                generation != _frameGeneration ||
+                handle != _handle ||
+                _frameClock.elapsedMilliseconds - startedAt > _maxFrameAgeMs) {
+              return;
+            }
+            _onLidarReading(reading, thermal: frame.thermalState);
+          })
+          .catchError((Object e) => debugPrint('Lỗi xử lý LiDAR: $e')),
+    );
+  }
+
+  void _onLidarReading(LidarReading reading, {required int thermal}) {
+    final now = DateTime.now();
+    _lidarReadings++;
+    _sight.onDepth(now, known: reading is! LidarUnknown);
+    final distance = reading is LidarObstacle ? reading.distance : null;
+    _lidarStatus =
+        '${switch (reading) {
+          LidarObstacle(:final distance) => '${distance.toStringAsFixed(2)} m',
+          LidarClear() => 'thông ≤ ${LidarAnalysis.maxForward.toStringAsFixed(0)} m',
+          LidarUnknown() => 'không đo được',
+        }} · nhiệt $thermal';
+    // Aiming and blind problems are announced by the sight monitor; a gap in
+    // depth itself must not block the next reading from clearing it.
+    final problem = _sight.check(now);
+    if (problem != null && problem != SightProblem.noDepth) return;
+    _depthProximity = (
+      proximity: ProximityPulse.fromDistance(distance),
+      atMs: _frameClock.elapsedMilliseconds,
+    );
+    _updatePulse();
+    _announceDepth(_lidarWarning.update(reading), metres: distance);
+  }
+
+  /// Speaks a class-agnostic depth warning unless the detector already names
+  /// the obstacle with equal or higher urgency. [metres] is known only with LiDAR.
+  void _announceDepth(AlertLevel level, {double? metres}) {
+    final text = depthAlertText(
+      depthLevel: level,
+      detectorLevel: _scene.alert?.level,
+      metres: metres,
+    );
+    if (text == null) return;
     final isDanger = level == AlertLevel.danger;
     final priority = isDanger ? SpeechPriority.danger : SpeechPriority.caution;
     const subject = 'depth:center';
     if (!_speech.canSay(priority, subject: subject)) return;
     _lastAlertAt = DateTime.now();
-    final text = isDanger
-        ? 'Dừng lại! Có vật cản ngay phía trước.'
-        : 'Chú ý, có vật ở phía trước. Đi chậm lại.';
     final log = _eventLogger(
       isDanger ? TripEventType.danger : TripEventType.caution,
       text,
@@ -656,9 +747,12 @@ class _CameraScreenState extends State<CameraScreen>
     Duration observationAge = Duration.zero,
   }) {
     if (!_sceneFreshness.accept(observationAge)) return;
+    final filtered = detections
+        .where((d) => !ignoredLabels.contains(d.labelEn))
+        .toList();
     final now = DateTime.now();
     final frame = Size(_screenWidth, _screenHeight);
-    final tracks = _tracker.update(detections, frame, capturedAt ?? now);
+    final tracks = _tracker.update(filtered, frame, capturedAt ?? now);
     final scene = _engine.assess(tracks, frame);
     _speech.retainAlerts(
       subject: scene.alert?.subject,
@@ -790,7 +884,7 @@ class _CameraScreenState extends State<CameraScreen>
 
   void _requestDescribe() {
     HapticFeedback.selectionClick();
-    if (_isMockTest || _controller == null || _paused) {
+    if (_isMockTest || _handle == null || _paused) {
       _describe(null, manual: true);
       return;
     }
@@ -831,7 +925,7 @@ class _CameraScreenState extends State<CameraScreen>
     _lastDescribeAt = DateTime.now();
     _speech.say(
       _autoDescribe
-          ? 'Bật tự động mô tả, khoảng 1 phút 1 lần.'
+          ? 'Bật tự động mô tả, khoảng 45 giây một lần.'
           : 'Tắt tự động mô tả.',
       SpeechPriority.description,
       force: true,
@@ -944,7 +1038,7 @@ class _CameraScreenState extends State<CameraScreen>
     _frameClock.stop();
     _sceneNotifier.dispose();
     _syncWakelock();
-    unawaited(_cameraFeed.dispose());
+    unawaited(_feed?.dispose());
     unawaited(_disposeServices());
     super.dispose();
   }
@@ -956,6 +1050,7 @@ class _CameraScreenState extends State<CameraScreen>
     await _cleanup(_speech.stopAll);
     await _cleanup(_detector.dispose);
     await _cleanup(_depth.dispose);
+    await _cleanup(_lidarDepth.dispose);
     await _locationStart;
     await _cleanup(_location.stop);
     await _eventWrites;
@@ -988,8 +1083,8 @@ class _CameraScreenState extends State<CameraScreen>
     }
     _screenWidth = size.width;
     _screenHeight = size.height;
-    final controller = _controller;
-    final cameraReady = controller != null && controller.value.isInitialized;
+    final handle = _handle;
+    final cameraReady = handle != null && handle.isInitialized;
 
     // Loading / Error screen
     if (!cameraReady && !_isMockTest) {
@@ -1024,7 +1119,7 @@ class _CameraScreenState extends State<CameraScreen>
                           _statusText = 'Đang thử lại...';
                         });
                         if (_servicesReady) {
-                          unawaited(_cameraFeed.retry());
+                          unawaited(_feed?.retry());
                         } else {
                           unawaited(_initAll());
                         }
@@ -1067,7 +1162,7 @@ class _CameraScreenState extends State<CameraScreen>
                 child: cameraReady && !_isMockTest
                     ? RotatedBox(
                         quarterTurns: _debugRotationOffset ~/ 90,
-                        child: CameraFeedPreview(feed: _cameraFeed),
+                        child: _feed?.buildPreview(),
                       )
                     : const ColoredBox(color: Color(0xFF1A1A2E)),
               ),
@@ -1157,7 +1252,7 @@ class _CameraScreenState extends State<CameraScreen>
                       ],
                     ),
                     const SizedBox(height: 8),
-                    if (!kReleaseMode && !_isMockTest)
+                    if (_diagnosticsEnabled && !_isMockTest)
                       ExcludeSemantics(
                         child: ValueListenableBuilder<String>(
                           valueListenable: _diagnostics,

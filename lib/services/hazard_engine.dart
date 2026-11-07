@@ -155,15 +155,22 @@ class HazardEngine {
   String _message(ObjectInfo object, AlertLevel level, bool inPath) {
     final where = inPath
         ? switch (object.pos) {
-            HPos.left => 'phía trước, lệch trái',
-            HPos.right => 'phía trước, lệch phải',
             HPos.center => 'ngay phía trước',
+            HPos.left => 'bên trái',
+            HPos.right => 'bên phải',
           }
         : object.pos.vi;
-    final movement = object.approaching ? ', đang gần hơn' : '';
+    final canMove = object.category == ObjectCategory.vehicle ||
+        object.category == ObjectCategory.person ||
+        object.category == ObjectCategory.animal;
+    final isApproaching = object.approaching && canMove;
+
     if (level == AlertLevel.danger) {
-      return 'Dừng lại! ${capitalize(object.label)} $where$movement.';
+      return 'Dừng lại! Có ${object.label} $where.';
     }
-    return 'Chú ý, ${object.label} $where$movement. Đi chậm lại.';
+    if (isApproaching) {
+      return 'Chậm lại. ${capitalize(object.label)} $where đang tới gần.';
+    }
+    return 'Chậm lại. Có ${object.label} $where.';
   }
 }

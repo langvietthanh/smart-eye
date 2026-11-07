@@ -26,7 +26,7 @@ khi vật chiếm nhiều khung hình phía trước hoặc đang lớn nhanh s�
 - Chip **Đầy đủ / Yên lặng**: chế độ yên lặng chỉ báo khi nguy hiểm.
 - Chip **Mô tả khi hỏi / Tự mô tả**: bật tự mô tả tần suất thấp (~45 giây, chỉ khi không có cảnh báo gần đây).
 - **Rung liên tục kiểu cảm biến lùi xe**: có vật trong lối đi phía trước thì máy rung, vật càng gần rung càng dày. Không rung chỉ có nghĩa là không *nhận ra* vật nào, không chứng minh đường trống.
-- **Báo khi app không nhìn được**: camera/AI ngừng trả kết quả quá 1,5 giây, phòng quá tối hoặc camera bị che → nói "Dừng lại!" và rung dài; máy chĩa xuống sàn / lên trần → nhắc nâng hoặc hạ máy.
+- **Báo khi app không nhìn được**: camera/AI ngừng trả kết quả quá 1,5 giây, phòng quá tối hoặc camera bị che → nói "Dừng lại!" và rung dài; máy chĩa xuống sàn / lên trần → cảnh báo "Dừng lại! Máy đang chĩa xuống sàn..." / "...chĩa lên cao...".
 - **Thấy vật cản không có tên** (tường, cửa, tủ, thùng đồ): model độ sâu MiDaS v2.1 small chạy song song với YOLO (~3 lần/giây). So độ gần của vùng phía trước ngang ngực với mảng sàn ngay trước chân; gần bằng nhau thì báo *"Dừng lại! Có vật cản ngay phía trước."* Độ sâu là tương đối, không phải mét.
 - **Bậc lên / bậc xuống** (bục giảng, bậc cửa, mép bục): từ cùng ảnh độ sâu, so profile sàn ở giữa khung hình với một mặt phẳng; mặt nhô lên = bậc lên, tụt xuống = bậc xuống. Báo *"Chú ý, phía trước có bậc lên"* → *"Dừng lại! Bậc lên ngay phía trước. Dò bằng gậy."*; bậc xuống luôn *"Dừng lại!"*; rung 2 nhịp. Bậc thấp dưới ~10 cm có thể bị bỏ sót; khi đã sát chân, bậc ra khỏi khung hình.
 - Thử nghiệm trong phòng: xem [INDOOR-TEST-PROTOCOL.md](INDOOR-TEST-PROTOCOL.md).
@@ -131,8 +131,8 @@ flutter run
 
 - **🧪 Nút `Test UI` trên màn hình lỗi camera/loading khi model đã sẵn sàng**:
   - Bấm nút này để kích hoạt chế độ **Giả lập** (lặp mỗi 8 giây, chạy qua đúng pipeline tracker → rules → giọng nói):
-    1. Xe máy phía trước to dần → *"Dừng lại! Xe máy ngay phía trước, đang gần hơn."*
-    2. Ghế ở giữa, người sát bên trái → *"Chú ý, ghế ngay phía trước. Đi chậm lại."*
+    1. Xe máy phía trước to dần → *"Dừng lại! Có xe máy ngay phía trước."*
+    2. Ghế ở giữa, người sát bên trái → *"Chậm lại. Có ghế ngay phía trước."*
   - Không cần camera — nút cũng có ở màn hình loading nếu camera lỗi.
 - **🔄 Xoay màn hình**: app tự xoay theo hướng điện thoại — preview, khung vật thể, 3 cột free-space và ảnh đưa vào AI xoay cùng nhau (tính từ góc cảm biến camera + hướng máy), không cần bấm nút.
 

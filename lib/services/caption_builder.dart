@@ -12,7 +12,7 @@ class CaptionBuilder {
   static String describeScene(SceneAssessment scene) {
     final objects = scene.objects.where((o) => o.track.misses == 0).toList();
     if (objects.isEmpty) {
-      return 'Chưa nhận diện được vật thể. Chưa xác định được lối đi an toàn.';
+      return 'Chưa nhận diện được vật, chưa có lối đi an toàn.';
     }
 
     // Gộp theo (vị trí, tên vật), giữ khoảng cách gần nhất trong nhóm
@@ -70,20 +70,20 @@ class CaptionBuilder {
   /// Câu tóm tắt lối đi dựa trên free-space 3 cột
   static String freeSpaceSentence(SceneAssessment scene) {
     if (scene.isColumnFree(HPos.center)) {
-      return 'Chưa thấy vật cản ở giữa khung hình; chưa xác định được lối đi an toàn.';
+      return 'Phía trước chưa thấy vật cản.';
     }
     final left = scene.isColumnFree(HPos.left);
     final right = scene.isColumnFree(HPos.right);
     if (left && right) {
-      return 'Có vật phía trước. Chưa xác định được lối đi an toàn hai bên.';
+      return 'Vật phía trước. Hai bên chưa thấy vật.';
     }
     if (left) {
-      return 'Có vật phía trước và bên phải. Chưa xác định được lối đi an toàn bên trái.';
+      return 'Vật phía trước và bên phải. Bên trái chưa thấy vật.';
     }
     if (right) {
-      return 'Có vật phía trước và bên trái. Chưa xác định được lối đi an toàn bên phải.';
+      return 'Vật phía trước và bên trái. Bên phải chưa thấy vật.';
     }
-    return 'Phía trước và hai bên đều có vật cản, nên đứng lại.';
+    return 'Đứng lại, có vật ở 3 hướng.';
   }
 
   // ---------------------------------------------------------------------------
@@ -92,10 +92,17 @@ class CaptionBuilder {
 
   /// "Chuyến đi lúc 7 giờ 30 sáng ngày 23 tháng 9: đi khoảng 1,2 ki lô mét trong 45 phút,
   ///  gặp 3 cảnh báo nguy hiểm và 5 lần nhắc chú ý."
-  static String recap(TripSummary trip) {
+  static String recap(TripSummary trip, {DateTime? now}) {
     final start = trip.startTime;
+    final current = now ?? DateTime.now();
+    final isToday = start.year == current.year &&
+        start.month == current.month &&
+        start.day == current.day;
+    final dateStr = isToday
+        ? 'hôm nay'
+        : 'ngày ${start.day} tháng ${start.month}';
     final buf = StringBuffer(
-      'Chuyến đi lúc ${spokenTime(start)} ngày ${start.day} tháng ${start.month}: ',
+      'Chuyến đi lúc ${spokenTime(start)} $dateStr: ',
     );
 
     final activity = <String>[];

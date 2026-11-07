@@ -64,4 +64,81 @@ void main() {
     expect(m.check(at(10)), SightProblem.tooDark);
     expect(m.check(at(2000)), SightProblem.noResults);
   });
+
+  test('LiDAR depth that stays unreadable is announced', () {
+    final m = SightMonitor()
+      ..enableDepth(true)
+      ..start(t0);
+    m.onResult(at(0), 120);
+    m.onDepth(at(0), known: true);
+    m.onResult(at(1000), 120);
+    m.onDepth(at(800), known: false);
+    expect(m.check(at(900)), isNull);
+    expect(m.check(at(1100)), SightProblem.noDepth);
+    expect(SightProblem.noDepth.isBlind, isFalse);
+
+    expect(
+
+      SightProblem.noDepth.message,
+
+      'Không đo được khoảng cách. Đi chậm, dùng gậy.',
+
+    );
+    m.onDepth(at(1200), known: true);
+    expect(m.check(at(1300)), isNull);
+  });
+
+  test('depth silence is ignored without LiDAR and loses to darkness', () {
+    final plain = SightMonitor()..start(t0);
+    plain.onResult(at(5000), 120);
+    expect(plain.check(at(5100)), isNull);
+    final m = SightMonitor()
+      ..enableDepth(true)
+      ..start(t0);
+    m.onResult(at(5000), 10);
+    expect(m.check(at(5100)), SightProblem.tooDark);
+  });
+
+  test('aiming problems have updated message and stopsUser', () {
+    expect(
+      SightProblem.pointingDown.message,
+      'Dừng lại! Máy đang chĩa xuống sàn. Nâng máy lên.',
+    );
+    expect(
+      SightProblem.pointingUp.message,
+      'Dừng lại! Máy đang chĩa lên cao. Hạ máy xuống.',
+    );
+    expect(SightProblem.pointingDown.stopsUser, isTrue);
+    expect(SightProblem.pointingUp.stopsUser, isTrue);
+    expect(SightProblem.noResults.stopsUser, isTrue);
+    expect(SightProblem.tooDark.stopsUser, isTrue);
+    expect(SightProblem.noDepth.stopsUser, isFalse);
+
+    // isBlind remains only noResults and tooDark
+    expect(SightProblem.pointingDown.isBlind, isFalse);
+    expect(SightProblem.pointingUp.isBlind, isFalse);
+    expect(SightProblem.noResults.isBlind, isTrue);
+    expect(SightProblem.tooDark.isBlind, isTrue);
+  });
+
+  test('sightRecoveryText returns correct recovery messages', () {
+    expect(
+      sightRecoveryText(SightProblem.pointingDown),
+      'Đã đúng hướng. Đi tiếp.',
+    );
+    expect(
+      sightRecoveryText(SightProblem.pointingUp),
+      'Đã đúng hướng. Đi tiếp.',
+    );
+    expect(
+      sightRecoveryText(SightProblem.noResults),
+      'App đã nhìn thấy lại.',
+    );
+    expect(
+      sightRecoveryText(SightProblem.tooDark),
+      'App đã nhìn thấy lại.',
+    );
+    expect(sightRecoveryText(SightProblem.noDepth), isNull);
+    expect(sightRecoveryText(null), isNull);
+  });
 }
