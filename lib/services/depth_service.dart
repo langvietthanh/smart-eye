@@ -98,7 +98,11 @@ class _DepthProcessor implements IsolateProcessor<_DepthRequest, DepthReading?> 
     try {
       final options = InterpreterOptions()..threads = 2;
       try {
-        if (Platform.isAndroid || Platform.isIOS) {
+        if (Platform.isAndroid) {
+          // Android: tflite_flutter 0.12.1 passes a 24-byte XNNPackDelegateOptions but LiteRT 1.4.0 reads 56 bytes -> SIGSEGV; null options make LiteRT use its own defaults.
+          _delegates.add(XNNPackDelegate());
+          options.addDelegate(_delegates.last);
+        } else if (Platform.isIOS) {
           // Leave the remaining cores to object detection.
           final xnn = XNNPackDelegateOptions(numThreads: 2);
           try {

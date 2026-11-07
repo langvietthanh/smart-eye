@@ -265,14 +265,19 @@ class _DetectorProcessor
   void _createInterpreter({required bool accelerated}) {
     final options = InterpreterOptions()..threads = 4;
     try {
-      if (accelerated && (Platform.isAndroid || Platform.isIOS)) {
+      if (accelerated && Platform.isAndroid) {
+        // Android: tflite_flutter 0.12.1 passes a 24-byte XNNPackDelegateOptions but LiteRT 1.4.0 reads 56 bytes -> SIGSEGV; null options make LiteRT use its own defaults.
+        _delegates.add(XNNPackDelegate());
+      } else if (accelerated && Platform.isIOS) {
         final xnnOptions = XNNPackDelegateOptions(numThreads: 4);
         try {
           _delegates.add(XNNPackDelegate(options: xnnOptions));
         } finally {
           xnnOptions.delete();
         }
-        if (Platform.isIOS) _delegates.add(CoreMlDelegate());
+        _delegates.add(CoreMlDelegate());
+      }
+      if (accelerated) {
         for (final delegate in _delegates) {
           options.addDelegate(delegate);
         }
