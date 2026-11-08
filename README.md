@@ -28,6 +28,7 @@ khi vật chiếm nhiều khung hình phía trước hoặc đang lớn nhanh s�
 - **Rung liên tục kiểu cảm biến lùi xe**: có vật trong lối đi phía trước thì máy rung, vật càng gần rung càng dày. Không rung chỉ có nghĩa là không *nhận ra* vật nào, không chứng minh đường trống.
 - **Báo khi app không nhìn được**: camera/AI ngừng trả kết quả quá 1,5 giây, phòng quá tối hoặc camera bị che → nói "Dừng lại!" và rung dài; máy chĩa xuống sàn / lên trần → cảnh báo "Dừng lại! Máy đang chĩa xuống sàn..." / "...chĩa lên cao...".
 - **Thấy vật cản không có tên** (tường, cửa, tủ, thùng đồ): model độ sâu MiDaS v2.1 small chạy song song với YOLO (~3 lần/giây). So độ gần của vùng phía trước ngang ngực với mảng sàn ngay trước chân; gần bằng nhau thì báo *"Dừng lại! Có vật cản ngay phía trước."* Độ sâu là tương đối, không phải mét.
+- **Bậc lên / bậc xuống** (bục giảng, bậc cửa, mép bục): từ cùng ảnh độ sâu, so profile sàn ở giữa khung hình với một mặt phẳng; mặt nhô lên = bậc lên, tụt xuống = bậc xuống. Báo *"Chú ý, phía trước có bậc lên"* → *"Dừng lại! Bậc lên ngay phía trước. Dò bằng gậy."*; bậc xuống luôn *"Dừng lại!"*; rung 2 nhịp. Bậc thấp dưới ~10 cm có thể bị bỏ sót; khi đã sát chân, bậc ra khỏi khung hình.
 - Thử nghiệm trong phòng: xem [INDOOR-TEST-PROTOCOL.md](INDOOR-TEST-PROTOCOL.md).
 
 ---
