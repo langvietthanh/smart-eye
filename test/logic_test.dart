@@ -383,4 +383,14 @@ void main() {
       expect(categoryOf('bear'), ObjectCategory.other);
     });
   });
+
+  test('detector keeps every categorised class and signs, drops the rest', () {
+    for (final label in ['cow', 'horse', 'suitcase', 'chair', 'car']) {
+      expect(isDetectionRelevant(label), isTrue, reason: label);
+    }
+    expect(isDetectionRelevant('traffic light'), isTrue);
+    expect(isDetectionRelevant('stop sign'), isTrue);
+    expect(isDetectionRelevant('cup'), isFalse);
+    expect(isDetectionRelevant('book'), isFalse);
+  });
 }
