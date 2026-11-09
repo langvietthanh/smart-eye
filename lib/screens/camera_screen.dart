@@ -25,6 +25,7 @@ import '../services/lidar_feed.dart';
 import '../services/history_service.dart';
 import '../services/location_service.dart';
 import '../services/object_tracker.dart';
+import '../services/path_blockage.dart';
 import '../services/proximity_pulse.dart';
 import '../services/scene_freshness.dart';
 import '../services/sight_monitor.dart';
@@ -156,6 +157,7 @@ class _CameraScreenState extends State<CameraScreen>
   Timer? _describeFallback; // Không có frame nào tới kịp → vẫn trả lời
   DateTime _lastDescribeAt = DateTime.now();
   DateTime _lastAlertAt = DateTime.fromMillisecondsSinceEpoch(0);
+  final PathBlockage _blockage = PathBlockage();
 
   // Chế độ giả lập (không cần camera)
   bool _isMockTest = false;
@@ -344,13 +346,20 @@ class _CameraScreenState extends State<CameraScreen>
       _tilt = null;
       _sight.stop();
       _sightProblem = null;
+      _blockage.reset();
       _clearProximity();
     }
   }
 
   void _checkSight() {
     if (_disposed) return;
-    final problem = _sight.check(DateTime.now());
+    final now = DateTime.now();
+    final problem = _sight.check(now);
+    if (problem?.isBlind == true) {
+      _blockage.reset();
+    } else {
+      _onBlockage(_blockage.evaluate(now));
+    }
     final previous = _sightProblem;
     _sightProblem = problem;
     if (problem == null) {
@@ -381,6 +390,35 @@ class _CameraScreenState extends State<CameraScreen>
     );
   }
 
+  void _onBlockage(PathEvent? event) {
+    final now = DateTime.now();
+    if (event == PathEvent.cleared) {
+      _speech.say(
+        'Đường đi thông thoáng.',
+        SpeechPriority.caution,
+        subject: 'path:cleared',
+      );
+    }
+    if (!_blockage.trapped) return;
+    const subject = 'path:trapped';
+    if (!_speech.canSay(SpeechPriority.danger, subject: subject)) return;
+    const text =
+        'Đứng lại! Phía trước và hai bên đều có vật cản. Xoay người chậm để tìm lối.';
+    _lastAlertAt = now;
+    final log = event == PathEvent.trapped
+        ? _eventLogger(TripEventType.danger, text)
+        : null;
+    _speech.say(
+      text,
+      SpeechPriority.danger,
+      subject: subject,
+      onStart: () {
+        HapticFeedback.heavyImpact();
+        log?.call();
+      },
+    );
+  }
+
   void _syncDiagnostics() {
     if (!_diagnosticsEnabled || !_wantsCamera) {
       _diagnosticTimer?.cancel();
@@ -408,11 +446,13 @@ class _CameraScreenState extends State<CameraScreen>
       } catch (_) {
         // RSS is platform-dependent; never present buffer sizes as process RAM.
       }
+      final b = _blockage.blocked(DateTime.now());
       _diagnostics.value =
-          'AI ${fps.toStringAsFixed(1)} fps · nhận kết quả '
+          'AI${fps.toStringAsFixed(1)} fps · nhận kết quả '
           '${latency.meanMs.toStringAsFixed(0)} ms (p95 ${latency.p95Ms.toStringAsFixed(0)})\n'
           'Model ${nativeMs.toStringAsFixed(0)} ms · RSS $memory'
-          '${_useLidar ? '\nLiDAR $_lidarReadings Hz · $_lidarStatus' : ''}';
+          '${_useLidar ? '\nLiDAR $_lidarReadings Hz · $_lidarStatus' : ''}'
+          '\nHướng: T${b[0] ? '✗' : '✓'} G${b[1] ? '✗' : '✓'} P${b[2] ? '✗' : '✓'}${_blockage.trapped ? ' · kẹt' : ''}';
       _lidarReadings = 0;
     });
   }
@@ -445,6 +485,7 @@ class _CameraScreenState extends State<CameraScreen>
 
   void _invalidateScene({bool duringBuild = false}) {
     _sceneFreshness.cancel();
+    _blockage.reset();
     final generation = ++_frameGeneration;
     _tracker.reset();
     _speech.retainAlerts();
@@ -627,6 +668,7 @@ class _CameraScreenState extends State<CameraScreen>
                 _frameClock.elapsedMilliseconds - startedAt > _maxFrameAgeMs) {
               return;
             }
+            _blockage.onDepth(DateTime.now(), scan);
             _onLidarReading(scan.center, thermal: frame.thermalState);
           })
           .catchError((Object e) => debugPrint('Lỗi xử lý LiDAR: $e')),
@@ -659,6 +701,7 @@ class _CameraScreenState extends State<CameraScreen>
   /// Speaks a class-agnostic depth warning unless the detector already names
   /// the obstacle with equal or higher urgency. [metres] is known only with LiDAR.
   void _announceDepth(AlertLevel level, {double? metres}) {
+    if (_blockage.trapped) return;
     final text = depthAlertText(
       depthLevel: level,
       detectorLevel: _scene.alert?.level,
@@ -754,6 +797,7 @@ class _CameraScreenState extends State<CameraScreen>
     final frame = Size(_screenWidth, _screenHeight);
     final tracks = _tracker.update(filtered, frame, capturedAt ?? now);
     final scene = _engine.assess(tracks, frame);
+    _blockage.onDetections(now, scene.columnLoad);
     _speech.retainAlerts(
       subject: scene.alert?.subject,
       text: scene.alert?.message,
@@ -795,6 +839,7 @@ class _CameraScreenState extends State<CameraScreen>
   ) {
     _lastAlertAt = now;
     final isDanger = alert.level == AlertLevel.danger;
+    if (_blockage.trapped && !isDanger) return;
     final priority = isDanger ? SpeechPriority.danger : SpeechPriority.caution;
     if (!_speech.canSay(priority, subject: alert.subject)) {
       return; // Đã báo / đang chờ đọc
