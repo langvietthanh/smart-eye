@@ -436,6 +436,14 @@ class _CameraScreenState extends State<CameraScreen>
       );
       return;
     }
+    if (event == PathEvent.opened) {
+      // Facing a single obstacle with a side open: stop "turn slowly" and let
+      // the next obstacle alert speak at once, with its verified side clause.
+      _trapAnnounced = false;
+      _speech.dropSubject(subject);
+      _speech.dropSubject('depth:center');
+      return;
+    }
     if (!_blockage.trapped) return;
     if (!_speech.canSay(SpeechPriority.danger, subject: subject)) return;
     _lastAlertAt = DateTime.now();
