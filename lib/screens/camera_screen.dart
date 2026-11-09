@@ -9,10 +9,12 @@ import 'package:sensors_plus/sensors_plus.dart';
 import 'package:wakelock_plus/wakelock_plus.dart';
 
 import '../models/Recognition.dart';
+import '../models/nav_command.dart';
 import '../models/scene_info.dart';
 import '../models/trip.dart';
 import '../widgets/bounding_box_painter.dart';
 import '../services/caption_builder.dart';
+import '../services/command_parser.dart';
 import '../services/camera_feed.dart';
 import '../services/depth_alert.dart';
 import '../services/depth_analysis.dart';
@@ -24,12 +26,14 @@ import '../services/lidar_analysis.dart';
 import '../services/lidar_feed.dart';
 import '../services/history_service.dart';
 import '../services/location_service.dart';
+import '../services/navigation_guide.dart';
 import '../services/object_tracker.dart';
 import '../services/path_blockage.dart';
 import '../services/proximity_pulse.dart';
 import '../services/scene_freshness.dart';
 import '../services/sight_monitor.dart';
 import '../services/speech_manager.dart';
+import '../services/voice_command_service.dart';
 import '../utils/image_utils.dart';
 import '../utils/label_catalog.dart';
 import 'history_screen.dart';
@@ -170,6 +174,17 @@ class _CameraScreenState extends State<CameraScreen>
   /// warnings stay silent only while this holds.
   bool _trapAnnounced = false;
 
+  // Voice-command navigation: the guide is silent while a danger line was
+  // spoken in the last [_navQuietAfterDanger], during a trap or a sight
+  // problem, and while the microphone is listening.
+  final NavigationGuide _guide = NavigationGuide();
+  final VoiceCommandService _voice = VoiceCommandService();
+  static const Duration _navQuietAfterDanger = Duration(seconds: 2);
+  static const int _lidarCenterMaxAgeMs = 500;
+  DateTime _lastDangerAt = DateTime.fromMillisecondsSinceEpoch(0);
+  LidarReading? _lidarCenter;
+  int _lidarCenterAtMs = -1;
+
   // Chế độ giả lập (không cần camera)
   bool _isMockTest = false;
   int _modeGeneration = 0;
@@ -295,6 +310,7 @@ class _CameraScreenState extends State<CameraScreen>
           _hasError = true;
           _statusText = 'Lỗi: $e';
         });
+        _lastDangerAt = DateTime.now();
         _speech.say('Không khởi động được Smart Eye.', SpeechPriority.danger);
       }
     }
@@ -303,6 +319,7 @@ class _CameraScreenState extends State<CameraScreen>
   void _cameraChanged(FeedHandle? controller) {
     _handle = controller;
     _invalidateScene();
+    if (controller == null) _stopNavigation();
     if (mounted && !_disposed) {
       setState(() {
         if (controller != null) {
@@ -389,6 +406,7 @@ class _CameraScreenState extends State<CameraScreen>
     // Speech cooldown per subject repeats the warning while the problem lasts.
     final subject = 'sight:${problem.name}';
     if (!_speech.canSay(priority, subject: subject)) return;
+    if (problem.stopsUser) _lastDangerAt = now;
     _speech.say(
       message,
       priority,
@@ -438,6 +456,7 @@ class _CameraScreenState extends State<CameraScreen>
     if (!_blockage.trapped) return;
     if (!_speech.canSay(SpeechPriority.danger, subject: subject)) return;
     _lastAlertAt = DateTime.now();
+    _lastDangerAt = _lastAlertAt;
     if (_trapAnnounced) {
       _speech.say(
         'Vẫn bị chặn. Xoay người chậm.',
@@ -579,6 +598,7 @@ class _CameraScreenState extends State<CameraScreen>
     _foreground = state == AppLifecycleState.resumed;
     _invalidateScene();
     if (!_foreground) {
+      _stopNavigation();
       unawaited(_speech.stopAll());
       unawaited(_eventWrites.then((_) => _history.flush()));
     }
@@ -715,6 +735,8 @@ class _CameraScreenState extends State<CameraScreen>
               return;
             }
             final now = DateTime.now();
+            _lidarCenter = scan.center;
+            _lidarCenterAtMs = _frameClock.elapsedMilliseconds;
             _blockage.onDepth(now, scan);
             _evaluateBlockage(now);
             _onLidarReading(
@@ -797,6 +819,7 @@ class _CameraScreenState extends State<CameraScreen>
     const subject = 'depth:center';
     if (!_speech.canSay(priority, subject: subject)) return;
     _lastAlertAt = DateTime.now();
+    if (isDanger) _lastDangerAt = _lastAlertAt;
     final log = _eventLogger(
       isDanger ? TripEventType.danger : TripEventType.caution,
       text,
@@ -818,6 +841,7 @@ class _CameraScreenState extends State<CameraScreen>
     final subject = 'depth:step:${kind.name}';
     if (!_speech.canSay(priority, subject: subject)) return;
     _lastAlertAt = DateTime.now();
+    if (isDanger) _lastDangerAt = _lastAlertAt;
     final text = switch (kind) {
       StepKind.down => 'Dừng lại! Có bậc xuống phía trước. Dò bằng gậy.',
       StepKind.up when isDanger =>
@@ -880,7 +904,11 @@ class _CameraScreenState extends State<CameraScreen>
     final now = DateTime.now();
     final frame = Size(_screenWidth, _screenHeight);
     final tracks = _tracker.update(filtered, frame, capturedAt ?? now);
-    final scene = _engine.assess(tracks, frame);
+    final scene = _engine.assess(
+      tracks,
+      frame,
+      targetTrackId: _guide.targetTrackId,
+    );
     _blockage.onDetections(now, scene.columnLoad);
     _evaluateBlockage(now);
     _speech.retainAlerts(
@@ -904,11 +932,25 @@ class _CameraScreenState extends State<CameraScreen>
       _handleAlert(alert, image, now, rotation);
     }
 
+    // Keep updating after the guide ends until a cue held during quiet is out.
+    if (_guide.isActive || _guide.hasPendingCue) {
+      final cue = _guide.update(
+        tracks: tracks,
+        frame: frame,
+        lidarCenter: _freshLidarCenter(),
+        quiet: _navQuiet(now),
+        sightLost: _sightProblem != null,
+        now: now,
+      );
+      if (cue != null) _sayNav(cue);
+    }
+
     if (_pendingDescribe) {
       _pendingDescribe = false;
       _describeFallback?.cancel();
       _describe(image, manual: true, rotation: rotation);
     } else if (_autoDescribe &&
+        !_guide.isActive &&
         now.difference(_lastDescribeAt) >= _autoDescribeEvery &&
         now.difference(_lastAlertAt) >= _calmAfterAlert &&
         !_speech.isBusy) {
@@ -929,6 +971,7 @@ class _CameraScreenState extends State<CameraScreen>
     if (!_speech.canSay(priority, subject: alert.subject)) {
       return; // Đã báo / đang chờ đọc
     }
+    if (isDanger) _lastDangerAt = now;
 
     // LiDAR sides: only fresh, never during a trap, only for a centre object.
     final sides = _speakableSides();
@@ -1047,6 +1090,88 @@ class _CameraScreenState extends State<CameraScreen>
     );
   }
 
+  /// Long press: listen for one spoken command and dispatch it.
+  Future<void> _listenForCommand() async {
+    if (_disposed || _voice.isListening) return;
+    HapticFeedback.mediumImpact();
+    SystemSound.play(SystemSoundType.click);
+    // Keep the app's own voice out of the microphone.
+    await _speech.stopAll();
+    if (_disposed) return;
+    final result = await _voice.listen();
+    // Cancelled because the app left the screen: say nothing.
+    if (_disposed || !_foreground || _paused) return;
+    final text = result.text;
+    if (text == null) {
+      _sayNavLine(switch (result.error ?? VoiceError.noSpeech) {
+        VoiceError.noPermission =>
+          'Chưa có quyền dùng micro. Hãy cấp quyền trong cài đặt.',
+        VoiceError.unavailable => 'Máy này chưa hỗ trợ lệnh giọng nói.',
+        VoiceError.network => 'Cần mạng để nhận lệnh giọng nói.',
+        VoiceError.noSpeech => 'Không nghe rõ. Giữ lâu để nói lại.',
+      });
+      return;
+    }
+    final available = CommandParser.availableTargets(_detector.labels);
+    switch (CommandParser.parse(text, available)) {
+      case NavigateTo(:final labelsEn, :final nameVi):
+        _sayNav(_guide.start(labelsEn, nameVi, DateTime.now()));
+        _eventLogger(TripEventType.navigation, 'Bắt đầu dẫn tới $nameVi')();
+      case Describe():
+        _requestDescribe();
+      case Recap():
+        _speakRecap();
+      case Stop():
+        // Speech was already stopped before listening.
+        final cue = _guide.cancel();
+        if (cue != null) _sayNav(cue);
+      case UnsupportedTarget(:final nameVi):
+        final names = CommandParser.suggestions(available);
+        _sayNavLine(
+          names.isEmpty
+              ? 'Chưa nhận ra được $nameVi.'
+              : 'Chưa nhận ra được $nameVi. Có thể tìm: ${names.join(', ')}.',
+        );
+      case Unknown():
+        _sayNavLine(
+          'Chưa hiểu lệnh. Có thể nói: đi đến ghế, xung quanh, tóm tắt, dừng.',
+        );
+    }
+  }
+
+  /// Speaks a guide cue; a session-ending cue is also logged to the trip.
+  void _sayNav(NavCue cue) {
+    _sayNavLine(cue.text, force: cue.force);
+    if (cue.end != null) _eventLogger(TripEventType.navigation, cue.text)();
+  }
+
+  /// A forced line replaces any guidance still queued or speaking, since the
+  /// manager drops a 'nav' line while another 'nav' line is pending.
+  void _sayNavLine(String text, {bool force = true}) {
+    if (force) _speech.dropSubject('nav');
+    _speech.say(text, SpeechPriority.guidance, subject: 'nav', force: force);
+  }
+
+  bool _navQuiet(DateTime now) =>
+      now.difference(_lastDangerAt) < _navQuietAfterDanger ||
+      _trapAnnounced ||
+      _blockage.trapped ||
+      _sightProblem != null ||
+      _voice.isListening;
+
+  LidarReading? _freshLidarCenter() =>
+      _useLidar &&
+          _frameClock.elapsedMilliseconds - _lidarCenterAtMs <=
+              _lidarCenterMaxAgeMs
+      ? _lidarCenter
+      : null;
+
+  /// Camera stopped or app left the screen: end guiding silently.
+  void _stopNavigation() {
+    _guide.cancel(announce: false);
+    unawaited(_voice.cancel());
+  }
+
   void _toggleAutoDescribe() {
     setState(() => _autoDescribe = !_autoDescribe);
     _lastDescribeAt = DateTime.now();
@@ -1063,6 +1188,7 @@ class _CameraScreenState extends State<CameraScreen>
     if (_paused || _disposed) return;
     HapticFeedback.selectionClick();
     _paused = true;
+    _stopNavigation();
     _invalidateScene();
     await _syncCamera();
     await _speech.stopAll();
@@ -1088,6 +1214,7 @@ class _CameraScreenState extends State<CameraScreen>
     setState(() {
       _isMockTest = !_isMockTest;
     });
+    _stopNavigation();
     _invalidateScene();
     final modeGeneration = ++_modeGeneration;
     _mockTimer?.cancel();
@@ -1159,6 +1286,7 @@ class _CameraScreenState extends State<CameraScreen>
     WidgetsBinding.instance.removeObserver(this);
     _mockTimer?.cancel();
     _describeFallback?.cancel();
+    _stopNavigation();
     _syncSight();
     _invalidateScene();
     _sceneFreshness.dispose();
@@ -1273,17 +1401,19 @@ class _CameraScreenState extends State<CameraScreen>
       body: Stack(
         fit: StackFit.expand,
         children: [
-          // Layer 1: Camera preview + cử chỉ (chạm 2 lần = mô tả, giữ lâu = tóm tắt chuyến đi)
+          // Layer 1: Camera preview + cử chỉ (chạm 2 lần = mô tả, giữ lâu = nói lệnh)
           Semantics(
             button: true,
-            label: 'Khung camera. Chạm hai lần để nghe xung quanh có gì. Giữ lâu để nghe tóm tắt chuyến đi.',
+            label:
+                'Khung camera. Chạm hai lần để nghe xung quanh có gì. '
+                'Giữ lâu để nói lệnh, ví dụ: đi đến ghế.',
             onTap: _requestDescribe,
-            onLongPress: _speakRecap,
+            onLongPress: _listenForCommand,
             excludeSemantics: true,
             child: GestureDetector(
               behavior: HitTestBehavior.opaque,
               onDoubleTap: _requestDescribe,
-              onLongPress: _speakRecap,
+              onLongPress: _listenForCommand,
               // Chế độ Test: KHÔNG hiện camera thật để không ai nhầm khung giả lập là kết quả nhận diện
               child: RepaintBoundary(
                 child: cameraReady && !_isMockTest
