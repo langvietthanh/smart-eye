@@ -32,3 +32,14 @@ class Unknown extends Command {
   final String text;
   const Unknown(this.text);
 }
+
+/// Vì sao một phiên dẫn đường kết thúc.
+enum NavEnd { arrived, notFound, lostTimeout, cancelled }
+
+/// Một câu dẫn đường cần đọc. [end] khác null nghĩa là phiên đã kết thúc.
+class NavCue {
+  final String text;
+  final bool force;
+  final NavEnd? end;
+  const NavCue(this.text, {this.force = false, this.end});
+}
