@@ -8,7 +8,7 @@
 
 | | Chức năng | Cài đặt trong code |
 |---|---|---|
-| F1 🔴 | Nhìn & nhận diện | YOLO + TFLite on-device, isolate riêng, tự chọn CPU/GPU, nhịp quét thích ứng (`detector_service.dart`, `detection/`) |
+| F1 🔴 | Nhìn & nhận diện | YOLO + TFLite on-device trong isolate riêng; ưu tiên model v4 `smart_eye.tflite` (27 lớp, tên lớp trong metadata), thiếu thì dùng YOLOv8n COCO (`detector_service.dart`, `processing_worker.dart`) |
 | F2 🔴 | Cảnh báo + chỉ hướng | Tracker IoU/centroid (CN5), rules engine (CN4), free-space 3 cột (CN6), khoảng cách theo % chiều cao box (CN7) |
 | F3 🟠 | Mô tả + nói ra | Caption template (CN8), flutter_tts tiếng Việt (CN9), Speech Manager ưu tiên/barge-in/dedupe (CN10) — mặc định **chỉ mô tả khi được hỏi** |
 | F4 🟡 | Lưu lịch sử | Event log JSONL (CN11), ảnh ghi nhớ thumbnail + GPS (CN12), recap template (CN13), tự dọn: tối đa 20 chuyến / 30 ngày / 40 ảnh mỗi chuyến |
@@ -26,6 +26,7 @@ khi vật chiếm nhiều khung hình phía trước hoặc đang lớn nhanh s�
 - Chip **Đầy đủ / Yên lặng**: chế độ yên lặng chỉ báo khi nguy hiểm.
 - Chip **Mô tả khi hỏi / Tự mô tả**: bật tự mô tả tần suất thấp (~45 giây, chỉ khi không có cảnh báo gần đây).
 - **Rung liên tục kiểu cảm biến lùi xe**: có vật trong lối đi phía trước thì máy rung, vật càng gần rung càng dày. Không rung chỉ có nghĩa là không *nhận ra* vật nào, không chứng minh đường trống.
+- **Báo khi 3 hướng bị chặn**: phía trước, bên trái và bên phải đều có vật cản (YOLO hoặc LiDAR ≤ 1,5 m) liên tục 1 giây → nói *"Đứng lại! Phía trước và hai bên đều có vật cản. Xoay người chậm để tìm lối."* rồi nhắc ngắn *"Vẫn bị chặn. Xoay người chậm."*; trong lúc đó tạm im cảnh báo chú ý và cảnh báo độ sâu. Phía trước thông lại 1 giây → *"Đường đi thông thoáng."* (`path_blockage.dart`).
 - **Báo khi app không nhìn được**: camera/AI ngừng trả kết quả quá 1,5 giây, phòng quá tối hoặc camera bị che → nói "Dừng lại!" và rung dài; máy chĩa xuống sàn / lên trần → cảnh báo "Dừng lại! Máy đang chĩa xuống sàn..." / "...chĩa lên cao...".
 - **Thấy vật cản không có tên** (tường, cửa, tủ, thùng đồ): model độ sâu MiDaS v2.1 small chạy song song với YOLO (~3 lần/giây). So độ gần của vùng phía trước ngang ngực với mảng sàn ngay trước chân; gần bằng nhau thì báo *"Dừng lại! Có vật cản ngay phía trước."* Độ sâu là tương đối, không phải mét.
 - **Bậc lên / bậc xuống** (bục giảng, bậc cửa, mép bục): từ cùng ảnh độ sâu, so profile sàn ở giữa khung hình với một mặt phẳng; mặt nhô lên = bậc lên, tụt xuống = bậc xuống. Báo *"Chú ý, phía trước có bậc lên"* → *"Dừng lại! Bậc lên ngay phía trước. Dò bằng gậy."*; bậc xuống luôn *"Dừng lại!"*; rung 2 nhịp. Bậc thấp dưới ~10 cm có thể bị bỏ sót; khi đã sát chân, bậc ra khỏi khung hình.
@@ -52,13 +53,11 @@ smart_eye/
 │   │   ├── image_utils.dart            # Lấy mẫu frame (YUV/BGRA/NV12) → tensor, cắt vùng, JPEG, chữ ký độ sáng
 │   │   └── label_catalog.dart          # Nhãn tiếng Việt + phân loại nguy hiểm (khớp training/classes.yaml)
 │   ├── 📁 services/
-│   │   ├── detector_service.dart       # F1: nạp model + metadata, điều phối isolate AI
+│   │   ├── detector_service.dart       # F1: chọn model (v4 27 lớp hoặc YOLOv8n), chạy trong isolate AI
+│   │   ├── processing_worker.dart      # Isolate sống lâu, mỗi lần một frame
 │   │   ├── 📁 detection/
-│   │   │   ├── detector_worker.dart    # Isolate AI: tự chọn CPU/GPU, tiền xử lý → model → giải mã
-│   │   │   ├── yolo_decoder.dart       # Giải mã YOLO chỉ các lớp liên quan + NMS
-│   │   │   ├── scan_scheduler.dart     # Nhịp quét: liên tục / tiết kiệm khi cảnh đứng yên
-│   │   │   ├── frame_data.dart         # Bản sao frame gửi sang isolate, vùng cắt
 │   │   │   └── model_metadata.dart     # Đọc tên lớp / kích thước ảnh nhúng trong model
+│   │   ├── path_blockage.dart          # Phát hiện 3 hướng bị chặn / đường thông lại
 │   │   ├── object_tracker.dart         # F2/CN5: Tracker IoU + centroid (biết vùng nào được quét)
 │   │   ├── hazard_engine.dart          # F2/CN4+CN6+CN7: Rules, free-space, khoảng cách
 │   │   ├── caption_builder.dart        # F3/CN8 + F4/CN13: Câu mô tả & recap
@@ -71,7 +70,7 @@ smart_eye/
 ├── 📁 tool/
 │   ├── eval_model.py                   # Đánh giá model bất kỳ trên dataset bất kỳ (mặc định COCO128)
 │   └── inline_tflite_buffers.py        # Sửa định dạng trọng số model cho runtime Android/iOS
-├── 📁 test/                            # Unit test: rules, tracker, xử lý ảnh, giải mã YOLO, nhịp quét, danh sách lớp
+├── 📁 test/                            # Unit test: rules, tracker, xử lý ảnh, metadata model, LiDAR, 3 hướng bị chặn, danh sách lớp
 └── 📄 pubspec.yaml
 ```
 

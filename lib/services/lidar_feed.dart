@@ -408,7 +408,7 @@ class _LidarPreview extends StatelessWidget {
 /// Runs [LidarAnalysis] in a background isolate; its floor estimate lives
 /// there for the worker's lifetime.
 class LidarDepthService {
-  ProcessingWorker<LidarDepthFrame, LidarReading>? _worker;
+  ProcessingWorker<LidarDepthFrame, LidarScan>? _worker;
   Future<void>? _starting;
   bool _busy = false;
   bool _disposed = false;
@@ -426,13 +426,13 @@ class LidarDepthService {
           });
 
   /// Null while starting, busy or disposed: callers drop the frame.
-  Future<LidarReading?> analyze(LidarDepthFrame frame) async {
+  Future<LidarScan?> analyze(LidarDepthFrame frame) async {
     final worker = _worker;
     if (_disposed || worker == null || _busy) return null;
     _busy = true;
     try {
-      final reading = await worker.run(frame);
-      return _disposed ? null : reading;
+      final scan = await worker.run(frame);
+      return _disposed ? null : scan;
     } finally {
       _busy = false;
     }
@@ -449,15 +449,14 @@ class LidarDepthService {
   }
 }
 
-class _LidarProcessor
-    implements IsolateProcessor<LidarDepthFrame, LidarReading> {
+class _LidarProcessor implements IsolateProcessor<LidarDepthFrame, LidarScan> {
   final _analysis = LidarAnalysis();
 
   @override
   void initialize() {}
 
   @override
-  LidarReading process(LidarDepthFrame frame) => _analysis.analyze(frame);
+  LidarScan process(LidarDepthFrame frame) => _analysis.analyzeScan(frame);
 
   @override
   void dispose() {}

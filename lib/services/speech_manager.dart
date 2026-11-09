@@ -281,6 +281,24 @@ class SpeechManager {
     _pump();
   }
 
+  /// Bỏ hẳn chủ thể [subject]: ngắt câu đang nói của chủ thể đó, xoá các câu
+  /// đang chờ và quên cooldown để lần sau được nói ngay.
+  void dropSubject(String subject) {
+    _lastBySubject.remove(subject);
+    _queue.removeWhere((request) {
+      final matches = request.subject == subject;
+      if (matches) _drop(request);
+      return matches;
+    });
+    final current = _current;
+    if (current != null && current.subject == subject) {
+      _current = null;
+      _drop(current);
+      unawaited(_stopSpeech());
+    }
+    _pump();
+  }
+
   /// Dừng hết: xoá hàng đợi + ngắt câu đang nói
   Future<void> stopAll() async {
     for (final r in _queue) {

@@ -225,4 +225,66 @@ void warningTests() {
     expect(ProximityPulse.fromDistance(1.0), 1);
     expect(ProximityPulse.fromDistance(0.3), 1);
   });
+
+  Box sideWall(double x) =>
+      Box(x < 0 ? x - 0.2 : x, 0, 0, x < 0 ? x : x + 0.2, 3, 10);
+
+  test('corner: front and both sides are blocked', () {
+    final s = LidarAnalysis().analyzeScan(
+      render(boxes: [wall(1.2), sideWall(-0.7), sideWall(0.7)]),
+    );
+    for (final r in [s.left, s.center, s.right]) {
+      expect(r, isA<LidarObstacle>());
+      expect((r as LidarObstacle).distance, lessThanOrEqualTo(1.5));
+    }
+  });
+
+  test('a wall on the left only blocks the left corridor', () {
+    final s = LidarAnalysis().analyzeScan(render(boxes: [sideWall(-0.7)]));
+    expect(s.left, isA<LidarObstacle>());
+    expect(s.center, isA<LidarClear>());
+    expect(s.right, isA<LidarClear>());
+    expect(s[HPos.left], same(s.left));
+  });
+
+  test('a wall on the right only blocks the right corridor', () {
+    final s = LidarAnalysis().analyzeScan(render(boxes: [sideWall(0.7)]));
+    expect(s.right, isA<LidarObstacle>());
+    expect(s.center, isA<LidarClear>());
+    expect(s.left, isA<LidarClear>());
+    expect(s[HPos.right], same(s.right));
+  });
+
+  test('a side wall beyond the side corridor leaves that side clear', () {
+    for (final x in [-1.3, 1.3]) {
+      final s = LidarAnalysis().analyzeScan(render(boxes: [sideWall(x)]));
+      expect(
+        [s.left, s.center, s.right],
+        everyElement(isA<LidarClear>()),
+        reason: 'wall at lateral $x m',
+      );
+    }
+  });
+
+  test('a 1.2 m hallway blocks both sides but not the centre', () {
+    final s = LidarAnalysis().analyzeScan(
+      render(boxes: [sideWall(-0.6), sideWall(0.6)]),
+    );
+    expect(s.left, isA<LidarObstacle>());
+    expect(s.right, isA<LidarObstacle>());
+    expect(s.center, isA<LidarClear>());
+  });
+
+  test('analyze is the centre of analyzeScan', () {
+    final f = render(boxes: [wall(1.5)]);
+    final a = LidarAnalysis().analyze(f) as LidarObstacle;
+    final b = LidarAnalysis().analyzeScan(f).center as LidarObstacle;
+    expect(a.distance, b.distance);
+  });
+
+  test('untrusted depth makes every direction unknown', () {
+    final f = render(tracking: false);
+    final s = LidarAnalysis().analyzeScan(f);
+    expect([s.left, s.center, s.right], everyElement(isA<LidarUnknown>()));
+  });
 }

@@ -66,6 +66,25 @@ class LidarUnknown extends LidarReading {
   const LidarUnknown();
 }
 
+/// Readings for the corridors to the left, centre and right of the user.
+class LidarScan {
+  const LidarScan(this.left, this.center, this.right);
+
+  final LidarReading left, center, right;
+
+  LidarReading operator [](HPos pos) => switch (pos) {
+    HPos.left => left,
+    HPos.center => center,
+    HPos.right => right,
+  };
+
+  static const unknown = LidarScan(
+    LidarUnknown(),
+    LidarUnknown(),
+    LidarUnknown(),
+  );
+}
+
 /// Metric, class-agnostic obstacle detection: depth pixels become 3D points
 /// in a gravity-aligned frame (independent of how the phone is tilted or
 /// rotated), the floor is estimated and removed, and the nearest substantial
@@ -73,6 +92,9 @@ class LidarUnknown extends LidarReading {
 class LidarAnalysis {
   /// Half the corridor width: shoulders plus margin. A 0.8 m door fits.
   static const halfWidth = 0.35;
+
+  /// Outer edge of the side corridors, either side of the centre one.
+  static const sideOuter = 1.05;
 
   /// Points this close to the floor are floor, not obstacles.
   static const floorMargin = 0.15;
@@ -105,24 +127,26 @@ class LidarAnalysis {
 
   void reset() => _floor = null;
 
-  LidarReading analyze(LidarDepthFrame f) {
+  LidarReading analyze(LidarDepthFrame f) => analyzeScan(f).center;
+
+  LidarScan analyzeScan(LidarDepthFrame f) {
     final n = f.width * f.height;
     if (!f.trackingAvailable ||
         f.width < 8 ||
         f.height < 8 ||
         f.depth.length < n ||
         f.confidence.length < n) {
-      return const LidarUnknown();
+      return LidarScan.unknown;
     }
     final upLength = sqrt(f.upX * f.upX + f.upY * f.upY + f.upZ * f.upZ);
-    if (upLength < 1e-6) return const LidarUnknown();
+    if (upLength < 1e-6) return LidarScan.unknown;
     final ux = f.upX / upLength, uy = f.upY / upLength, uz = f.upZ / upLength;
     // Viewing direction (0,0,-1) projected onto the horizontal plane.
     final along = -uz;
     var fx0 = -along * ux, fy0 = -along * uy, fz0 = -1 - along * uz;
     final fLength = sqrt(fx0 * fx0 + fy0 * fy0 + fz0 * fz0);
     // Camera pointing straight up or down: no forward direction.
-    if (fLength < 0.2) return const LidarUnknown();
+    if (fLength < 0.2) return LidarScan.unknown;
     fx0 /= fLength;
     fy0 /= fLength;
     fz0 /= fLength;
@@ -152,24 +176,41 @@ class LidarAnalysis {
         count++;
       }
     }
-    if (count < sampled * minValidFraction) return const LidarUnknown();
+    if (count < sampled * minValidFraction) return LidarScan.unknown;
 
     _updateFloor(heights, count);
     final floor = _floor ?? defaultFloor;
     final low = floor + floorMargin;
-    final hits = <double>[];
+    final left = <double>[], centre = <double>[], right = <double>[];
     for (var i = 0; i < count; i++) {
       final forward = forwards[i];
       final height = heights[i];
-      if (forward >= minForward &&
-          forward <= maxForward &&
-          sides[i].abs() <= halfWidth &&
-          height >= low &&
-          height <= headroom) {
-        hits.add(forward);
+      final side = sides[i];
+      if (forward < minForward ||
+          forward > maxForward ||
+          height < low ||
+          height > headroom) {
+        continue;
+      }
+      if (side.abs() <= halfWidth) {
+        centre.add(forward);
+      } else if (side > 0 && side <= sideOuter) {
+        // up × forward in ARKit's right-handed camera frame points left.
+        left.add(forward);
+      } else if (side < 0 && side >= -sideOuter) {
+        right.add(forward);
       }
     }
     final needed = (minPoints / (step * step)).ceil();
+    return LidarScan(
+      _nearest(left, needed),
+      _nearest(centre, needed),
+      _nearest(right, needed),
+    );
+  }
+
+  /// Distance of the [needed]-th nearest hit, or clear if there are fewer.
+  LidarReading _nearest(List<double> hits, int needed) {
     if (hits.length < needed) return const LidarClear();
     hits.sort();
     return LidarObstacle(hits[needed - 1]);

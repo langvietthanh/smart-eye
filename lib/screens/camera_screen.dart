@@ -25,13 +25,11 @@ import '../services/lidar_feed.dart';
 import '../services/history_service.dart';
 import '../services/location_service.dart';
 import '../services/object_tracker.dart';
+import '../services/path_blockage.dart';
 import '../services/proximity_pulse.dart';
 import '../services/scene_freshness.dart';
 import '../services/sight_monitor.dart';
 import '../services/speech_manager.dart';
-import '../services/detection/detector_worker.dart';
-import '../services/detection/frame_data.dart';
-import '../services/detection/scan_scheduler.dart';
 import '../utils/image_utils.dart';
 import '../utils/label_catalog.dart';
 import 'history_screen.dart';
@@ -64,27 +62,8 @@ class _CameraScreenState extends State<CameraScreen>
   static const Duration _autoDescribeEvery = Duration(seconds: 45);
   static const Duration _calmAfterAlert = Duration(seconds: 10);
 
-
-  CameraController? _controller;
-  final ScanScheduler _scheduler = ScanScheduler();
-
-  /// Frame mốc khi đang ở chế độ tiết kiệm — so với từng frame mới để phát hiện chuyển động
-  Uint8List? _idleSignature;
-
-  /// Thời điểm các lần quét trong 3 giây gần nhất — tính số lần quét/giây cho dòng chẩn đoán
-  final List<DateTime> _scanStats = [];
-
-  /// 10 lần quét gần nhất — dòng chẩn đoán hiển thị số TRUNG BÌNH để không nhảy liên tục
-  final List<DetectionBatch> _recentBatches = [];
-
-  /// Dòng chẩn đoán đã tính sẵn — chỉ làm mới 2 lần/giây cho dễ đọc
-  String _diagText = '';
-  DateTime _diagUpdatedAt = DateTime.fromMillisecondsSinceEpoch(0);
-
-  /// Cách chạy AI người dùng chọn ở nút debug: auto / cpu / gpu (iOS: metal)
-  String _backendChoice = 'auto';
-  bool _switchingBackend = false;
-
+  FeedHandle? _handle;
+  bool _isDetecting = false;
 
   /// Chosen once services are ready: ARKit LiDAR when supported, else the
   /// camera plugin.
@@ -178,6 +157,11 @@ class _CameraScreenState extends State<CameraScreen>
   Timer? _describeFallback; // Không có frame nào tới kịp → vẫn trả lời
   DateTime _lastDescribeAt = DateTime.now();
   DateTime _lastAlertAt = DateTime.fromMillisecondsSinceEpoch(0);
+  final PathBlockage _blockage = PathBlockage();
+
+  /// The trap line actually started for the current trap; caution and depth
+  /// warnings stay silent only while this holds.
+  bool _trapAnnounced = false;
 
   // Chế độ giả lập (không cần camera)
   bool _isMockTest = false;
@@ -366,15 +350,18 @@ class _CameraScreenState extends State<CameraScreen>
       _tilt = null;
       _sight.stop();
       _sightProblem = null;
+      _resetBlockage();
       _clearProximity();
     }
   }
 
   void _checkSight() {
     if (_disposed) return;
-    final problem = _sight.check(DateTime.now());
+    final now = DateTime.now();
+    final problem = _sight.check(now);
     final previous = _sightProblem;
     _sightProblem = problem;
+    _evaluateBlockage(now);
     if (problem == null) {
       final recovery = sightRecoveryText(previous);
       if (recovery != null) {
@@ -400,6 +387,64 @@ class _CameraScreenState extends State<CameraScreen>
       priority,
       subject: subject,
       onStart: problem.stopsUser ? HapticFeedback.vibrate : null,
+    );
+  }
+
+  void _resetBlockage() {
+    _blockage.reset();
+    _trapAnnounced = false;
+  }
+
+  /// Shared by the sight tick, each detection frame and each LiDAR scan:
+  /// never evaluates while the latest sight check reports a problem.
+  void _evaluateBlockage(DateTime now) {
+    final problem = _sightProblem;
+    if (problem == null) {
+      _onBlockage(_blockage.evaluate(now));
+    } else if (problem.isBlind) {
+      _resetBlockage();
+    } else {
+      _blockage.interrupt();
+    }
+  }
+
+  void _onBlockage(PathEvent? event) {
+    const subject = 'path:trapped';
+    if (event == PathEvent.cleared) {
+      _trapAnnounced = false;
+      _speech.dropSubject(subject);
+      _speech.say(
+        'Đường đi thông thoáng.',
+        SpeechPriority.caution,
+        subject: 'path:cleared',
+      );
+      return;
+    }
+    if (!_blockage.trapped) return;
+    if (!_speech.canSay(SpeechPriority.danger, subject: subject)) return;
+    _lastAlertAt = DateTime.now();
+    if (_trapAnnounced) {
+      _speech.say(
+        'Vẫn bị chặn. Xoay người chậm.',
+        SpeechPriority.danger,
+        subject: subject,
+      );
+      return;
+    }
+    const text =
+        'Đứng lại! Phía trước và hai bên đều có vật cản. Xoay người chậm để tìm lối.';
+    final log = _eventLogger(TripEventType.danger, text);
+    _speech.say(
+      text,
+      SpeechPriority.danger,
+      subject: subject,
+      onStart: () {
+        HapticFeedback.heavyImpact();
+        // Logged once per trap, by the first trap line that actually starts.
+        if (_trapAnnounced || !_blockage.trapped) return;
+        _trapAnnounced = true;
+        log();
+      },
     );
   }
 
@@ -430,11 +475,13 @@ class _CameraScreenState extends State<CameraScreen>
       } catch (_) {
         // RSS is platform-dependent; never present buffer sizes as process RAM.
       }
+      final b = _blockage.blocked(DateTime.now());
       _diagnostics.value =
           'AI ${fps.toStringAsFixed(1)} fps · nhận kết quả '
           '${latency.meanMs.toStringAsFixed(0)} ms (p95 ${latency.p95Ms.toStringAsFixed(0)})\n'
           'Model ${nativeMs.toStringAsFixed(0)} ms · RSS $memory'
-          '${_useLidar ? '\nLiDAR $_lidarReadings Hz · $_lidarStatus' : ''}';
+          '${_useLidar ? '\nLiDAR $_lidarReadings Hz · $_lidarStatus' : ''}'
+          '\nHướng: T${b[0] ? '✗' : '✓'} G${b[1] ? '✗' : '✓'} P${b[2] ? '✗' : '✓'}${_blockage.trapped ? ' · kẹt' : ''}';
       _lidarReadings = 0;
     });
   }
@@ -467,6 +514,7 @@ class _CameraScreenState extends State<CameraScreen>
 
   void _invalidateScene({bool duringBuild = false}) {
     _sceneFreshness.cancel();
+    _resetBlockage();
     final generation = ++_frameGeneration;
     _tracker.reset();
     _speech.retainAlerts();
@@ -548,25 +596,7 @@ class _CameraScreenState extends State<CameraScreen>
     final generation = _frameGeneration;
     final capturedAt = _frameEpoch.add(Duration(milliseconds: now));
 
-  /// Chế độ tiết kiệm: so độ sáng 16×16 điểm của từng frame (~0,1 ms, không copy ảnh) với frame mốc —
-  /// có chuyển động (VD bàn tay, xe lao vào khung) là quét ngay, không phải chờ hết 1 giây.
-  void _watchForMotion(CameraImage image) {
-    final frame = FrameData(
-      width: image.width,
-      height: image.height,
-      planes: [for (final p in image.planes) PlaneData(p.bytes, p.bytesPerRow, p.bytesPerPixel)],
-    );
-    final signature = ImageUtils.lumaSignature(frame, rotationDegrees: _rotationDegrees);
-    if (signature == null) return;
-    final reference = _idleSignature;
-    if (reference == null) {
-      _idleSignature = signature;
-    } else if (ImageUtils.signatureDiff(signature, reference) > ScanScheduler.stillThreshold * 1.5) {
-      _scheduler.wakeUp();
-    }
-  }
-
-  Future<void> _scan(CameraImage image, int rotation) async {
+    // finally: lỗi ở 1 frame không được làm kẹt cờ → nếu kẹt, nhận diện + nút "Xung quanh" chết hẳn
     try {
       final sw = _screenWidth;
       final sh = _screenHeight;
@@ -601,8 +631,9 @@ class _CameraScreenState extends State<CameraScreen>
         ),
       );
     } catch (e, stack) {
-      debugPrint('Lỗi quét: $e\n$stack');
-      _scheduler.onFailed();
+      debugPrint('Lỗi xử lý frame: $e\n$stack');
+    } finally {
+      _isDetecting = false;
     }
   }
 
@@ -658,15 +689,18 @@ class _CameraScreenState extends State<CameraScreen>
     unawaited(
       _lidarDepth
           .analyze(frame)
-          .then((reading) {
-            if (reading == null ||
+          .then((scan) {
+            if (scan == null ||
                 !_wantsCamera ||
                 generation != _frameGeneration ||
                 handle != _handle ||
                 _frameClock.elapsedMilliseconds - startedAt > _maxFrameAgeMs) {
               return;
             }
-            _onLidarReading(reading, thermal: frame.thermalState);
+            final now = DateTime.now();
+            _blockage.onDepth(now, scan);
+            _evaluateBlockage(now);
+            _onLidarReading(scan.center, thermal: frame.thermalState);
           })
           .catchError((Object e) => debugPrint('Lỗi xử lý LiDAR: $e')),
     );
@@ -698,6 +732,7 @@ class _CameraScreenState extends State<CameraScreen>
   /// Speaks a class-agnostic depth warning unless the detector already names
   /// the obstacle with equal or higher urgency. [metres] is known only with LiDAR.
   void _announceDepth(AlertLevel level, {double? metres}) {
+    if (_trapAnnounced) return;
     final text = depthAlertText(
       depthLevel: level,
       detectorLevel: _scene.alert?.level,
@@ -793,6 +828,8 @@ class _CameraScreenState extends State<CameraScreen>
     final frame = Size(_screenWidth, _screenHeight);
     final tracks = _tracker.update(filtered, frame, capturedAt ?? now);
     final scene = _engine.assess(tracks, frame);
+    _blockage.onDetections(now, scene.columnLoad);
+    _evaluateBlockage(now);
     _speech.retainAlerts(
       subject: scene.alert?.subject,
       text: scene.alert?.message,
@@ -834,6 +871,7 @@ class _CameraScreenState extends State<CameraScreen>
   ) {
     _lastAlertAt = now;
     final isDanger = alert.level == AlertLevel.danger;
+    if (_trapAnnounced && !isDanger) return;
     final priority = isDanger ? SpeechPriority.danger : SpeechPriority.caution;
     if (!_speech.canSay(priority, subject: alert.subject)) {
       return; // Đã báo / đang chờ đọc
@@ -927,14 +965,13 @@ class _CameraScreenState extends State<CameraScreen>
       _describe(null, manual: true);
       return;
     }
-    _scheduler.wakeUp(); // Quét ngay frame kế tiếp, kể cả khi đang ở chế độ tiết kiệm
     // Làm ở frame kế tiếp để có ảnh ghi nhớ; nếu 0,8 giây không có frame thì trả lời luôn
     _pendingDescribe = true;
     _describeFallback?.cancel();
-    _describeFallback = Timer(const Duration(milliseconds: 1500), () {
+    _describeFallback = Timer(const Duration(milliseconds: 800), () {
       if (!mounted || !_pendingDescribe) return;
       _pendingDescribe = false;
-      _describe(manual: true);
+      _describe(null, manual: true);
     });
   }
 
@@ -1363,20 +1400,7 @@ class _CameraScreenState extends State<CameraScreen>
                 child: Column(
                   mainAxisSize: MainAxisSize.min,
                   children: [
-                    Align(
-                      alignment: Alignment.centerLeft,
-                      child: Text(
-                        _diagnostics,
-                        maxLines: 2,
-                        overflow: TextOverflow.ellipsis,
-                        style: const TextStyle(color: Colors.white54, fontSize: 12),
-                      ),
-                    ),
-                    const SizedBox(height: 6),
-                    Wrap(
-                      spacing: 8,
-                      runSpacing: 6,
-                      alignment: WrapAlignment.end,
+                    Row(
                       children: [
                         _bigButton(
                           Icons.visibility,
@@ -1467,61 +1491,6 @@ class _CameraScreenState extends State<CameraScreen>
         ),
       ),
     );
-  }
-
-  /// Dòng chẩn đoán: cách chạy AI, thời gian từng bước, số lần quét/giây, chế độ, điểm cao nhất
-  /// Số liệu là TRUNG BÌNH 10 lần quét gần nhất, làm mới 2 lần/giây → đọc được, không nhấp nháy.
-  String get _diagnostics {
-    if (_isMockTest) return 'Giả lập · ${_scene.objects.length} vật';
-    if (_switchingBackend) return 'Đang đổi cách chạy AI...';
-    final now = DateTime.now();
-    if (now.difference(_diagUpdatedAt) < const Duration(milliseconds: 500) && _diagText.isNotEmpty) return _diagText;
-    _diagUpdatedAt = now;
-
-    final batches = _recentBatches;
-    if (batches.isEmpty) return _diagText = _modelLoaded ? 'Đang chờ frame...' : 'Đang nạp AI...';
-    double avg(double Function(DetectionBatch) f) => batches.map(f).reduce((a, b) => a + b) / batches.length;
-    final last = batches.last;
-    final rate = _scanStats.length / 3;
-    return _diagText = '${last.backend.toUpperCase()}${last.verifying ? ' (đối chiếu CPU)' : ''} · '
-        '${avg((b) => b.totalMs).round()}ms (ảnh ${avg((b) => b.prepMs).round()} · AI ${avg((b) => b.inferMs).round()}) · '
-        '${rate.toStringAsFixed(1)} lần/s · ${_scheduler.mode.vi}\n'
-        '${_scene.objects.length} vật'
-        ' · max ${_detector.labelOf(last.maxClassId)} ${(last.maxScore * 100).round()}%';
-  }
-
-  static String _backendLabel(String b) => switch (b) {
-        'cpu' => 'CPU',
-        'gpu' || 'metal' => 'GPU',
-        _ => 'Tự động',
-      };
-
-  /// Nút debug: Tự động → CPU → GPU → Tự động... (nạp lại model với cách chạy đã chọn)
-  Future<void> _cycleBackend() async {
-    final gpu = Platform.isIOS ? 'metal' : 'gpu';
-    final next = switch (_backendChoice) { 'auto' => 'cpu', 'cpu' => gpu, _ => 'auto' };
-    setState(() {
-      _backendChoice = next;
-      _switchingBackend = true;
-      _modelLoaded = false;
-    });
-    try {
-      await _detector.reload(preferredBackend: next);
-    } catch (e) {
-      debugPrint('Không đổi được cách chạy AI ($next): $e');
-      _speech.say('Máy không chạy được AI bằng ${_backendLabel(next)}.', SpeechPriority.description, force: true);
-      _backendChoice = 'auto';
-      await _detector.reload();
-    }
-    _recentBatches.clear();
-    _scheduler.reset();
-    _tracker.reset();
-    if (mounted) {
-      setState(() {
-        _switchingBackend = false;
-        _modelLoaded = true;
-      });
-    }
   }
 
   /// Máy chưa có giọng tiếng Việt → TTS sẽ đọc bằng giọng mặc định, khó nghe → hướng dẫn cài

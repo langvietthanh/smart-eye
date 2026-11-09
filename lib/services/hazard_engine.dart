@@ -123,6 +123,12 @@ class HazardEngine {
     if (object.category == ObjectCategory.other) return AlertLevel.info;
     if (object.category == ObjectCategory.groundHazard) {
       if (!inPath) return near ? AlertLevel.caution : AlertLevel.info;
+      // Mép vỉa hè gặp liên tục → chỉ nhắc chú ý khi đã tới gần, không hô "Dừng lại".
+      if (mildGroundHazards.contains(object.track.labelEn)) {
+        return object.distance == DistanceLevel.far
+            ? AlertLevel.info
+            : AlertLevel.caution;
+      }
       return object.distance == DistanceLevel.far
           ? AlertLevel.caution
           : AlertLevel.danger;
@@ -160,7 +166,8 @@ class HazardEngine {
             HPos.right => 'bên phải',
           }
         : object.pos.vi;
-    final canMove = object.category == ObjectCategory.vehicle ||
+    final canMove =
+        object.category == ObjectCategory.vehicle ||
         object.category == ObjectCategory.person ||
         object.category == ObjectCategory.animal;
     final isApproaching = object.approaching && canMove;

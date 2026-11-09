@@ -212,47 +212,43 @@ void main() {
     },
   );
 
-  testWidgets(
-    'retainAlerts only drops track alerts and retains depth alert',
-    (tester) async {
-      final tts = FakeTts();
-      final manager = managerFor(tester, tts);
-      manager.say('Đang nói', SpeechPriority.playback);
-      tts.stopGate = Completer<void>();
+  testWidgets('retainAlerts only drops track alerts and retains depth alert', (
+    tester,
+  ) async {
+    final tts = FakeTts();
+    final manager = managerFor(tester, tts);
+    manager.say('Đang nói', SpeechPriority.playback);
+    tts.stopGate = Completer<void>();
 
-      final track1 = manager.sayAndWait(
-        'Vật cản cũ',
-        SpeechPriority.caution,
-        subject: 'track:1',
-      );
-      final depth = manager.sayAndWait(
-        'Dừng lại! Có vật cản ngay phía trước.',
-        SpeechPriority.danger,
-        subject: 'depth:center',
-      );
+    final track1 = manager.sayAndWait(
+      'Vật cản cũ',
+      SpeechPriority.caution,
+      subject: 'track:1',
+    );
+    final depth = manager.sayAndWait(
+      'Dừng lại! Có vật cản ngay phía trước.',
+      SpeechPriority.danger,
+      subject: 'depth:center',
+    );
 
-      // YOLO has no alert this frame (subject: null)
-      manager.retainAlerts();
+    // YOLO has no alert this frame (subject: null)
+    manager.retainAlerts();
 
-      expect(await track1, isFalse);
+    expect(await track1, isFalse);
 
-      tts.stopGate!.complete();
+    tts.stopGate!.complete();
+    await tester.pump();
+
+    while (manager.isBusy) {
+      tts.finish();
       await tester.pump();
+      await tester.pump(const Duration(milliseconds: 100));
+    }
 
-      while (manager.isBusy) {
-        tts.finish();
-        await tester.pump();
-        await tester.pump(const Duration(milliseconds: 100));
-      }
-
-      expect(await depth, isTrue);
-      expect(tts.spoken, [
-        'Đang nói',
-        'Dừng lại! Có vật cản ngay phía trước.',
-      ]);
-      await manager.stopAll();
-    },
-  );
+    expect(await depth, isTrue);
+    expect(tts.spoken, ['Đang nói', 'Dừng lại! Có vật cản ngay phía trước.']);
+    await manager.stopAll();
+  });
 
   testWidgets(
     'retainAlerts only drops track alerts and retains sight and unassigned alerts',
@@ -350,10 +346,7 @@ void main() {
 
       expect(await depth, isTrue);
       expect(tts.spoken, isNot(contains('Vật cản cũ')));
-      expect(
-        tts.spoken,
-        contains('Dừng lại! Có vật cản ngay phía trước.'),
-      );
+      expect(tts.spoken, contains('Dừng lại! Có vật cản ngay phía trước.'));
       await manager.stopAll();
     },
   );
@@ -516,6 +509,83 @@ void main() {
     await tester.pump();
     expect(tts.spoken, ['Cẩn thận', 'Dừng lại']);
     expect(manager.canSay(SpeechPriority.caution, subject: 'track:1'), isFalse);
+    await manager.stopAll();
+  });
+
+  testWidgets('dropSubject stops the current utterance of that subject', (
+    tester,
+  ) async {
+    final tts = FakeTts();
+    final manager = managerFor(tester, tts);
+    final trapped = manager.sayAndWait(
+      'Đứng lại!',
+      SpeechPriority.danger,
+      subject: 'path:trapped',
+    );
+    manager.dropSubject('path:trapped');
+    manager.say(
+      'Đường đi thông thoáng.',
+      SpeechPriority.caution,
+      subject: 'path:cleared',
+    );
+    await tester.pump();
+
+    expect(await trapped, isFalse);
+    expect(tts.stopCount, 1);
+    expect(tts.spoken, ['Đứng lại!', 'Đường đi thông thoáng.']);
+    await manager.stopAll();
+  });
+
+  testWidgets('dropSubject removes queued requests of that subject only', (
+    tester,
+  ) async {
+    final tts = FakeTts();
+    final manager = managerFor(tester, tts);
+    manager.say('Dừng lại', SpeechPriority.danger, subject: 'track:1');
+    final trapped = manager.sayAndWait(
+      'Vẫn bị chặn.',
+      SpeechPriority.danger,
+      subject: 'path:trapped',
+    );
+    final other = manager.sayAndWait(
+      'Không đo được khoảng cách.',
+      SpeechPriority.caution,
+      subject: 'sight:noDepth',
+    );
+    manager.dropSubject('path:trapped');
+    expect(await trapped, isFalse);
+    expect(tts.stopCount, 0);
+
+    tts.finish();
+    await tester.pump();
+    tts.finish();
+    await tester.pump();
+    expect(await other, isTrue);
+    expect(tts.spoken, ['Dừng lại', 'Không đo được khoảng cách.']);
+    await manager.stopAll();
+  });
+
+  testWidgets('dropSubject forgets that subject cooldown only', (tester) async {
+    final tts = FakeTts();
+    final manager = managerFor(tester, tts);
+    manager.say('Đứng lại!', SpeechPriority.danger, subject: 'path:trapped');
+    tts.finish();
+    await tester.pump();
+    manager.say('Dừng lại', SpeechPriority.danger, subject: 'track:1');
+    tts.finish();
+    await tester.pump();
+    expect(
+      manager.canSay(SpeechPriority.danger, subject: 'path:trapped'),
+      isFalse,
+    );
+
+    manager.dropSubject('path:trapped');
+    expect(
+      manager.canSay(SpeechPriority.danger, subject: 'path:trapped'),
+      isTrue,
+    );
+    expect(manager.canSay(SpeechPriority.danger, subject: 'track:1'), isFalse);
+    expect(tts.stopCount, 0);
     await manager.stopAll();
   });
 
