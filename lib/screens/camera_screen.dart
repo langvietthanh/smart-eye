@@ -1115,7 +1115,8 @@ class _CameraScreenState extends State<CameraScreen>
     final available = CommandParser.availableTargets(_detector.labels);
     switch (CommandParser.parse(text, available)) {
       case NavigateTo(:final labelsEn, :final nameVi):
-        _sayNav(_guide.start(labelsEn, nameVi, DateTime.now()));
+        // A direct reply to the user: forced like the other command replies.
+        _sayNavLine(_guide.start(labelsEn, nameVi, DateTime.now()).text);
         _eventLogger(TripEventType.navigation, 'Bắt đầu dẫn tới $nameVi')();
       case Describe():
         _requestDescribe();
