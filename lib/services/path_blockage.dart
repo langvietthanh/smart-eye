@@ -7,6 +7,7 @@ enum PathEvent { trapped, cleared }
 /// when the way ahead opens again. Pure Dart; time is passed in explicitly.
 class PathBlockage {
   static const blockedWithin = 1.5;
+  static const exitClearBeyond = 2.2;
   static const settle = Duration(seconds: 1);
   static const detectionMaxAge = Duration(seconds: 1);
   static const depthMaxAge = Duration(milliseconds: 500);
@@ -50,10 +51,17 @@ class PathBlockage {
     });
   }
 
+  /// Exit needs the centre clearly open: with LiDAR, clear or an obstacle
+  /// beyond [exitClearBeyond] (matches `LidarWarning.cautionExit`).
   bool _centreOpen(DateTime now) {
     if (blocked(now)[1]) return false;
     if (!_seenDepth) return true;
-    return _fresh(_scanAt, now, depthMaxAge) && _scan!.center is! LidarUnknown;
+    if (!_fresh(_scanAt, now, depthMaxAge)) return false;
+    return switch (_scan!.center) {
+      LidarClear() => true,
+      LidarObstacle(:final distance) => distance > exitClearBeyond,
+      LidarUnknown() => false,
+    };
   }
 
   PathEvent? evaluate(DateTime now) {
@@ -68,6 +76,10 @@ class PathBlockage {
     _since = null;
     return _trapped ? PathEvent.trapped : PathEvent.cleared;
   }
+
+  /// The view cannot be trusted right now: restart the settle timer without
+  /// changing [trapped], so neither entry nor exit completes meanwhile.
+  void interrupt() => _since = null;
 
   void reset() {
     _load = null;

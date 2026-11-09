@@ -53,6 +53,7 @@ void main() {
     run(p, all, 0, 1500);
     final events = [...run(p, sides, 1750, 2250), ...run(p, all, 2500, 3000)];
     expect(events, isNot(contains(PathEvent.cleared)));
+    expect(p.trapped, isTrue);
   });
 
   test('a clear centre for a second releases', () {
@@ -98,5 +99,39 @@ void main() {
     p.reset();
     expect(p.trapped, false);
     expect(run(p, none, 1750, 3000), isEmpty);
+  });
+
+  test('LiDAR centre between entry and caution exit does not release', () {
+    expect(run(p, all, 0, 1500, depth: scan(1, 1, 1)), [PathEvent.trapped]);
+    expect(run(p, sides, 1750, 3500, depth: scan(1, 1.6, 1)), isEmpty);
+    expect(p.trapped, isTrue);
+    expect(run(p, sides, 3750, 5250, depth: scan(1, 2.3, 1)), [
+      PathEvent.cleared,
+    ]);
+    expect(p.trapped, isFalse);
+  });
+
+  test('interrupt during entry settle needs a fresh full second', () {
+    expect(run(p, all, 0, 750), isEmpty);
+    p.interrupt();
+    expect(run(p, all, 1000, 1750), isEmpty);
+    expect(p.trapped, isFalse);
+    expect(run(p, all, 2000, 2000), [PathEvent.trapped]);
+  });
+
+  test('interrupt during exit settle needs a fresh full second', () {
+    expect(run(p, all, 0, 1500), [PathEvent.trapped]);
+    expect(run(p, sides, 1750, 2500), isEmpty);
+    p.interrupt();
+    expect(p.trapped, isTrue);
+    expect(run(p, sides, 2750, 3500), isEmpty);
+    expect(run(p, sides, 3750, 3750), [PathEvent.cleared]);
+  });
+
+  test('reset clears seen depth', () {
+    expect(run(p, all, 0, 1500, depth: scan(1, 1, 1)), [PathEvent.trapped]);
+    p.reset();
+    expect(run(p, all, 1750, 3000), [PathEvent.trapped]);
+    expect(run(p, sides, 3250, 4500), [PathEvent.cleared]);
   });
 }
