@@ -41,11 +41,12 @@ void main() {
 
     // [bottom]: mép dưới box theo tỉ lệ khung. Box chạm vùng dưới (≥ 0.75) được
     // VisualProximity coi là gần hơn theo bề rộng → vật xa thì đặt cao hơn.
-    SceneAssessment run(String en, String vi, double heightRatio, {double bottom = 0.95}) {
+    // [left]: mép trái box (px); mặc định 150 → box giữa khung (trên lối đi).
+    SceneAssessment run(String en, String vi, double heightRatio, {double bottom = 0.95, double left = 150}) {
       final tracker = ObjectTracker();
       final engine = HazardEngine();
       final h = frame.height * heightRatio;
-      final box = Rect.fromLTWH(150, frame.height * bottom - h, 100, h);
+      final box = Rect.fromLTWH(left, frame.height * bottom - h, 100, h);
       var scene = SceneAssessment.empty;
       for (var i = 0; i < 4; i++) {
         scene = engine.assess(tracker.update([Recognition(0, vi, 0.9, box, labelEn: en)], frame, DateTime(2026)), frame);
@@ -67,6 +68,13 @@ void main() {
       expect(run('curb', 'mép vỉa hè', 0.7).alert?.level, AlertLevel.caution);
       expect(run('curb', 'mép vỉa hè', 0.35).alert?.level, AlertLevel.caution);
       expect(run('curb', 'mép vỉa hè', 0.1, bottom: 0.6).alert, isNull);
+    });
+
+    test('mép vỉa hè ngoài lối đi, khoảng cách vừa → không cảnh báo', () {
+      // Box ở sát mép trái (tâm x = 50/400), không thuộc lối đi; cao 0.3 → medium
+      final scene = run('curb', 'mép vỉa hè', 0.3, left: 0);
+      expect(scene.objects.single.distance, DistanceLevel.medium);
+      expect(scene.alert, isNull);
     });
 
     test('cầu thang phía trước → Dừng lại, nói rõ hướng', () {
