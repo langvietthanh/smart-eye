@@ -68,11 +68,15 @@ class HazardAlert {
   /// Chủ thể của cảnh báo (VD: 'track:12') — Speech Manager dùng để dedupe + hysteresis
   final String subject;
 
+  /// Vị trí của vật gây cảnh báo (null nếu không gắn với một vật)
+  final HPos? pos;
+
   const HazardAlert({
     required this.level,
     required this.message,
     required this.guidance,
     required this.subject,
+    this.pos,
   });
 }
 

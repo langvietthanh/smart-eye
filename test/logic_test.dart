@@ -95,6 +95,17 @@ void main() {
   });
 
   group('HazardEngine (CN4/CN6/CN7)', () {
+    test('alert carries the object position', () {
+      final centre = run(ObjectTracker(), HazardEngine(), [
+        rec('chair', 'ghế', 56, centerBox(0.6)),
+      ]);
+      expect(centre.alert!.pos, HPos.center);
+      final left = run(ObjectTracker(), HazardEngine(), [
+        rec('car', 'xe ô tô', 2, centerBox(0.6, cx: 60)),
+      ]);
+      expect(left.alert!.pos, HPos.left);
+    });
+
     test('khoảng cách theo % box có vùng trễ', () {
       expect(
         HazardEngine.distanceWithHysteresis(null, 0.65),
