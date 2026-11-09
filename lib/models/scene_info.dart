@@ -12,6 +12,10 @@ enum ObjectCategory { groundHazard, vehicle, obstacle, animal, person, other }
 /// Mức cảnh báo, sắp xếp tăng dần theo độ khẩn cấp
 enum AlertLevel { info, caution, danger }
 
+/// Làn bên cạnh vật cản phía trước, đo bằng LiDAR. `clear` chỉ khi đã thấy
+/// mặt sàn của cả làn; không thấy gì là `unknown`, không phải trống.
+enum SideState { clear, blocked, unknown }
+
 /// Hướng gợi ý cho người dùng
 enum Guidance { none, goLeft, goRight, stop, slowDown }
 

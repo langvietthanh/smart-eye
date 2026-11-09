@@ -46,6 +46,7 @@ LidarDepthFrame render({
   List<Box> boxes = const [],
   double range = 5,
   bool tracking = true,
+  List<(double, double, double, double)> holes = const [],
 }) {
   final p = pitchDeg * pi / 180, r = rollDeg * pi / 180;
   final look = [0.0, -sin(p), cos(p)];
@@ -68,6 +69,13 @@ LidarDepthFrame render({
         for (var i = 0; i < 3; i++) xr * right[i] + yr * up[i] + look[i],
       ];
       double? t = dir[1] < 0 ? -cameraHeight / dir[1] : null;
+      if (t != null) {
+        // Floor rectangles (x0, z0, x1, z1) that return nothing: a hole or drop.
+        final x = t * dir[0], z = t * dir[2];
+        for (final (x0, z0, x1, z1) in holes) {
+          if (x >= x0 && x <= x1 && z >= z0 && z <= z1) t = null;
+        }
+      }
       for (final b in boxes) {
         final bt = b.hit(origin, dir);
         if (bt != null && (t == null || bt < t)) t = bt;
@@ -99,8 +107,78 @@ double distanceOf(LidarReading r) {
   return (r as LidarObstacle).distance;
 }
 
+/// A 50 cm wide, 90 cm tall chair across the centre corridor at [z].
+Box chair(double z) => Box(-0.25, 0, z, 0.25, 0.9, z + 0.4);
+
+LidarObstacle obstacleOf(LidarReading r) {
+  expect(r, isA<LidarObstacle>());
+  return r as LidarObstacle;
+}
+
+void sideLaneTests() {
+  test('free floor beside a chair is clear on both sides', () {
+    final r = obstacleOf(LidarAnalysis().analyze(render(boxes: [chair(1.8)])));
+    expect(r.distance, closeTo(1.8, 0.1));
+    expect(r.left, SideState.clear);
+    expect(r.right, SideState.clear);
+  });
+
+  test('box in the right lane blocks right only', () {
+    final r = obstacleOf(
+      LidarAnalysis().analyze(
+        render(boxes: [chair(1.8), const Box(0.4, 0, 1.9, 0.7, 0.8, 2.3)]),
+      ),
+    );
+    expect(r.right, SideState.blocked);
+    expect(r.left, SideState.clear);
+  });
+
+  test('a full-width wall blocks both lanes', () {
+    final r = obstacleOf(LidarAnalysis().analyze(render(boxes: [wall(1.8)])));
+    expect(r.left, SideState.blocked);
+    expect(r.right, SideState.blocked);
+  });
+
+  test('lanes outside the view are unknown when the obstacle is close', () {
+    final r = obstacleOf(LidarAnalysis().analyze(render(boxes: [chair(0.9)])));
+    expect(r.left, SideState.unknown);
+    expect(r.right, SideState.unknown);
+  });
+
+  test('a hole in the left lane floor makes it unknown, never clear', () {
+    final r = obstacleOf(
+      LidarAnalysis().analyze(
+        // Covers a whole 0.5 m stretch of the left lane, like a drop.
+        render(boxes: [chair(1.8)], holes: [(-0.8, 2.2, -0.36, 3.0)]),
+      ),
+    );
+    expect(r.left, SideState.unknown);
+    expect(r.right, SideState.clear);
+  });
+
+  test('platform in a side lane blocks it', () {
+    final r = obstacleOf(
+      LidarAnalysis().analyze(
+        render(boxes: [chair(1.8), const Box(-3, 0, 1.6, -0.36, 0.2, 4)]),
+      ),
+    );
+    expect(r.left, SideState.blocked);
+  });
+
+  test('side lanes do not depend on hold', () {
+    for (final f in [
+      render(pitchDeg: 25, boxes: [chair(1.8)]),
+      render(cameraHeight: 1.0, boxes: [chair(1.8)]),
+    ]) {
+      final r = obstacleOf(LidarAnalysis().analyze(f));
+      expect((r.left, r.right), (SideState.clear, SideState.clear));
+    }
+  });
+}
+
 void main() {
   group('warning', warningTests);
+  group('side lanes', sideLaneTests);
 
   test('wall at 1.5 m reads 1.5 m at any tilt and hold', () {
     for (final pitch in [0.0, 15.0, 35.0]) {

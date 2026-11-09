@@ -55,10 +55,18 @@ class LidarClear extends LidarReading {
 }
 
 class LidarObstacle extends LidarReading {
-  const LidarObstacle(this.distance);
+  const LidarObstacle(
+    this.distance, {
+    this.left = SideState.unknown,
+    this.right = SideState.unknown,
+  });
 
   /// Horizontal distance to the nearest substantial obstacle, metres.
   final double distance;
+
+  /// The 40 cm lanes beside the centre corridor, around this obstacle
+  /// (only set on the centre reading of [LidarAnalysis.analyzeScan]).
+  final SideState left, right;
 }
 
 /// Not enough trustworthy depth to say anything.
@@ -95,6 +103,16 @@ class LidarAnalysis {
 
   /// Outer edge of the side corridors, either side of the centre one.
   static const sideOuter = 1.05;
+
+  /// Lanes beside the centre corridor, used to say a side is free: a
+  /// portrait LiDAR sees sideways only ~0.5 × the distance ahead, so a lane
+  /// out to 0.75 m is fully in view from ~1.5 m.
+  static const laneOuter = 0.75;
+  static const laneSplit = 0.55;
+  static const lanePastObstacle = 1.0;
+  static const laneMinDepth = 2.0;
+  static const laneBin = 0.5;
+  static const laneFloorPoints = 10;
 
   /// Points this close to the floor are floor, not obstacles.
   static const floorMargin = 0.15;
@@ -202,9 +220,51 @@ class LidarAnalysis {
       }
     }
     final needed = (minPoints / (step * step)).ceil();
+    var center = _nearest(centre, needed);
+    if (center is LidarObstacle) {
+      SideState lane(double sign) {
+        final d = center is LidarObstacle ? center.distance : 0.0;
+        final end = max(d + lanePastObstacle, laneMinDepth);
+        final bins = ((end - d) / laneBin).ceil();
+        final floorCounts = List<int>.filled(bins * 2, 0);
+        var obstacles = 0;
+        for (var i = 0; i < count; i++) {
+          final s = sign * sides[i];
+          final forward = forwards[i];
+          if (s <= halfWidth || s > laneOuter || forward < d || forward > end) {
+            continue;
+          }
+          final height = heights[i];
+          if (height >= low && height <= headroom) {
+            obstacles++;
+          } else if ((height - floor).abs() <= floorMargin) {
+            final bin = min(((forward - d) / laneBin).floor(), bins - 1);
+            floorCounts[bin * 2 + (s < laneSplit ? 0 : 1)]++;
+          }
+        }
+        if (obstacles >= needed) return SideState.blocked;
+        // Nearest outer corner of the lane, on the floor, in camera space.
+        final w = sign * laneOuter;
+        final cx3 = fx0 * d + sx * w + ux * floor;
+        final cy3 = fy0 * d + sy * w + uy * floor;
+        final cz3 = fz0 * d + sz * w + uz * floor;
+        if (cz3 >= 0) return SideState.unknown;
+        final u = f.cx + f.fx * cx3 / -cz3;
+        final v = f.cy - f.fy * cy3 / -cz3;
+        if (u < 0 || u >= f.width || v < 0 || v >= f.height) {
+          return SideState.unknown;
+        }
+        return floorCounts.every((c) => c >= laneFloorPoints)
+            ? SideState.clear
+            : SideState.unknown;
+      }
+
+      // Positive `side` points left (see the corridor split above).
+      center = LidarObstacle(center.distance, left: lane(1), right: lane(-1));
+    }
     return LidarScan(
       _nearest(left, needed),
-      _nearest(centre, needed),
+      center,
       _nearest(right, needed),
     );
   }
