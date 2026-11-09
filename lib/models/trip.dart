@@ -1,5 +1,12 @@
 /// Loại sự kiện ghi vào lịch sử chuyến đi (F4)
-enum TripEventType { tripStart, tripEnd, danger, caution, description }
+enum TripEventType {
+  tripStart,
+  tripEnd,
+  danger,
+  caution,
+  description,
+  navigation,
+}
 
 extension TripEventTypeText on TripEventType {
   String get vi => switch (this) {
@@ -8,6 +15,7 @@ extension TripEventTypeText on TripEventType {
         TripEventType.danger => 'Nguy hiểm',
         TripEventType.caution => 'Chú ý',
         TripEventType.description => 'Mô tả',
+        TripEventType.navigation => 'Dẫn đường',
       };
 }
 

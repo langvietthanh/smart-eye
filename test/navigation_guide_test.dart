@@ -500,6 +500,27 @@ void main() {
       expect(g2.update(tracks: [], frame: f, now: at(500)), isNull);
     });
 
+    test('hasPendingCue: báo câu chốt đang giữ sau khi guide đã idle', () {
+      final g2 = NavigationGuide()..start({'chair'}, 'ghế', at(0));
+      expect(g2.hasPendingCue, false);
+      g2.update(tracks: [bigChair()], frame: f, quiet: true, now: at(100));
+      g2.update(tracks: [], frame: f, quiet: true, now: at(200));
+      expect(g2.isActive, false);
+      expect(g2.hasPendingCue, true);
+      expect(
+        g2.update(tracks: [], frame: f, now: at(300))!.end,
+        NavEnd.arrived,
+      );
+      expect(g2.hasPendingCue, false);
+      // cancel() discards a held cue.
+      final g3 = NavigationGuide()..start({'chair'}, 'ghế', at(0));
+      g3.update(tracks: [bigChair()], frame: f, quiet: true, now: at(100));
+      g3.update(tracks: [], frame: f, quiet: true, now: at(200));
+      expect(g3.hasPendingCue, true);
+      g3.cancel(announce: false);
+      expect(g3.hasPendingCue, false);
+    });
+
     test(
       'đích thấy trong lúc quiet → hết quiet nói câu vào, dựng từ hiện tại',
       () {

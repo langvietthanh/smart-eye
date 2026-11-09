@@ -76,6 +76,10 @@ class NavigationGuide {
   int? get targetTrackId => _trackId;
   String? get targetName => isActive ? _nameVi : null;
 
+  /// A final cue held during quiet, still owed after the guide became idle.
+  /// Keep calling [update] while this is true so it is delivered.
+  bool get hasPendingCue => _pendingFinal != null;
+
   NavCue start(Set<String> labelsEn, String nameVi, DateTime now) {
     final retarget = isActive;
     _labels = labelsEn;
