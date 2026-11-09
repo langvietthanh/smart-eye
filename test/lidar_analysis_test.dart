@@ -176,9 +176,69 @@ void sideLaneTests() {
   });
 }
 
+void sideStabilityTests() {
+  const both = LidarObstacle(
+    1.5,
+    left: SideState.clear,
+    right: SideState.clear,
+  );
+  const rightBlocked = LidarObstacle(
+    1.5,
+    left: SideState.clear,
+    right: SideState.blocked,
+  );
+  const unknown = (left: SideState.unknown, right: SideState.unknown);
+
+  test('clear needs three frames in a row', () {
+    final s = SideStability();
+    expect(s.update(both), unknown);
+    expect(s.update(both).left, SideState.unknown);
+    expect(s.update(both), (left: SideState.clear, right: SideState.clear));
+  });
+
+  test('blocked takes effect at once', () {
+    final s = SideStability();
+    for (var i = 0; i < 3; i++) {
+      s.update(both);
+    }
+    expect(
+      s.update(rightBlocked),
+      (left: SideState.clear, right: SideState.blocked),
+    );
+  });
+
+  test('a broken clear streak starts over', () {
+    final s = SideStability();
+    s.update(both);
+    s.update(both);
+    s.update(rightBlocked);
+    expect(s.update(both).right, SideState.blocked);
+    expect(s.update(both).right, SideState.blocked);
+    expect(s.update(both).right, SideState.clear);
+  });
+
+  test('clear or unknown readings and reset drop both sides', () {
+    final s = SideStability();
+    for (var i = 0; i < 3; i++) {
+      s.update(both);
+    }
+    expect(s.update(const LidarClear()), unknown);
+    for (var i = 0; i < 3; i++) {
+      s.update(both);
+    }
+    expect(s.update(const LidarUnknown()).left, SideState.unknown);
+    for (var i = 0; i < 3; i++) {
+      s.update(both);
+    }
+    s.reset();
+    expect(s.update(both).left, SideState.unknown);
+  });
+}
+
 void main() {
   group('warning', warningTests);
   group('side lanes', sideLaneTests);
+  group('side stability', sideStabilityTests);
 
   test('wall at 1.5 m reads 1.5 m at any tilt and hold', () {
     for (final pitch in [0.0, 15.0, 35.0]) {

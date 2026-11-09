@@ -304,6 +304,42 @@ class LidarAnalysis {
   }
 }
 
+/// Smooths the side-lane states: saying "free" wrongly is worse than staying
+/// silent, so `clear` needs [clearFrames] readings in a row while `blocked`
+/// and `unknown` take effect at once.
+class SideStability {
+  static const clearFrames = 3;
+
+  final _left = _SideTrack(), _right = _SideTrack();
+
+  ({SideState left, SideState right}) update(LidarReading reading) {
+    final (l, r) = reading is LidarObstacle
+        ? (reading.left, reading.right)
+        : (SideState.unknown, SideState.unknown);
+    return (left: _left.update(l), right: _right.update(r));
+  }
+
+  void reset() {
+    _left.update(SideState.unknown);
+    _right.update(SideState.unknown);
+  }
+}
+
+class _SideTrack {
+  SideState _state = SideState.unknown;
+  int _clearStreak = 0;
+
+  SideState update(SideState next) {
+    if (next != SideState.clear) {
+      _clearStreak = 0;
+      return _state = next;
+    }
+    _clearStreak++;
+    if (_clearStreak >= SideStability.clearFrames) _state = SideState.clear;
+    return _state;
+  }
+}
+
 /// Metric warning levels with hysteresis, so standing near a threshold does
 /// not flip the alert every frame. As with MiDaS, two consecutive
 /// non-info readings (DepthWarning) are needed before warning.
