@@ -1,7 +1,9 @@
 import '../models/scene_info.dart';
 import 'lidar_analysis.dart';
 
-enum PathEvent { trapped, cleared }
+/// `cleared`: the way ahead is open. `opened`: a side opened while the
+/// centre is still blocked (the user turned towards a single obstacle).
+enum PathEvent { trapped, cleared, opened }
 
 /// Decides when the user is boxed in (front, left and right all blocked) and
 /// when the way ahead opens again. Pure Dart; time is passed in explicitly.
@@ -51,13 +53,13 @@ class PathBlockage {
     });
   }
 
-  /// Exit needs the centre clearly open: with LiDAR, clear or an obstacle
+  /// Exit needs one direction clearly open: with LiDAR, clear or an obstacle
   /// beyond [exitClearBeyond] (matches `LidarWarning.cautionExit`).
-  bool _centreOpen(DateTime now) {
-    if (blocked(now)[1]) return false;
+  bool _open(DateTime now, HPos pos) {
+    if (blocked(now)[pos.index]) return false;
     if (!_seenDepth) return true;
     if (!_fresh(_scanAt, now, depthMaxAge)) return false;
-    return switch (_scan!.center) {
+    return switch (_scan![pos]) {
       LidarClear() => true,
       LidarObstacle(:final distance) => distance > exitClearBeyond,
       LidarUnknown() => false,
@@ -65,7 +67,10 @@ class PathBlockage {
   }
 
   PathEvent? evaluate(DateTime now) {
-    final holds = _trapped ? _centreOpen(now) : blocked(now).every((b) => b);
+    final centreOpen = _trapped && _open(now, HPos.center);
+    final holds = _trapped
+        ? centreOpen || _open(now, HPos.left) || _open(now, HPos.right)
+        : blocked(now).every((b) => b);
     if (!holds) {
       _since = null;
       return null;
@@ -74,7 +79,8 @@ class PathBlockage {
     if (now.difference(_since!) < settle) return null;
     _trapped = !_trapped;
     _since = null;
-    return _trapped ? PathEvent.trapped : PathEvent.cleared;
+    if (_trapped) return PathEvent.trapped;
+    return centreOpen ? PathEvent.cleared : PathEvent.opened;
   }
 
   /// The view cannot be trusted right now: restart the settle timer without

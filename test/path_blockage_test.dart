@@ -43,9 +43,34 @@ void main() {
     expect(run(p, all, 1750, 3000), isEmpty);
   });
 
-  test('open sides with a blocked centre stay trapped', () {
+  test('an open side with a blocked centre releases as opened', () {
     run(p, all, 0, 1500);
-    expect(run(p, [0, 1, 0], 1750, 4000), isEmpty);
+    expect(run(p, [0, 1, 1], 1750, 3000), [PathEvent.opened]);
+    expect(p.trapped, false);
+  });
+
+  test('a briefly open side does not release', () {
+    run(p, all, 0, 1500);
+    final events = [
+      ...run(p, [0, 1, 1], 1750, 2250),
+      ...run(p, all, 2500, 3000),
+    ];
+    expect(events, isEmpty);
+    expect(p.trapped, isTrue);
+  });
+
+  test('a LiDAR side between entry and exit distance does not open', () {
+    expect(run(p, all, 0, 1500, depth: scan(1, 1, 1)), [PathEvent.trapped]);
+    expect(run(p, [0, 1, 0], 1750, 3500, depth: scan(1.6, 1, 1.6)), isEmpty);
+    expect(p.trapped, isTrue);
+    expect(run(p, [0, 1, 0], 3750, 5250, depth: scan(2.3, 1, 1)), [
+      PathEvent.opened,
+    ]);
+  });
+
+  test('unknown depth never opens a side', () {
+    expect(run(p, all, 0, 1500, depth: scan(1, 1, 1)), [PathEvent.trapped]);
+    expect(run(p, [0, 1, 0], 1750, 4000, depth: LidarScan.unknown), isEmpty);
     expect(p.trapped, true);
   });
 
