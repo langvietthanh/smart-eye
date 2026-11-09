@@ -3,6 +3,7 @@ import 'package:smart_eye/services/voice_command_service.dart';
 
 class FakeRecognizer implements SpeechRecognizer {
   bool initResult = true;
+  bool permission = true;
   int initCalls = 0;
   int listenCalls = 0;
   int stopCalls = 0;
@@ -40,6 +41,9 @@ class FakeRecognizer implements SpeechRecognizer {
 
   @override
   Future<void> stop() async => stopCalls++;
+
+  @override
+  Future<bool> hasPermission() async => permission;
 }
 
 void main() {
@@ -63,6 +67,34 @@ void main() {
       VoiceError.noSpeech,
     );
     expect(VoiceCommandService.mapError('anything_else'), VoiceError.noSpeech);
+  });
+
+  test('mapError: language not supported/unavailable gives unavailable', () {
+    expect(
+      VoiceCommandService.mapError('error_language_not_supported'),
+      VoiceError.unavailable,
+    );
+    expect(
+      VoiceCommandService.mapError('error_language_unavailable'),
+      VoiceError.unavailable,
+    );
+  });
+
+  test('initialize false without mic permission gives noPermission', () async {
+    final fake = FakeRecognizer()
+      ..initResult = false
+      ..permission = false;
+    final r = await VoiceCommandService(fake).listen();
+    expect(r.error, VoiceError.noPermission);
+    expect(fake.listenCalls, 0);
+  });
+
+  test('initialize false with mic permission gives unavailable', () async {
+    final fake = FakeRecognizer()
+      ..initResult = false
+      ..permission = true;
+    final r = await VoiceCommandService(fake).listen();
+    expect(r.error, VoiceError.unavailable);
   });
 
   test('final result returns text with Vietnamese settings', () async {

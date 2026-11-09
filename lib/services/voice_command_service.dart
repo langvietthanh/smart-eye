@@ -25,6 +25,9 @@ abstract interface class SpeechRecognizer {
     void Function(String words, bool isFinal) onResult,
   );
   Future<void> stop();
+
+  /// Whether the user has granted microphone (and speech) permission.
+  Future<bool> hasPermission();
 }
 
 class _SttRecognizer implements SpeechRecognizer {
@@ -63,6 +66,9 @@ class _SttRecognizer implements SpeechRecognizer {
 
   @override
   Future<void> stop() => _stt.stop();
+
+  @override
+  Future<bool> hasPermission() => _stt.hasPermission;
 }
 
 class VoiceCommandService {
@@ -99,7 +105,14 @@ class VoiceCommandService {
       }
       if (c.isCompleted) return;
       if (!_initialized) {
-        _complete(c, const VoiceResult(error: VoiceError.unavailable));
+        // A denied microphone also makes initialize fail: tell them apart.
+        final permitted = await _recognizer.hasPermission();
+        _complete(
+          c,
+          VoiceResult(
+            error: permitted ? VoiceError.unavailable : VoiceError.noPermission,
+          ),
+        );
         return;
       }
       await _recognizer.listen(localeId, pauseFor, listenFor, (words, isFinal) {
@@ -140,6 +153,10 @@ class VoiceCommandService {
   static VoiceError mapError(String errorMsg) {
     if (errorMsg.contains('network')) return VoiceError.network;
     if (errorMsg.contains('permission')) return VoiceError.noPermission;
+    if (errorMsg.contains('language_not_supported') ||
+        errorMsg.contains('language_unavailable')) {
+      return VoiceError.unavailable;
+    }
     return VoiceError.noSpeech;
   }
 }
