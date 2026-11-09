@@ -79,6 +79,7 @@ const Map<String, String> labelVi = {
   'bollard': 'cọc chắn',
   'traffic cone': 'cọc giao thông',
   'hole': 'hố',
+  'door': 'cửa', // chưa có trong model; để lời nhắn "chưa nhận ra cửa" đúng tên
 };
 
 // Model COCO không nhận ra các nhãn mặt đất này; chỉ model v4 (smart_eye.tflite)

@@ -607,4 +607,85 @@ void main() {
       await manager.stopAll();
     },
   );
+
+  testWidgets('guidance interrupts description', (tester) async {
+    final tts = FakeTts();
+    final manager = managerFor(tester, tts);
+    manager.say('Mô tả', SpeechPriority.description);
+    manager.say('Đi thẳng', SpeechPriority.guidance, subject: 'nav');
+    await tester.pump();
+    expect(tts.stopCount, 1);
+    expect(tts.spoken, ['Mô tả', 'Đi thẳng']);
+    expect(manager.showing.value?.priority, SpeechPriority.guidance);
+    await manager.stopAll();
+  });
+
+  testWidgets('caution interrupts guidance', (tester) async {
+    final tts = FakeTts();
+    final manager = managerFor(tester, tts);
+    manager.say('Đi thẳng', SpeechPriority.guidance, subject: 'nav');
+    manager.say('Xe bên trái', SpeechPriority.caution, subject: 'track:1');
+    await tester.pump();
+    expect(tts.stopCount, 1);
+    expect(tts.spoken, ['Đi thẳng', 'Xe bên trái']);
+    expect(manager.showing.value?.priority, SpeechPriority.caution);
+    await manager.stopAll();
+  });
+
+  testWidgets('guidance does not interrupt guidance of the same nav subject', (
+    tester,
+  ) async {
+    final tts = FakeTts();
+    final manager = managerFor(tester, tts);
+    manager.say('Lệch trái', SpeechPriority.guidance, subject: 'nav');
+    expect(manager.canSay(SpeechPriority.guidance, subject: 'nav'), isFalse);
+    expect(
+      manager.say('Lệch phải', SpeechPriority.guidance, subject: 'nav'),
+      isFalse,
+    );
+    expect(tts.stopCount, 0);
+    expect(tts.spoken, ['Lệch trái']);
+    await manager.stopAll();
+  });
+
+  testWidgets('guidance older than 2 seconds is dropped', (tester) async {
+    final tts = FakeTts();
+    final manager = managerFor(tester, tts);
+    manager.say('Dừng lại, vật cản rất dài', SpeechPriority.danger);
+    final queued = manager.sayAndWait(
+      'Đi thẳng',
+      SpeechPriority.guidance,
+      subject: 'nav',
+    );
+    await tester.pump(const Duration(seconds: 3));
+    tts.finish();
+    await tester.pump();
+    expect(await queued, isFalse);
+    expect(tts.spoken, ['Dừng lại, vật cản rất dài']);
+    await manager.stopAll();
+  });
+  testWidgets(
+    'alertActive: true while a caution or danger line is current or queued',
+    (tester) async {
+      final tts = FakeTts();
+      final manager = managerFor(tester, tts);
+      expect(manager.alertActive, isFalse);
+      manager.say('Mô tả', SpeechPriority.description);
+      manager.say('Đi thẳng', SpeechPriority.guidance, subject: 'nav');
+      await tester.pump();
+      expect(manager.alertActive, isFalse);
+      manager.say('Xe bên trái', SpeechPriority.caution, subject: 'track:1');
+      expect(manager.alertActive, isTrue);
+      await tester.pump();
+      expect(tts.spoken.last, 'Xe bên trái');
+      expect(manager.alertActive, isTrue);
+      tts.finish();
+      await tester.pump();
+      expect(manager.alertActive, isFalse);
+      manager.say('Dừng lại', SpeechPriority.danger, subject: 'track:2');
+      expect(manager.alertActive, isTrue);
+      await manager.stopAll();
+      expect(manager.alertActive, isFalse);
+    },
+  );
 }

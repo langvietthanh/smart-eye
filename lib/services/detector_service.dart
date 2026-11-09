@@ -43,6 +43,10 @@ class DetectorService {
   bool _busy = false;
 
   bool get isLoaded => _worker != null && !_disposed;
+
+  /// Class names of the loaded model; empty until it is loaded.
+  List<String> get labels => isLoaded ? _labels : const [];
+  List<String> _labels = const [];
   int lastFrameMs = 0;
   double lastMaxScore = 0;
   String lastMaxLabel = '';
@@ -75,6 +79,7 @@ class DetectorService {
       await worker.close();
     } else {
       _worker = worker;
+      _labels = List.unmodifiable(selected.labels);
     }
   }
 

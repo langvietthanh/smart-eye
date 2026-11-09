@@ -81,12 +81,14 @@ class _TripDetailScreenState extends State<TripDetailScreen> {
         TripEventType.description => Icons.visibility,
         TripEventType.tripStart => Icons.play_arrow,
         TripEventType.tripEnd => Icons.stop,
+        TripEventType.navigation => Icons.near_me,
       };
 
   Color _color(TripEventType t) => switch (t) {
         TripEventType.danger => Colors.redAccent,
         TripEventType.caution => Colors.orangeAccent,
         TripEventType.description => Colors.lightBlueAccent,
+        TripEventType.navigation => Colors.lightGreenAccent,
         _ => Colors.white70,
       };
 

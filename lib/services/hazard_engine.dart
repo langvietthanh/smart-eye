@@ -16,13 +16,20 @@ class HazardEngine {
   static const double approachGrowth = 1.18;
   static const double _predictionSeconds = 0.8;
 
-  SceneAssessment assess(List<TrackedObject> tracks, Size frame) {
+  /// [targetTrackId] is the object the user is being guided to: it is not
+  /// warned about unless it is a real danger (ground hazard, vehicle, or a
+  /// person/animal approaching). Objects and column load are unaffected.
+  SceneAssessment assess(
+    List<TrackedObject> tracks,
+    Size frame, {
+    int? targetTrackId,
+  }) {
     if (frame.width <= 0 || frame.height <= 0) return SceneAssessment.empty;
     final objects = tracks.map((track) => _describe(track, frame)).toList();
     return SceneAssessment(
       objects: objects,
       columnLoad: _columnLoad(objects, frame),
-      alert: _decide(objects, frame),
+      alert: _decide(objects, frame, targetTrackId),
     );
   }
 
@@ -91,9 +98,29 @@ class HazardEngine {
     return load;
   }
 
-  HazardAlert? _decide(List<ObjectInfo> objects, Size frame) {
+  static bool _isSkippedTarget(ObjectInfo object, int? targetTrackId) {
+    if (targetTrackId == null || object.track.id != targetTrackId) return false;
+    switch (object.category) {
+      case ObjectCategory.groundHazard:
+      case ObjectCategory.vehicle:
+        return false;
+      case ObjectCategory.person:
+      case ObjectCategory.animal:
+        return !object.approaching;
+      case ObjectCategory.obstacle:
+      case ObjectCategory.other:
+        return true;
+    }
+  }
+
+  HazardAlert? _decide(
+    List<ObjectInfo> objects,
+    Size frame,
+    int? targetTrackId,
+  ) {
     ({ObjectInfo object, AlertLevel level, bool inPath})? best;
     for (final object in objects) {
+      if (_isSkippedTarget(object, targetTrackId)) continue;
       // Keep briefly occluded tracks for display, but never dispatch a new
       // warning from a box absent in the current observation.
       if (!object.isRelevant || object.track.misses != 0) continue;
