@@ -42,14 +42,14 @@ void main() {
     });
 
     test(
-      'detectorLevel caution + depth danger returns "Dừng lại! Có vật cản ngay phía trước."',
+      'detectorLevel caution + depth danger returns "Dừng lại! Vật cản ngay trước mặt."',
       () {
         expect(
           depthAlertText(
             depthLevel: AlertLevel.danger,
             detectorLevel: AlertLevel.caution,
           ),
-          'Dừng lại! Có vật cản ngay phía trước.',
+          'Dừng lại! Vật cản ngay trước mặt.',
         );
         expect(
           depthAlertText(
@@ -57,7 +57,7 @@ void main() {
             detectorLevel: AlertLevel.caution,
             metres: 0.9,
           ),
-          'Dừng lại! Có vật cản ngay phía trước.',
+          'Dừng lại! Vật cản ngay trước mặt.',
         );
       },
     );
@@ -93,7 +93,7 @@ void main() {
     });
 
     test(
-      'không có YOLO + caution + metres 1.4 returns "Chậm lại. Vật cản phía trước, khoảng 1,5 mét."',
+      'không có YOLO + caution + metres 1.4 returns "Chậm lại. Vật cản cách 1,5 mét."',
       () {
         expect(
           depthAlertText(
@@ -101,13 +101,13 @@ void main() {
             detectorLevel: null,
             metres: 1.4,
           ),
-          'Chậm lại. Vật cản phía trước, khoảng 1,5 mét.',
+          'Chậm lại. Vật cản cách 1,5 mét.',
         );
       },
     );
 
     test(
-      'không có YOLO + caution + metres 2.0 returns "Chậm lại. Vật cản phía trước, khoảng 2 mét."',
+      'không có YOLO + caution + metres 2.0 returns "Chậm lại. Vật cản cách 2 mét."',
       () {
         expect(
           depthAlertText(
@@ -115,7 +115,7 @@ void main() {
             detectorLevel: null,
             metres: 2.0,
           ),
-          'Chậm lại. Vật cản phía trước, khoảng 2 mét.',
+          'Chậm lại. Vật cản cách 2 mét.',
         );
       },
     );
@@ -134,13 +134,13 @@ void main() {
       },
     );
 
-    test('không có YOLO + danger returns "Dừng lại! Có vật cản ngay phía trước."', () {
+    test('không có YOLO + danger returns "Dừng lại! Vật cản ngay trước mặt."', () {
       expect(
         depthAlertText(
           depthLevel: AlertLevel.danger,
           detectorLevel: null,
         ),
-        'Dừng lại! Có vật cản ngay phía trước.',
+        'Dừng lại! Vật cản ngay trước mặt.',
       );
     });
 
@@ -151,15 +151,84 @@ void main() {
           detectorLevel: AlertLevel.info,
           metres: 1.8,
         ),
-        'Chậm lại. Vật cản phía trước, khoảng 2 mét.',
+        'Chậm lại. Vật cản cách 2 mét.',
       );
       expect(
         depthAlertText(
           depthLevel: AlertLevel.danger,
           detectorLevel: AlertLevel.info,
         ),
-        'Dừng lại! Có vật cản ngay phía trước.',
+        'Dừng lại! Vật cản ngay trước mặt.',
       );
+    });
+  });
+
+  group('sideClause', () {
+    const c = SideState.clear, b = SideState.blocked, u = SideState.unknown;
+    test('one side clear', () {
+      expect(sideClause(c, b), 'Bên trái trống.');
+      expect(sideClause(u, c), 'Bên phải trống.');
+    });
+    test('both clear / both blocked', () {
+      expect(sideClause(c, c), 'Hai bên trống.');
+      expect(sideClause(b, b), 'Hai bên có vật cản.');
+    });
+    test('nothing certain says nothing', () {
+      expect(sideClause(u, u), isNull);
+      expect(sideClause(b, u), isNull);
+    });
+  });
+
+  group('side clause on alerts', () {
+    test('LiDAR caution with a free right side', () {
+      expect(
+        depthAlertText(
+          depthLevel: AlertLevel.caution,
+          metres: 1.4,
+          left: SideState.blocked,
+          right: SideState.clear,
+        ),
+        'Chậm lại. Vật cản cách 1,5 mét. Bên phải trống.',
+      );
+    });
+
+    test('a suppressed depth alert stays suppressed', () {
+      expect(
+        depthAlertText(
+          depthLevel: AlertLevel.caution,
+          detectorLevel: AlertLevel.danger,
+          metres: 1.4,
+          left: SideState.clear,
+          right: SideState.clear,
+        ),
+        isNull,
+      );
+    });
+
+    test('withSideClause appends for a centre object', () {
+      expect(
+        withSideClause(
+          'Dừng lại! Có ghế ngay phía trước.',
+          pos: HPos.center,
+          left: SideState.clear,
+          right: SideState.blocked,
+        ),
+        'Dừng lại! Có ghế ngay phía trước. Bên trái trống.',
+      );
+    });
+
+    test('withSideClause leaves side objects alone', () {
+      for (final pos in [HPos.left, HPos.right, null]) {
+        expect(
+          withSideClause(
+            'Chậm lại. Có ghế bên phải.',
+            pos: pos,
+            left: SideState.clear,
+            right: SideState.clear,
+          ),
+          'Chậm lại. Có ghế bên phải.',
+        );
+      }
     });
   });
 

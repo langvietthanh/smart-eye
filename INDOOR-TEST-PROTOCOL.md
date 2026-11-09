@@ -14,7 +14,7 @@ Mục tiêu: đo xem app báo **kịp** và **không bỏ sót** khi người d�
 | 1 | Ghế ở giữa lối đi, tiến thẳng tới | Khoảng cách lúc bắt đầu rung, lúc nói "Chậm lại", lúc nói "Dừng lại" |
 | 2 | Ghế lệch trái / lệch phải | App có nói đúng phía không |
 | 3 | Bàn thấp và rộng (bàn trà) | Có báo không, báo ở khoảng cách nào |
-| 4 | Thùng carton, ba lô dưới sàn | COCO không nhận ra; chỉ model độ sâu báo *"Có vật cản ngay phía trước"*. Ghi khoảng cách lúc báo |
+| 4 | Thùng carton, ba lô dưới sàn | COCO không nhận ra; chỉ model độ sâu báo *"Vật cản ngay trước mặt"*. Ghi khoảng cách lúc báo |
 | 5 | Đi thẳng vào tường hoặc cửa | Chỉ model độ sâu báo. Ghi khoảng cách lúc rung đầu tiên và lúc *"Dừng lại"* |
 | 5b | **Bậc bục giảng**: đi tới bục cao 15–20 cm (có tường/bảng phía sau), rồi đứng trên bục đi về mép | Bậc lên: khoảng cách lúc nói *"Chú ý, phía trước có bậc lên"* và *"Dừng lại! Bậc lên ngay phía trước"*. Mép bục: khoảng cách lúc nói *"Dừng lại! Có bậc xuống phía trước"*. Thử cả bậc thấp ~10 cm (dự kiến bỏ sót) |
 | 6 | Tắt đèn phòng | Có nói "Quá tối" trong ~1 giây không |
