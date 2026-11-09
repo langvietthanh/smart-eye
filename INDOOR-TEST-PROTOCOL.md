@@ -31,11 +31,15 @@ Giữ lâu màn hình, nghe "tít" rồi nói *"đi đến ghế"*. Ghi câu ngh
 
 | # | Bố trí | Câu mong đợi |
 |---|---|---|
-| D1 | Ghế cách ~4 m, lệch phải | *"Đang tìm ghế…"* → *"Thấy ghế ở hướng 1 giờ, còn xa."* → *"Lệch phải."* tới khi xoay đúng → *"Thẳng rồi."* → *"Gần hơn rồi."* / *"Sắp tới."* → *"Đã tới. Ghế ngay trước mặt. Dò bằng gậy."* |
+| D1 | Ghế cách ~4 m, lệch phải | *"Đang tìm ghế…"* → *"Thấy ghế ở hướng 1 giờ, còn xa."* → *"Lệch phải."* tới khi xoay đúng → *"Thẳng rồi."* → *"Gần hơn rồi."* / *"Sắp tới."* → *"Đã tới. Ghế ngay trước mặt. Dò bằng gậy."*. Câu cảnh báo xen vào về chính ghế (xem dưới bảng) thì ghi lại, không tính là trượt |
 | D2 | Đang dẫn, một bạn đi ngang che ghế | Không nói gì trong ~1,5 giây; che lâu hơn → *"Mất dấu ghế. Đứng yên, xoay người chậm."*; thấy lại → *"Thấy lại ghế, …"* |
 | D3 | Đi sát tới khi ghế tụt khỏi đáy khung | *"Ghế ngay trước mặt, rất gần. Dò bằng gậy."* (không báo mất dấu) |
-| D4 | Thùng carton chắn giữa đường tới ghế | Cảnh báo vật cản thùng vẫn được nói và ngắt lời dẫn; ghế (đích) không bị báo "Dừng lại" chỉ vì đang đi tới nó |
+| D4 | Thùng carton chắn giữa đường tới ghế | Cảnh báo vật cản thùng vẫn được nói và ngắt lời dẫn; ghế (đích) không bị model nhận dạng báo *"Dừng lại! Có ghế…"* chỉ vì đang đi tới nó. Câu LiDAR / độ sâu về ghế (xem dưới bảng) thì ghi lại, không tính là trượt |
 | D5 | Nói *"đi đến cửa"* (model chưa có lớp cửa) | *"Chưa nhận ra được cửa. Có thể tìm: …"* và không bắt đầu dẫn |
+
+Cảnh báo về ghế đích vẫn có thể xuất hiện (D1, D4) — ghi lại câu và khoảng cách, **không** đánh trượt kịch bản:
+- Máy có LiDAR: LiDAR không biết vật nào là đích, nên có thể nói câu *"Chậm lại. Vật cản cách 2 mét…"* khi còn ~2 m và *"Dừng lại!…"* khi dưới 1 m.
+- Model độ sâu (MiDaS) có thể nói *"Vật cản ngay trước mặt"* khi tới sát ghế.
 
 Thêm: nói *"dừng"* giữa chừng → *"Đã dừng dẫn đường."*; không nói gì → *"Không nghe rõ. Giữ lâu để nói lại."*
 
