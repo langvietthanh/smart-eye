@@ -87,4 +87,50 @@ void main() {
       'cầu thang',
     ]);
   });
+  group('stripEchoes', () {
+    const alert = 'Dừng lại! Có ghế ngay phía trước.';
+
+    test('bỏ câu cảnh báo lọt vào micro, còn lại lệnh', () {
+      final rest = CommandParser.stripEchoes(
+        'dừng lại có ghế ngay phía trước đi đến bàn',
+        [alert],
+      );
+      expect(parse(rest, v4), navigateTo({'dining table'}));
+    });
+
+    test('echo ở giữa và cuối câu, nhiều echo', () {
+      final rest = CommandParser.stripEchoes(
+        'đi đến Dừng lại có ghế ngay phía trước bàn chậm lại có người bên trái',
+        [alert, 'Chậm lại. Có người bên trái.'],
+      );
+      expect(parse(rest, v4), navigateTo({'dining table'}));
+    });
+
+    test('chỉ toàn echo → rỗng', () {
+      expect(
+        CommandParser.stripEchoes('dừng lại có ghế ngay phía trước', [alert]),
+        isEmpty,
+      );
+      expect(CommandParser.stripEchoes(alert, [alert]), isEmpty);
+    });
+
+    test('echo không liên quan giữ nguyên câu', () {
+      expect(
+        CommandParser.stripEchoes('đi đến ghế', [
+          'Chậm lại. Có xe máy bên phải.',
+        ]),
+        'đi đến ghế',
+      );
+      expect(CommandParser.stripEchoes('đi đến ghế', const []), 'đi đến ghế');
+    });
+
+    test('chỉ bỏ khi khớp cả từ, không bỏ một phần câu echo', () {
+      // "dừng" alone is the Stop command, not the echo "Dừng lại! ...".
+      expect(CommandParser.stripEchoes('dừng', [alert]), 'dừng');
+      expect(
+        CommandParser.stripEchoes('dừng lại có ghế', [alert]),
+        'dừng lại có ghế',
+      );
+    });
+  });
 }

@@ -51,6 +51,45 @@ class CommandParser {
         .trim();
   }
 
+  static final RegExp _wordSplit = RegExp(
+    r'[^\p{L}\p{M}\p{N}]+',
+    unicode: true,
+  );
+
+  /// Removes the app's own spoken lines ([echoes]) that the microphone picked
+  /// up from [transcript]. Each echo is matched as a whole-word sequence on
+  /// folded text (case, diacritics and punctuation ignored) wherever it
+  /// occurs. Returns the remaining words as spoken, joined by single spaces;
+  /// empty when nothing but echoes was heard.
+  static String stripEchoes(String transcript, List<String> echoes) {
+    final words = transcript
+        .split(_wordSplit)
+        .where((w) => fold(w).isNotEmpty)
+        .toList();
+    final folded = words.map(fold).toList();
+    final keep = List<bool>.filled(words.length, true);
+    for (final echo in echoes) {
+      final e = fold(echo);
+      if (e.isEmpty) continue;
+      final seq = e.split(' ');
+      for (var i = 0; i + seq.length <= folded.length; i++) {
+        var match = true;
+        for (var j = 0; j < seq.length && match; j++) {
+          match = keep[i + j] && folded[i + j] == seq[j];
+        }
+        if (!match) continue;
+        for (var j = 0; j < seq.length; j++) {
+          keep[i + j] = false;
+        }
+        i += seq.length - 1;
+      }
+    }
+    return [
+      for (var i = 0; i < words.length; i++)
+        if (keep[i]) words[i],
+    ].join(' ');
+  }
+
   static final Map<String, _Entry> _dict = _buildDict();
 
   static Map<String, _Entry> _buildDict() {
