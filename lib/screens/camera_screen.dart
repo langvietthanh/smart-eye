@@ -1039,17 +1039,6 @@ class _CameraScreenState extends State<CameraScreen>
     );
   }
 
-  void _toggleQuiet() {
-    setState(() => _speech.muted = !_speech.muted);
-    _speech.say(
-      _speech.muted
-          ? 'Chế độ yên lặng. Chỉ báo khi nguy hiểm.'
-          : 'Đã bật lại nhắc nhở.',
-      SpeechPriority.description,
-      force: true,
-    );
-  }
-
   void _toggleAutoDescribe() {
     setState(() => _autoDescribe = !_autoDescribe);
     _lastDescribeAt = DateTime.now();
@@ -1358,18 +1347,6 @@ class _CameraScreenState extends State<CameraScreen>
                           Colors.black54,
                         ),
                         const Spacer(),
-                        _toggleChip(
-                          icon: _speech.muted
-                              ? Icons.volume_off
-                              : Icons.volume_up,
-                          label: _speech.muted ? 'Yên lặng' : 'Đầy đủ',
-                          semantics: _speech.muted
-                              ? 'Chế độ yên lặng đang bật, chỉ báo nguy hiểm. Chạm để tắt.'
-                              : 'Chế độ nhắc đầy đủ. Chạm để chuyển sang yên lặng.',
-                          active: _speech.muted,
-                          onTap: _toggleQuiet,
-                        ),
-                        const SizedBox(width: 8),
                         _toggleChip(
                           icon: Icons.record_voice_over,
                           label: _autoDescribe ? 'Tự mô tả' : 'Mô tả khi hỏi',

@@ -23,7 +23,6 @@ khi vật chiếm nhiều khung hình phía trước hoặc đang lớn nhanh s�
 - **Chạm 2 lần vào màn hình** hoặc nút **Xung quanh**: nghe mô tả xung quanh (F3 on-demand).
 - **Giữ lâu vào màn hình** hoặc nút **Tóm tắt**: nghe tóm tắt chuyến đi hiện tại.
 - Nút **Lịch sử**: danh sách chuyến đi, nghe tóm tắt, xem ảnh ghi nhớ, nghe lại toàn bộ.
-- Chip **Đầy đủ / Yên lặng**: chế độ yên lặng chỉ báo khi nguy hiểm.
 - Chip **Mô tả khi hỏi / Tự mô tả**: bật tự mô tả tần suất thấp (~45 giây, chỉ khi không có cảnh báo gần đây).
 - **Rung liên tục kiểu cảm biến lùi xe**: có vật trong lối đi phía trước thì máy rung, vật càng gần rung càng dày. Không rung chỉ có nghĩa là không *nhận ra* vật nào, không chứng minh đường trống.
 - **Báo khi 3 hướng bị chặn**: phía trước, bên trái và bên phải đều có vật cản (YOLO hoặc LiDAR ≤ 1,5 m) liên tục 1 giây → nói *"Đứng lại! Phía trước và hai bên đều có vật cản. Xoay người chậm để tìm lối."* rồi nhắc ngắn *"Vẫn bị chặn. Xoay người chậm."*; trong lúc đó tạm im cảnh báo chú ý và cảnh báo độ sâu. Phía trước thông lại 1 giây → *"Đường đi thông thoáng."* (`path_blockage.dart`).
