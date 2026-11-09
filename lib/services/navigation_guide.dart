@@ -34,11 +34,20 @@ class NavigationGuide {
   static const double sideEdgeLeft = 0.03;
   static const double sideEdgeRight = 0.97;
   static const double lidarArrivalMeters = 1.0;
+  static const Duration arrivedExclusion = Duration(seconds: 6);
+
+  /// Largest gap between updates added to the 15 s clocks, so a burst of
+  /// dropped frames cannot time a session out at once.
+  static const Duration maxClockStep = Duration(milliseconds: 500);
 
   NavState _state = NavState.idle;
   Set<String> _labels = const {};
   String _nameVi = '';
   int? _trackId;
+
+  // Target just arrived at (see [arrivedTrackId]).
+  int? _arrivedId;
+  DateTime? _arrivedAt;
 
   DateTime? _lastSearchCue;
 
@@ -80,11 +89,37 @@ class NavigationGuide {
   /// Keep calling [update] while this is true so it is delivered.
   bool get hasPendingCue => _pendingFinal != null;
 
+  /// The target the user just arrived at, still to be kept out of hazard
+  /// warnings: for [arrivedExclusion] after arrival while that track is
+  /// present and near. Once it lapses it stays cleared until the next arrival.
+  int? arrivedTrackId({
+    required List<TrackedObject> tracks,
+    required DateTime now,
+  }) {
+    final id = _arrivedId;
+    final at = _arrivedAt;
+    if (id == null || at == null) return null;
+    final stillNear = tracks.any(
+      (t) => t.id == id && t.distanceLevel == DistanceLevel.near,
+    );
+    if (!stillNear || now.difference(at) >= arrivedExclusion) {
+      _clearArrived();
+      return null;
+    }
+    return id;
+  }
+
+  void _clearArrived() {
+    _arrivedId = null;
+    _arrivedAt = null;
+  }
+
   NavCue start(Set<String> labelsEn, String nameVi, DateTime now) {
     final retarget = isActive;
     _labels = labelsEn;
     _nameVi = nameVi;
     _trackId = null;
+    _clearArrived();
     _state = NavState.searching;
     _lastSearchCue = now;
     _prevNow = now;
@@ -107,6 +142,7 @@ class NavigationGuide {
   /// a session was active. Any pending final cue is discarded.
   NavCue? cancel({bool announce = true}) {
     _pendingFinal = null;
+    _clearArrived();
     if (!isActive) return null;
     _state = NavState.idle;
     _trackId = null;
@@ -134,7 +170,8 @@ class NavigationGuide {
     _prevNow = now;
     _quiet = quiet;
     if (prev != null && !sightLost) {
-      final delta = now.difference(prev);
+      var delta = now.difference(prev);
+      if (delta > maxClockStep) delta = maxClockStep;
       if (_state == NavState.searching) _searchElapsed += delta;
       if (_state == NavState.lost) _lostElapsed += delta;
     }
@@ -302,6 +339,7 @@ class NavigationGuide {
       );
     }
     if (near &&
+        dx.abs() < edgeDx &&
         lidar is LidarObstacle &&
         lidar.distance <= lidarArrivalMeters) {
       return _end(
@@ -399,6 +437,10 @@ class NavigationGuide {
   }
 
   NavCue _end(String text, NavEnd end) {
+    if (end == NavEnd.arrived) {
+      _arrivedId = _trackId;
+      _arrivedAt = _prevNow; // the time of the current update
+    }
     _state = NavState.idle;
     _trackId = null;
     _resetGuiding();

@@ -219,10 +219,16 @@ void main() {
   });
 
   test('nhắc tìm mỗi 5 s; 15 s không thấy → notFound', () {
-    expect(up(1000, []), isNull);
-    expect(up(5000, [])!.text, 'Đang tìm ghế. Xoay người chậm.');
-    expect(up(7000, []), isNull);
-    expect(up(10000, [])!.text, 'Đang tìm ghế. Xoay người chậm.');
+    // Frames every 100 ms: the clocks add at most 500 ms per update.
+    final said = <int, String>{};
+    for (var ms = 100; ms < 15000; ms += 100) {
+      final c = up(ms, []);
+      if (c != null) said[ms] = c.text;
+    }
+    expect(said, {
+      5000: 'Đang tìm ghế. Xoay người chậm.',
+      10000: 'Đang tìm ghế. Xoay người chậm.',
+    });
     final cue = up(15000, [])!;
     expect(cue.text, 'Không tìm thấy ghế. Đã dừng dẫn đường.');
     expect(cue.force, true);
@@ -443,8 +449,9 @@ void main() {
     test('lost 15 s → lostTimeout', () {
       lockMid();
       up(1800, []);
-      expect(up(10000, []), isNull);
-      expect(up(16000, []), isNull);
+      for (var ms = 1900; ms < 16800; ms += 100) {
+        expect(up(ms, []), isNull);
+      }
       final cue = up(16800, [])!;
       expect(cue.text, 'Không tìm lại được ghế. Đã dừng dẫn đường.');
       expect(cue.force, true);
@@ -599,9 +606,9 @@ void main() {
     });
 
     test('quiet không dừng đồng hồ; sightLost dừng đồng hồ 15 s', () {
-      expect(upq(8000, [], quiet: true), isNull);
-      final cue = upq(15000, [], quiet: true);
-      expect(cue, isNull);
+      for (var ms = 100; ms <= 15000; ms += 100) {
+        expect(upq(ms, [], quiet: true), isNull);
+      }
       expect(g.state, NavState.idle);
       expect(upq(15100, [])!.end, NavEnd.notFound);
 
@@ -650,6 +657,32 @@ void main() {
       expect(up(600, []), isNull);
     });
 
+    test('near rời mép bên khi LiDAR ≤ 1 m → câu mép bên, không tới nơi', () {
+      up(0, [
+        track(
+          1,
+          'chair',
+          const Rect.fromLTRB(0.8, 0.4, 0.98, 0.6),
+          level: DistanceLevel.near,
+        ),
+      ]);
+      final cue = up(200, [], lidar: const LidarObstacle(0.8))!;
+      expect(cue.text, 'Ghế ở bên phải. Xoay phải chậm.');
+      expect(cue.end, isNull);
+      expect(g.state, NavState.lost);
+    });
+
+    test('khoảng trống khung hình không làm hết giờ ngay (kẹp 500 ms)', () {
+      expect(up(100, []), isNull);
+      up(20000, []);
+      expect(g.state, NavState.searching);
+      lockMid();
+      up(20000 + 1800, []);
+      expect(g.state, NavState.lost);
+      up(60000, []);
+      expect(g.state, NavState.lost);
+    });
+
     test('start khi đang dẫn → "Đổi sang tìm bàn." và về searching', () {
       lockMid();
       final cue = g.start({'dining table'}, 'bàn', at(300));
@@ -660,6 +693,70 @@ void main() {
       expect(g.targetTrackId, isNull);
       expect(g.targetName, 'bàn');
       expect(up(5300, [])!.text, 'Đang tìm bàn. Xoay người chậm.');
+    });
+  });
+  group('vừa tới nơi: loại trừ đích khỏi cảnh báo', () {
+    TrackedObject nearChair({int id = 1}) =>
+        chairAt(0.5, id: id, level: DistanceLevel.near);
+
+    void arrive() {
+      up(100, [nearChair()]);
+      expect(up(200, [nearChair()])!.end, NavEnd.arrived);
+    }
+
+    test('giữ id đích vừa tới khi còn near, trong 6 s', () {
+      expect(g.arrivedTrackId(tracks: [nearChair()], now: at(150)), isNull);
+      arrive();
+      expect(g.targetTrackId, isNull);
+      expect(g.arrivedTrackId(tracks: [nearChair()], now: at(300)), 1);
+      expect(g.arrivedTrackId(tracks: [nearChair()], now: at(6100)), 1);
+    });
+
+    test('hết 6 s thì bỏ loại trừ', () {
+      arrive();
+      expect(g.arrivedTrackId(tracks: [nearChair()], now: at(6200)), isNull);
+      expect(g.arrivedTrackId(tracks: [nearChair()], now: at(1000)), isNull);
+    });
+
+    test('đích không còn near thì bỏ loại trừ, không quay lại', () {
+      arrive();
+      final medium = chairAt(0.5, level: DistanceLevel.medium);
+      expect(g.arrivedTrackId(tracks: [medium], now: at(500)), isNull);
+      expect(g.arrivedTrackId(tracks: [nearChair()], now: at(600)), isNull);
+    });
+
+    test('đích biến mất khỏi danh sách thì bỏ loại trừ', () {
+      arrive();
+      expect(
+        g.arrivedTrackId(tracks: [nearChair(id: 2)], now: at(500)),
+        isNull,
+      );
+    });
+
+    test('tới nơi khi đích tụt khỏi khung cũng ghi id', () {
+      up(0, [
+        track(
+          1,
+          'chair',
+          const Rect.fromLTRB(0.35, 0.5, 0.65, 0.97),
+          level: DistanceLevel.near,
+        ),
+      ]);
+      expect(up(200, [])!.end, NavEnd.arrived);
+      expect(g.arrivedTrackId(tracks: [nearChair()], now: at(300)), 1);
+    });
+
+    test('start / cancel xóa loại trừ', () {
+      arrive();
+      g.start({'chair'}, 'ghế', at(300));
+      expect(g.arrivedTrackId(tracks: [nearChair()], now: at(400)), isNull);
+      g.cancel(announce: false);
+      g.start({'chair'}, 'ghế', at(500));
+      up(600, [nearChair()]);
+      up(700, [nearChair()]);
+      expect(g.arrivedTrackId(tracks: [nearChair()], now: at(800)), 1);
+      g.cancel(announce: false);
+      expect(g.arrivedTrackId(tracks: [nearChair()], now: at(900)), isNull);
     });
   });
 }
