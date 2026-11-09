@@ -918,10 +918,14 @@ class _CameraScreenState extends State<CameraScreen>
     final now = DateTime.now();
     final frame = Size(_screenWidth, _screenHeight);
     final tracks = _tracker.update(filtered, frame, capturedAt ?? now);
+    // Just after arrival the target is right in front of the user: keep it
+    // out of warnings so the arrival cue is not cut by a warning about it.
     final scene = _engine.assess(
       tracks,
       frame,
-      targetTrackId: _guide.targetTrackId,
+      targetTrackId:
+          _guide.targetTrackId ??
+          _guide.arrivedTrackId(tracks: tracks, now: now),
     );
     _blockage.onDetections(now, scene.columnLoad);
     _evaluateBlockage(now);
@@ -1124,10 +1128,28 @@ class _CameraScreenState extends State<CameraScreen>
     _speech.resetDedupe();
     if (_disposed || !_foreground || _paused) return;
     _listenCancelledByApp = false;
-    final result = await _voice.listen();
+    // Alerts are never muted, so the microphone may hear them: remember every
+    // line spoken while listening and strip it from the transcript.
+    final echoes = <String>[];
+    void recordEcho() {
+      final line = _speech.showing.value;
+      if (line != null && _voice.isListening) echoes.add(line.text);
+    }
+
+    _speech.showing.addListener(recordEcho);
+    final VoiceResult result;
+    try {
+      result = await _voice.listen();
+    } finally {
+      _speech.showing.removeListener(recordEcho);
+    }
     // Cancelled because the app left the screen: say nothing.
     if (_listenCancelledByApp || _disposed || !_foreground || _paused) return;
-    final text = result.text;
+    var text = result.text;
+    if (text != null && echoes.isNotEmpty) {
+      text = CommandParser.stripEchoes(text, echoes);
+      if (text.isEmpty) text = null;
+    }
     if (text == null) {
       _sayNavLine(switch (result.error ?? VoiceError.noSpeech) {
         VoiceError.noPermission =>
@@ -1167,7 +1189,10 @@ class _CameraScreenState extends State<CameraScreen>
   }
 
   /// Speaks a guide cue; a session-ending cue is also logged to the trip.
+  /// The newest cue wins: a 'nav' line still speaking or queued belongs to a
+  /// state the guide has already left, and would make the manager reject this.
   void _sayNav(NavCue cue) {
+    _speech.dropSubject('nav');
     _sayNavLine(cue.text, force: cue.force);
     if (cue.end != null) _eventLogger(TripEventType.navigation, cue.text)();
   }
