@@ -158,6 +158,7 @@ class _CameraScreenState extends State<CameraScreen>
   DateTime _lastDescribeAt = DateTime.now();
   DateTime _lastAlertAt = DateTime.fromMillisecondsSinceEpoch(0);
   final PathBlockage _blockage = PathBlockage();
+  bool _trapUnlogged = false;
 
   // Chế độ giả lập (không cần camera)
   bool _isMockTest = false;
@@ -399,15 +400,17 @@ class _CameraScreenState extends State<CameraScreen>
         subject: 'path:cleared',
       );
     }
-    if (!_blockage.trapped) return;
+    if (event == PathEvent.trapped) _trapUnlogged = true;
+    if (!_blockage.trapped) {
+      _trapUnlogged = false;
+      return;
+    }
     const subject = 'path:trapped';
     if (!_speech.canSay(SpeechPriority.danger, subject: subject)) return;
     const text =
         'Đứng lại! Phía trước và hai bên đều có vật cản. Xoay người chậm để tìm lối.';
     _lastAlertAt = now;
-    final log = event == PathEvent.trapped
-        ? _eventLogger(TripEventType.danger, text)
-        : null;
+    final log = _trapUnlogged ? _eventLogger(TripEventType.danger, text) : null;
     _speech.say(
       text,
       SpeechPriority.danger,
@@ -417,6 +420,7 @@ class _CameraScreenState extends State<CameraScreen>
         log?.call();
       },
     );
+    _trapUnlogged = false;
   }
 
   void _syncDiagnostics() {
@@ -448,7 +452,7 @@ class _CameraScreenState extends State<CameraScreen>
       }
       final b = _blockage.blocked(DateTime.now());
       _diagnostics.value =
-          'AI${fps.toStringAsFixed(1)} fps · nhận kết quả '
+          'AI ${fps.toStringAsFixed(1)} fps · nhận kết quả '
           '${latency.meanMs.toStringAsFixed(0)} ms (p95 ${latency.p95Ms.toStringAsFixed(0)})\n'
           'Model ${nativeMs.toStringAsFixed(0)} ms · RSS $memory'
           '${_useLidar ? '\nLiDAR $_lidarReadings Hz · $_lidarStatus' : ''}'
