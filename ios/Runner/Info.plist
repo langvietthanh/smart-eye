@@ -2,6 +2,10 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>Smart Eye dùng micro để nghe lệnh giọng nói.</string>
+	<key>NSSpeechRecognitionUsageDescription</key>
+	<string>Smart Eye nghe lệnh giọng nói như “đi đến ghế” để dẫn đường.</string>
 	<key>NSCameraUsageDescription</key>
 	<string>Smart Eye dùng camera để nhận diện vật cản phía trước.</string>
 	<key>NSLocationWhenInUseUsageDescription</key>
