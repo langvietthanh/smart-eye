@@ -85,6 +85,12 @@ class SpeechManager {
 
   bool get isBusy => _current != null || _queue.isNotEmpty || _stopping != null;
 
+  /// A caution or danger line is speaking or waiting to be spoken.
+  bool get alertActive => _isAlert(_current) || _queue.any((r) => _isAlert(r));
+
+  static bool _isAlert(_Request? r) =>
+      r != null && r.priority.index >= SpeechPriority.caution.index;
+
   @visibleForTesting
   int get cooldownEntryCount => _lastBySubject.length;
 

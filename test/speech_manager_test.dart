@@ -664,4 +664,28 @@ void main() {
     expect(tts.spoken, ['Dừng lại, vật cản rất dài']);
     await manager.stopAll();
   });
+  testWidgets(
+    'alertActive: true while a caution or danger line is current or queued',
+    (tester) async {
+      final tts = FakeTts();
+      final manager = managerFor(tester, tts);
+      expect(manager.alertActive, isFalse);
+      manager.say('Mô tả', SpeechPriority.description);
+      manager.say('Đi thẳng', SpeechPriority.guidance, subject: 'nav');
+      await tester.pump();
+      expect(manager.alertActive, isFalse);
+      manager.say('Xe bên trái', SpeechPriority.caution, subject: 'track:1');
+      expect(manager.alertActive, isTrue);
+      await tester.pump();
+      expect(tts.spoken.last, 'Xe bên trái');
+      expect(manager.alertActive, isTrue);
+      tts.finish();
+      await tester.pump();
+      expect(manager.alertActive, isFalse);
+      manager.say('Dừng lại', SpeechPriority.danger, subject: 'track:2');
+      expect(manager.alertActive, isTrue);
+      await manager.stopAll();
+      expect(manager.alertActive, isFalse);
+    },
+  );
 }

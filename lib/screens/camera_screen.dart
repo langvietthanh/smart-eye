@@ -176,7 +176,8 @@ class _CameraScreenState extends State<CameraScreen>
 
   // Voice-command navigation: the guide is silent while a danger line was
   // spoken in the last [_navQuietAfterDanger], during a trap or a sight
-  // problem, and while the microphone is listening.
+  // problem, while the microphone is listening, and while an alert is
+  // speaking or queued.
   final NavigationGuide _guide = NavigationGuide();
   final VoiceCommandService _voice = VoiceCommandService();
   static const Duration _navQuietAfterDanger = Duration(seconds: 2);
@@ -184,6 +185,13 @@ class _CameraScreenState extends State<CameraScreen>
   DateTime _lastDangerAt = DateTime.fromMillisecondsSinceEpoch(0);
   LidarReading? _lidarCenter;
   int _lidarCenterAtMs = -1;
+
+  /// A command is being listened for or dispatched; long presses are ignored.
+  bool _commandBusy = false;
+
+  /// The app itself cancelled the current listen (left the screen, camera
+  /// stopped): its "no speech" result must not be answered.
+  bool _listenCancelledByApp = false;
 
   // Chế độ giả lập (không cần camera)
   bool _isMockTest = false;
@@ -597,8 +605,14 @@ class _CameraScreenState extends State<CameraScreen>
     if (_disposed) return;
     _foreground = state == AppLifecycleState.resumed;
     _invalidateScene();
-    if (!_foreground) {
+    // Not on inactive: the microphone permission dialog and the notification
+    // shade must not end a listen or a guiding session.
+    if (state == AppLifecycleState.paused ||
+        state == AppLifecycleState.hidden ||
+        state == AppLifecycleState.detached) {
       _stopNavigation();
+    }
+    if (!_foreground) {
       unawaited(_speech.stopAll());
       unawaited(_eventWrites.then((_) => _history.flush()));
     }
@@ -1092,15 +1106,27 @@ class _CameraScreenState extends State<CameraScreen>
 
   /// Long press: listen for one spoken command and dispatch it.
   Future<void> _listenForCommand() async {
-    if (_disposed || _voice.isListening) return;
+    if (_disposed || _commandBusy || _voice.isListening) return;
+    _commandBusy = true;
+    try {
+      await _listenAndDispatch();
+    } finally {
+      _commandBusy = false;
+    }
+  }
+
+  Future<void> _listenAndDispatch() async {
     HapticFeedback.mediumImpact();
     SystemSound.play(SystemSoundType.click);
-    // Keep the app's own voice out of the microphone.
+    // Keep the app's own voice out of the microphone. An alert cut here must
+    // be able to repeat on the next frame, so its cooldown is cleared.
     await _speech.stopAll();
-    if (_disposed) return;
+    _speech.resetDedupe();
+    if (_disposed || !_foreground || _paused) return;
+    _listenCancelledByApp = false;
     final result = await _voice.listen();
     // Cancelled because the app left the screen: say nothing.
-    if (_disposed || !_foreground || _paused) return;
+    if (_listenCancelledByApp || _disposed || !_foreground || _paused) return;
     final text = result.text;
     if (text == null) {
       _sayNavLine(switch (result.error ?? VoiceError.noSpeech) {
@@ -1158,7 +1184,8 @@ class _CameraScreenState extends State<CameraScreen>
       _trapAnnounced ||
       _blockage.trapped ||
       _sightProblem != null ||
-      _voice.isListening;
+      _voice.isListening ||
+      _speech.alertActive;
 
   LidarReading? _freshLidarCenter() =>
       _useLidar &&
@@ -1170,6 +1197,7 @@ class _CameraScreenState extends State<CameraScreen>
   /// Camera stopped or app left the screen: end guiding silently.
   void _stopNavigation() {
     _guide.cancel(announce: false);
+    if (_voice.isListening) _listenCancelledByApp = true;
     unawaited(_voice.cancel());
   }
 
