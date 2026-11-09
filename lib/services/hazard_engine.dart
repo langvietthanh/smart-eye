@@ -113,6 +113,7 @@ class HazardEngine {
           ? Guidance.stop
           : Guidance.slowDown,
       subject: 'track:${best.object.track.id}',
+      pos: best.object.pos,
       message: _message(best.object, best.level, best.inPath),
     );
   }

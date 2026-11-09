@@ -108,6 +108,13 @@ class _CameraScreenState extends State<CameraScreen>
   static const int _thermalCritical = 3; // ProcessInfo.ThermalState.critical
   final LidarDepthService _lidarDepth = LidarDepthService();
   final LidarWarning _lidarWarning = LidarWarning();
+
+  /// Free/blocked lanes beside the centre obstacle, smoothed; [_sidesAtMs]
+  /// is when their depth frame arrived (see [speakableSides]).
+  final SideStability _sideStability = SideStability();
+  static const _noSides = (left: SideState.unknown, right: SideState.unknown);
+  ({SideState left, SideState right}) _sides = _noSides;
+  int _sidesAtMs = -1;
   String _lidarStatus = '';
   int _lidarReadings = 0;
   static const int _minDepthIntervalMs = 300;
@@ -551,6 +558,8 @@ class _CameraScreenState extends State<CameraScreen>
     _depthWarning.reset();
     _stepWarning.reset();
     _lidarWarning.reset();
+    _sideStability.reset();
+    _sides = _noSides;
     _pulse.stop();
   }
 
@@ -709,43 +718,79 @@ class _CameraScreenState extends State<CameraScreen>
             final now = DateTime.now();
             _blockage.onDepth(now, scan);
             _evaluateBlockage(now);
-            _onLidarReading(scan.center, thermal: frame.thermalState);
+            _onLidarReading(
+              scan.center,
+              thermal: frame.thermalState,
+              capturedAtMs: startedAt,
+            );
           })
           .catchError((Object e) => debugPrint('Lỗi xử lý LiDAR: $e')),
     );
   }
 
-  void _onLidarReading(LidarReading reading, {required int thermal}) {
+  void _onLidarReading(
+    LidarReading reading, {
+    required int thermal,
+    required int capturedAtMs,
+  }) {
     final now = DateTime.now();
     _lidarReadings++;
     _sight.onDepth(now, known: reading is! LidarUnknown);
     final distance = reading is LidarObstacle ? reading.distance : null;
+    _sides = _sideStability.update(reading);
+    _sidesAtMs = capturedAtMs;
     _lidarStatus =
         '${switch (reading) {
           LidarObstacle(:final distance) => '${distance.toStringAsFixed(2)} m',
           LidarClear() => 'thông ≤ ${LidarAnalysis.maxForward.toStringAsFixed(0)} m',
           LidarUnknown() => 'không đo được',
-        }} · nhiệt $thermal';
+        }} · trống: ${sideClause(_sides.left, _sides.right) ?? '—'}'
+        ' · nhiệt $thermal';
     // Aiming and blind problems are announced by the sight monitor; a gap in
     // depth itself must not block the next reading from clearing it.
     final problem = _sight.check(now);
-    if (problem != null && problem != SightProblem.noDepth) return;
+    if (problem != null && problem != SightProblem.noDepth) {
+      // A badly aimed phone cannot vouch for either side.
+      _sideStability.reset();
+      _sides = _noSides;
+      return;
+    }
     _depthProximity = (
       proximity: ProximityPulse.fromDistance(distance),
       atMs: _frameClock.elapsedMilliseconds,
     );
     _updatePulse();
-    _announceDepth(_lidarWarning.update(reading), metres: distance);
+    _announceDepth(
+      _lidarWarning.update(reading),
+      metres: distance,
+      sides: _speakableSides(),
+    );
   }
 
+  ({SideState left, SideState right}) _speakableSides() => _useLidar
+      ? speakableSides(
+          _sides,
+          capturedAtMs: _sidesAtMs,
+          nowMs: _frameClock.elapsedMilliseconds,
+          trapped: _trapAnnounced || _blockage.trapped,
+        )
+      : _noSides;
+
   /// Speaks a class-agnostic depth warning unless the detector already names
-  /// the obstacle with equal or higher urgency. [metres] is known only with LiDAR.
-  void _announceDepth(AlertLevel level, {double? metres}) {
+  /// the obstacle with equal or higher urgency. [metres] and [sides] are
+  /// known only with LiDAR.
+  void _announceDepth(
+    AlertLevel level, {
+    double? metres,
+    ({SideState left, SideState right}) sides = _noSides,
+  }) {
     if (_trapAnnounced) return;
     final text = depthAlertText(
       depthLevel: level,
       detectorLevel: _scene.alert?.level,
       metres: metres,
+      left: sides.left,
+      right: sides.right,
     );
     if (text == null) return;
     final isDanger = level == AlertLevel.danger;
@@ -886,14 +931,22 @@ class _CameraScreenState extends State<CameraScreen>
       return; // Đã báo / đang chờ đọc
     }
 
+    // LiDAR sides: only fresh, never during a trap, only for a centre object.
+    final sides = _speakableSides();
+    final text = withSideClause(
+      alert.message,
+      pos: alert.pos,
+      left: sides.left,
+      right: sides.right,
+    );
     final jpeg = isDanger ? _captureMemory(image, rotation) : null;
     final log = _eventLogger(
       isDanger ? TripEventType.danger : TripEventType.caution,
-      alert.message,
+      text,
       jpeg: jpeg,
     );
     _speech.say(
-      alert.message,
+      text,
       priority,
       subject: alert.subject,
       onStart: () {
