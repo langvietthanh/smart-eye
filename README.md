@@ -21,7 +21,8 @@ khi vật chiếm nhiều khung hình phía trước hoặc đang lớn nhanh s�
 
 ### Cách dùng trên màn hình chính
 - **Chạm 2 lần vào màn hình** hoặc nút **Xung quanh**: nghe mô tả xung quanh (F3 on-demand).
-- **Giữ lâu vào màn hình** hoặc nút **Tóm tắt**: nghe tóm tắt chuyến đi hiện tại.
+- **Giữ lâu vào màn hình**: nghe tiếng "tít" rồi nói lệnh — *"đi đến ghế"* (hoặc vật khác model đang nhận ra), *"xung quanh"*, *"tóm tắt"*, *"dừng"*. Khi dẫn đường, app nói *"Đang tìm ghế. Xoay người chậm."*, thấy thì *"Thấy ghế ở hướng 1 giờ, còn xa."*, đi lệch thì *"Lệch trái"/"Lệch phải"*, tới nơi thì *"Đã tới. Ghế ngay trước mặt. Dò bằng gậy."* Cảnh báo nguy hiểm luôn được nói trước lời dẫn. Cần quyền micro.
+- Nút **Tóm tắt**: nghe tóm tắt chuyến đi hiện tại.
 - Nút **Lịch sử**: danh sách chuyến đi, nghe tóm tắt, xem ảnh ghi nhớ, nghe lại toàn bộ.
 - Chip **Mô tả khi hỏi / Tự mô tả**: bật tự mô tả tần suất thấp (~45 giây, chỉ khi không có cảnh báo gần đây).
 - **Rung liên tục kiểu cảm biến lùi xe**: có vật trong lối đi phía trước thì máy rung, vật càng gần rung càng dày. Không rung chỉ có nghĩa là không *nhận ra* vật nào, không chứng minh đường trống.

@@ -26,6 +26,19 @@ Mục tiêu: đo xem app báo **kịp** và **không bỏ sót** khi người d�
 | 12 | Hành lang: ba lô hoặc một bạn đứng giữa, đứng cách ~2 m | Mong đợi *"…Bên trái/phải trống."* hoặc *"Hai bên trống."* |
 | 13 | Đi về phía bục giảng, bục nằm lệch một bên | Cảnh báo bậc lên vẫn có; dòng LiDAR **không bao giờ** báo bên có bục là trống |
 
+## Dẫn đường bằng giọng nói (mỗi kịch bản 5 lần)
+Giữ lâu màn hình, nghe "tít" rồi nói *"đi đến ghế"*. Ghi câu nghe được và có tới trước ghế không.
+
+| # | Bố trí | Câu mong đợi |
+|---|---|---|
+| D1 | Ghế cách ~4 m, lệch phải | *"Đang tìm ghế…"* → *"Thấy ghế ở hướng 1 giờ, còn xa."* → *"Lệch phải."* tới khi xoay đúng → *"Thẳng rồi."* → *"Gần hơn rồi."* / *"Sắp tới."* → *"Đã tới. Ghế ngay trước mặt. Dò bằng gậy."* |
+| D2 | Đang dẫn, một bạn đi ngang che ghế | Không nói gì trong ~1,5 giây; che lâu hơn → *"Mất dấu ghế. Đứng yên, xoay người chậm."*; thấy lại → *"Thấy lại ghế, …"* |
+| D3 | Đi sát tới khi ghế tụt khỏi đáy khung | *"Ghế ngay trước mặt, rất gần. Dò bằng gậy."* (không báo mất dấu) |
+| D4 | Thùng carton chắn giữa đường tới ghế | Cảnh báo vật cản thùng vẫn được nói và ngắt lời dẫn; ghế (đích) không bị báo "Dừng lại" chỉ vì đang đi tới nó |
+| D5 | Nói *"đi đến cửa"* (model chưa có lớp cửa) | *"Chưa nhận ra được cửa. Có thể tìm: …"* và không bắt đầu dẫn |
+
+Thêm: nói *"dừng"* giữa chừng → *"Đã dừng dẫn đường."*; không nói gì → *"Không nghe rõ. Giữ lâu để nói lại."*
+
 ## Bảng ghi
 `ngày · máy · kịch bản · lần · khoảng cách rung đầu tiên (m) · khoảng cách "Dừng lại" (m) · bỏ sót? · báo nhầm? · ghi chú`
 
