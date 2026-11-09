@@ -247,6 +247,25 @@ void warningTests() {
     expect(s[HPos.left], same(s.left));
   });
 
+  test('a wall on the right only blocks the right corridor', () {
+    final s = LidarAnalysis().analyzeScan(render(boxes: [sideWall(0.7)]));
+    expect(s.right, isA<LidarObstacle>());
+    expect(s.center, isA<LidarClear>());
+    expect(s.left, isA<LidarClear>());
+    expect(s[HPos.right], same(s.right));
+  });
+
+  test('a side wall beyond the side corridor leaves that side clear', () {
+    for (final x in [-1.3, 1.3]) {
+      final s = LidarAnalysis().analyzeScan(render(boxes: [sideWall(x)]));
+      expect(
+        [s.left, s.center, s.right],
+        everyElement(isA<LidarClear>()),
+        reason: 'wall at lateral $x m',
+      );
+    }
+  });
+
   test('a 1.2 m hallway blocks both sides but not the centre', () {
     final s = LidarAnalysis().analyzeScan(
       render(boxes: [sideWall(-0.6), sideWall(0.6)]),

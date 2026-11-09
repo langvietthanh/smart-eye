@@ -100,8 +100,8 @@ class DetectorService {
       debugPrint(
         '$_customModelPath không có tên lớp trong metadata → dùng model mặc định',
       );
-    } catch (_) {
-      // Chưa có model v4 → dùng model mặc định.
+    } catch (e) {
+      debugPrint('Không tải được $_customModelPath ($e) → dùng model mặc định');
     }
     final data = await rootBundle.load(_defaultModelPath);
     final labels = (await rootBundle.loadString(_labelPath))
