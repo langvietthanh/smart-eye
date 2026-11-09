@@ -216,7 +216,9 @@ void main() {
       upY: 1,
       upZ: 0,
     );
-    expect(await service.analyze(frame), isA<LidarUnknown>());
+    final scan = await service.analyze(frame);
+    expect(scan, isA<LidarScan>());
+    expect(scan!.center, isA<LidarUnknown>());
     await service.dispose();
     expect(await service.analyze(frame), isNull);
   });

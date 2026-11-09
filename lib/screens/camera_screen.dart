@@ -658,15 +658,15 @@ class _CameraScreenState extends State<CameraScreen>
     unawaited(
       _lidarDepth
           .analyze(frame)
-          .then((reading) {
-            if (reading == null ||
+          .then((scan) {
+            if (scan == null ||
                 !_wantsCamera ||
                 generation != _frameGeneration ||
                 handle != _handle ||
                 _frameClock.elapsedMilliseconds - startedAt > _maxFrameAgeMs) {
               return;
             }
-            _onLidarReading(reading, thermal: frame.thermalState);
+            _onLidarReading(scan.center, thermal: frame.thermalState);
           })
           .catchError((Object e) => debugPrint('Lỗi xử lý LiDAR: $e')),
     );
