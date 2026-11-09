@@ -254,4 +254,35 @@ void main() {
     expect(up(200, []), isNull);
     expect(g.state, NavState.guiding);
   });
+
+  test('đổi bên: cue ngược lại ngay khi đủ 0,5 s, không chờ 3 s', () {
+    up(100, [chairAt(0.8)]);
+    expect(up(700, [chairAt(0.8)])!.text, 'Lệch phải.');
+    expect(up(800, [chairAt(0.2)]), isNull);
+    expect(up(1200, [chairAt(0.2)]), isNull);
+    expect(up(1300, [chairAt(0.2)])!.text, 'Lệch trái.');
+    expect(up(1400, [chairAt(0.2)]), isNull);
+  });
+
+  test('đổi bên qua vùng trễ vẫn nói ngay khi đủ 0,5 s', () {
+    up(100, [chairAt(0.8)]);
+    expect(up(700, [chairAt(0.8)])!.text, 'Lệch phải.');
+    expect(up(800, [chairAt(0.65)]), isNull);
+    expect(up(900, [chairAt(0.2)]), isNull);
+    expect(up(1400, [chairAt(0.2)])!.text, 'Lệch trái.');
+  });
+
+  test('near đầu tiên khi đã guiding chưa kết thúc phiên', () {
+    up(100, [chairAt(0.5, level: DistanceLevel.far)]);
+    final cue = up(200, [chairAt(0.5, level: DistanceLevel.near)])!;
+    expect(cue.text, 'Sắp tới.');
+    expect(cue.end, isNull);
+    expect(g.state, NavState.guiding);
+  });
+
+  test('dx 0,15 từ đầu thẳng im lặng', () {
+    up(100, [chairAt(0.65)]);
+    expect(up(1000, [chairAt(0.65)]), isNull);
+    expect(up(2000, [chairAt(0.65)]), isNull);
+  });
 }

@@ -45,6 +45,7 @@ class NavigationGuide {
   int _announcedLevel = 0;
   bool _lateralSpoken = false;
   DateTime? _lastLateralCue;
+  int _lastSpokenSide = 0;
   // Lateral hold timer: when |dx| first exceeded the threshold on this side.
   DateTime? _lateralSince;
   int _lateralSign = 0;
@@ -151,8 +152,10 @@ class NavigationGuide {
     if (_lateralSince != null &&
         now.difference(_lateralSince!) >= holdLateral &&
         (_lastLateralCue == null ||
+            _lateralSign != _lastSpokenSide ||
             now.difference(_lastLateralCue!) >= lateralRepeat)) {
       _lastLateralCue = now;
+      _lastSpokenSide = _lateralSign;
       _lateralSpoken = true;
       return NavCue(dx < 0 ? 'Lệch trái.' : 'Lệch phải.');
     }
@@ -160,6 +163,7 @@ class NavigationGuide {
     if (_lateralSpoken && dx.abs() < backToStraight) {
       _lateralSpoken = false;
       _lastLateralCue = null;
+      _lastSpokenSide = 0;
       return const NavCue('Thẳng rồi.');
     }
     return null;
@@ -211,6 +215,7 @@ class NavigationGuide {
     _announcedLevel = 0;
     _lateralSpoken = false;
     _lastLateralCue = null;
+    _lastSpokenSide = 0;
     _lateralSince = null;
     _lateralSign = 0;
     _arrivalCount = 0;
