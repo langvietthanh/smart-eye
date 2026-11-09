@@ -165,6 +165,34 @@ void sideLaneTests() {
     expect(r.left, SideState.blocked);
   });
 
+  test('an obstacle in the lane before the centre obstacle blocks it', () {
+    final r = obstacleOf(
+      LidarAnalysis().analyze(
+        render(boxes: [chair(2.0), const Box(-0.7, 0, 1.0, -0.4, 0.8, 1.3)]),
+      ),
+    );
+    expect(r.left, SideState.blocked);
+  });
+
+  test('a small box far in the lane blocks it', () {
+    final r = obstacleOf(
+      LidarAnalysis().analyze(
+        // A 20 cm bag lying ~3.5 m ahead in the right lane.
+        render(boxes: [chair(2.8), const Box(0.45, 0, 3.4, 0.65, 0.22, 3.6)]),
+      ),
+    );
+    expect(r.right, SideState.blocked);
+  });
+
+  test('a low 12 cm step in a side lane is never clear', () {
+    final r = obstacleOf(
+      LidarAnalysis().analyze(
+        render(boxes: [chair(1.8), const Box(-3, 0, 1.6, -0.36, 0.12, 4)]),
+      ),
+    );
+    expect(r.left, isNot(SideState.clear));
+  });
+
   test('side lanes do not depend on hold', () {
     for (final f in [
       render(pitchDeg: 25, boxes: [chair(1.8)]),

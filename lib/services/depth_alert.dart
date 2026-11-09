@@ -46,6 +46,21 @@ String withSideClause(
   required SideState right,
 }) => pos == HPos.center ? _join(message, sideClause(left, right)) : message;
 
+/// Side lanes older than this (from LiDAR capture) are never spoken.
+const int sideMaxAgeMs = 500;
+
+/// The side states that may be spoken now: none while trapped (the trap line
+/// already says every side is blocked), before any LiDAR reading, or once the
+/// reading captured at [capturedAtMs] is older than [sideMaxAgeMs].
+({SideState left, SideState right}) speakableSides(
+  ({SideState left, SideState right}) sides, {
+  required int capturedAtMs,
+  required int nowMs,
+  required bool trapped,
+}) => !trapped && capturedAtMs >= 0 && nowMs - capturedAtMs <= sideMaxAgeMs
+    ? sides
+    : (left: SideState.unknown, right: SideState.unknown);
+
 String _join(String head, String? tail) => tail == null ? head : '$head $tail';
 
 /// Làm tròn 0,5 m với dấu phẩy thập phân tiếng Việt: "1,5".

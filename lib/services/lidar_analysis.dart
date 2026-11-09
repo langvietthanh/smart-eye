@@ -114,6 +114,14 @@ class LidarAnalysis {
   static const laneBin = 0.5;
   static const laneFloorPoints = 10;
 
+  /// Sampled points that block a lane: far lower than the centre corridor's
+  /// threshold, since a wrong "free" is worse than a missed one.
+  static const laneObstaclePoints = 10;
+
+  /// Lane floor must be this flat: a 10–14 cm step is neither floor nor
+  /// obstacle, so its cells stay empty and the lane reads unknown.
+  static const laneFloorBand = 0.06;
+
   /// Points this close to the floor are floor, not obstacles.
   static const floorMargin = 0.15;
 
@@ -231,18 +239,23 @@ class LidarAnalysis {
         for (var i = 0; i < count; i++) {
           final s = sign * sides[i];
           final forward = forwards[i];
-          if (s <= halfWidth || s > laneOuter || forward < d || forward > end) {
+          // Anything seen on the way to the gap counts, not only beside the
+          // obstacle; the floor is only checked where it is in view.
+          if (s <= halfWidth ||
+              s > laneOuter ||
+              forward < minForward ||
+              forward > end) {
             continue;
           }
           final height = heights[i];
           if (height >= low && height <= headroom) {
             obstacles++;
-          } else if ((height - floor).abs() <= floorMargin) {
+          } else if (forward >= d && (height - floor).abs() <= laneFloorBand) {
             final bin = min(((forward - d) / laneBin).floor(), bins - 1);
             floorCounts[bin * 2 + (s < laneSplit ? 0 : 1)]++;
           }
         }
-        if (obstacles >= needed) return SideState.blocked;
+        if (obstacles >= laneObstaclePoints) return SideState.blocked;
         // Nearest outer corner of the lane, on the floor, in camera space.
         final w = sign * laneOuter;
         final cx3 = fx0 * d + sx * w + ux * floor;

@@ -232,6 +232,39 @@ void main() {
     });
   });
 
+  group('speakableSides', () {
+    const sides = (left: SideState.clear, right: SideState.blocked);
+    const none = (left: SideState.unknown, right: SideState.unknown);
+
+    test('fresh sides are spoken', () {
+      expect(
+        speakableSides(sides, capturedAtMs: 1000, nowMs: 1500, trapped: false),
+        sides,
+      );
+    });
+
+    test('sides captured more than 500 ms ago are dropped', () {
+      expect(
+        speakableSides(sides, capturedAtMs: 1000, nowMs: 1501, trapped: false),
+        none,
+      );
+    });
+
+    test('sides are never spoken during a trap', () {
+      expect(
+        speakableSides(sides, capturedAtMs: 1000, nowMs: 1000, trapped: true),
+        none,
+      );
+    });
+
+    test('no LiDAR reading yet means no sides', () {
+      expect(
+        speakableSides(sides, capturedAtMs: -1, nowMs: 100, trapped: false),
+        none,
+      );
+    });
+  });
+
   group('spokenMetres', () {
     test('formats rounded half metres with Vietnamese comma', () {
       expect(spokenMetres(0.5), '0,5');
