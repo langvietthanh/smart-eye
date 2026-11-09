@@ -7,6 +7,8 @@ import 'lidar_analysis.dart';
 
 enum NavState { idle, searching, guiding, lost }
 
+enum _StateCue { entry, reacquire, loss }
+
 /// Pure-Dart state machine that turns tracked objects into at most one short
 /// Vietnamese spoken cue per frame while the user walks towards a target.
 class NavigationGuide {
@@ -17,7 +19,7 @@ class NavigationGuide {
   static const Duration holdLateral = Duration(milliseconds: 500);
   static const Duration lateralRepeat = Duration(seconds: 3);
 
-  // Searching / loss timing (loss ones are used by the loss handling later).
+  // Searching / loss timing.
   static const Duration searchReminder = Duration(seconds: 5);
   static const Duration midFrameLossWait = Duration(milliseconds: 1500);
   static const Duration searchTimeout = Duration(seconds: 15);
@@ -53,6 +55,12 @@ class NavigationGuide {
   bool _quiet = false;
   NavCue? _pendingFinal;
 
+  // State-change cue dropped under quiet; replayed once quiet ends if the
+  // guide is still in that state.
+  _StateCue? _pendingStateCue;
+  String? _pendingStateText;
+  bool _lossClassified = false;
+
   // Guiding bookkeeping: only advanced when the matching cue is returned.
   int _announcedLevel = 0;
   bool _lateralSpoken = false;
@@ -79,6 +87,8 @@ class NavigationGuide {
     _searchElapsed = Duration.zero;
     _lostElapsed = Duration.zero;
     _pendingFinal = null;
+    _pendingStateCue = null;
+    _lossClassified = false;
     _lastBox = null;
     _lastSeenAt = null;
     _resetGuiding();
@@ -167,8 +177,9 @@ class NavigationGuide {
       _announcedLevel = _rank(level);
       _observe(target, frame, lidar, now);
       _remember(target, frame, now);
-      return _emit(
-        'Thấy $_nameVi ${_entryPhrase(_norm(target, frame), level)}.',
+      return _announce(
+        _StateCue.entry,
+        _statePhrase(_StateCue.entry, target, frame),
       );
     }
     if (_searchElapsed >= searchTimeout) {
@@ -207,6 +218,14 @@ class NavigationGuide {
     final dx = _norm(target, frame).center.dx - 0.5;
     final level = _rank(_levelOf(target));
 
+    // A dropped state-change cue goes first, rebuilt from the current view.
+    final pending = _pendingStateCue;
+    if (pending != null && !_quiet) {
+      _announcedLevel = level;
+      _pendingStateCue = null;
+      return NavCue(_statePhrase(pending, target, frame));
+    }
+
     // Distance beats lateral cues.
     if (level > _announcedLevel) {
       return _emit(
@@ -242,6 +261,7 @@ class NavigationGuide {
     _lastBox = _norm(t, frame);
     _lastLevel = _levelOf(t);
     _lastSeenAt = now;
+    _lossClassified = false;
   }
 
   /// Locked target is not visible: classify by where it was last seen.
@@ -252,6 +272,23 @@ class NavigationGuide {
     final near = _lastLevel == DistanceLevel.near;
     final dx = box.center.dx - 0.5;
 
+    // Classified once, on the first missing update; later updates only wait.
+    if (!_lossClassified) {
+      _lossClassified = true;
+      final cue = _classifyOnce(box, near, dx, lidar);
+      if (cue != null || _state != NavState.guiding) return cue;
+    }
+    if (now.difference(seen) >= midFrameLossWait) {
+      _enterLost();
+      return _announce(
+        _StateCue.loss,
+        'Mất dấu $_nameVi. Đứng yên, xoay người chậm.',
+      );
+    }
+    return null;
+  }
+
+  NavCue? _classifyOnce(Rect box, bool near, double dx, LidarReading? lidar) {
     if (near &&
         (box.bottom >= edgeBottom || box.height > edgeHeight) &&
         dx.abs() < edgeDx) {
@@ -273,15 +310,12 @@ class NavigationGuide {
     if (atLeft || atRight) {
       final left = atLeft && (!atRight || dx < 0);
       _enterLost();
-      return _emit(
+      return _announce(
+        _StateCue.loss,
         left
             ? '${_capitalized(_nameVi)} ở bên trái. Xoay trái chậm.'
             : '${_capitalized(_nameVi)} ở bên phải. Xoay phải chậm.',
       );
-    }
-    if (now.difference(seen) >= midFrameLossWait) {
-      _enterLost();
-      return _emit('Mất dấu $_nameVi. Đứng yên, xoay người chậm.');
     }
     return null;
   }
@@ -306,13 +340,15 @@ class NavigationGuide {
       _announcedLevel = _rank(_levelOf(target));
       _observe(target, frame, lidar, now);
       _remember(target, frame, now);
-      final dx = _norm(target, frame).center.dx - 0.5;
-      final dir = dx < -clockThreshold
-          ? 'hướng 11 giờ'
-          : dx > clockThreshold
-          ? 'hướng 1 giờ'
-          : 'phía trước';
-      return _emit('Thấy lại $_nameVi, $dir.');
+      return _announce(
+        _StateCue.reacquire,
+        _statePhrase(_StateCue.reacquire, target, frame),
+      );
+    }
+    final pending = _pendingStateText;
+    if (_pendingStateCue == _StateCue.loss && pending != null && !_quiet) {
+      _pendingStateCue = null;
+      return NavCue(pending);
     }
     if (_lostElapsed >= lostTimeout) {
       return _end(
@@ -366,6 +402,7 @@ class NavigationGuide {
   }
 
   void _resetGuiding() {
+    _pendingStateCue = null;
     _announcedLevel = 0;
     _lateralSpoken = false;
     _lastLateralCue = null;
@@ -419,13 +456,39 @@ class NavigationGuide {
     DistanceLevel.near => 2,
   };
 
-  String _entryPhrase(Rect box, DistanceLevel level) {
+  /// Cue announcing a state change. Under quiet it is remembered (for entry
+  /// and reacquire it is rebuilt from the current view when replayed).
+  NavCue? _announce(_StateCue kind, String text) {
+    if (_quiet) {
+      _pendingStateCue = kind;
+      _pendingStateText = text;
+      return null;
+    }
+    _pendingStateCue = null;
+    return NavCue(text);
+  }
+
+  String _statePhrase(_StateCue kind, TrackedObject target, Size frame) {
+    final box = _norm(target, frame);
+    return switch (kind) {
+      _StateCue.entry =>
+        'Thấy $_nameVi ${_entryPhrase(box, _levelOf(target))}.',
+      _StateCue.reacquire => 'Thấy lại $_nameVi, ${_direction(box)}.',
+      _StateCue.loss => _pendingStateText ?? '',
+    };
+  }
+
+  String _direction(Rect box) {
     final dx = box.center.dx - 0.5;
-    final dir = dx < -clockThreshold
-        ? 'ở hướng 11 giờ'
+    return dx < -clockThreshold
+        ? 'hướng 11 giờ'
         : dx > clockThreshold
-        ? 'ở hướng 1 giờ'
-        : 'ở phía trước';
+        ? 'hướng 1 giờ'
+        : 'phía trước';
+  }
+
+  String _entryPhrase(Rect box, DistanceLevel level) {
+    final dir = 'ở ${_direction(box)}';
     final dist = switch (level) {
       DistanceLevel.far => 'còn xa',
       DistanceLevel.medium => 'khá gần',

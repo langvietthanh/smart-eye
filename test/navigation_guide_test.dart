@@ -408,14 +408,6 @@ void main() {
       expect(up(2000, [chairAt(0.5)])!.text, 'Thấy lại ghế, phía trước.');
       expect(g.state, NavState.guiding);
       expect(g.targetTrackId, 1);
-      expect(
-        (NavigationGuide()
-              ..start({'chair'}, 'ghế', at(0))
-              ..update(tracks: [chairAt(0.5)], frame: f, now: at(100))
-              ..update(tracks: [], frame: f, now: at(1800)))
-            .state,
-        NavState.lost,
-      );
     });
 
     test('thấy lại hướng 1 giờ / 11 giờ', () {
@@ -482,7 +474,10 @@ void main() {
     test('quiet: không trả câu thường; câu chốt được giữ', () {
       expect(upq(100, [chairAt(0.5)], quiet: true), isNull);
       expect(g.state, NavState.guiding);
-      expect(upq(200, [chairAt(0.5, level: DistanceLevel.medium)]), isNotNull);
+      expect(
+        upq(200, [chairAt(0.5, level: DistanceLevel.medium)])!.text,
+        'Thấy ghế ở phía trước, khá gần.',
+      );
       // Final cue held while quiet.
       final g2 = NavigationGuide()..start({'chair'}, 'ghế', at(0));
       expect(
@@ -503,6 +498,56 @@ void main() {
       expect(cue.end, NavEnd.arrived);
       expect(cue.force, true);
       expect(g2.update(tracks: [], frame: f, now: at(500)), isNull);
+    });
+
+    test(
+      'đích thấy trong lúc quiet → hết quiet nói câu vào, dựng từ hiện tại',
+      () {
+        expect(upq(100, [chairAt(0.5)], quiet: true), isNull);
+        expect(
+          upq(200, [chairAt(0.8, level: DistanceLevel.medium)])!.text,
+          'Thấy ghế ở hướng 1 giờ, khá gần.',
+        );
+        expect(upq(300, [chairAt(0.8, level: DistanceLevel.medium)]), isNull);
+      },
+    );
+
+    test('mất dấu mép bên trong lúc quiet → hết quiet vẫn LOST thì nói', () {
+      lockMid();
+      up(150, [track(1, 'chair', const Rect.fromLTRB(0.8, 0.4, 0.98, 0.6))]);
+      expect(upq(300, [], quiet: true), isNull);
+      expect(g.state, NavState.lost);
+      expect(upq(400, [])!.text, 'Ghế ở bên phải. Xoay phải chậm.');
+      expect(upq(500, []), isNull);
+    });
+
+    test(
+      'câu vào bị bỏ rồi mất và thấy lại trước hết quiet → không phát lại',
+      () {
+        expect(upq(100, [chairAt(0.5)], quiet: true), isNull);
+        expect(upq(1800, [], quiet: true), isNull);
+        expect(g.state, NavState.lost);
+        expect(upq(2000, [chairAt(0.5)])!.text, 'Thấy lại ghế, phía trước.');
+        expect(upq(2100, [chairAt(0.5)]), isNull);
+      },
+    );
+
+    test('câu thấy lại bị bỏ trong quiet được nói khi hết quiet', () {
+      lockMid();
+      up(1800, []);
+      expect(upq(2000, [chairAt(0.2)], quiet: true), isNull);
+      expect(upq(2100, [chairAt(0.2)])!.text, 'Thấy lại ghế, hướng 11 giờ.');
+    });
+
+    test('LiDAR chắn giữa lúc chờ không tính tới nơi: phân loại một lần', () {
+      up(0, [chairAt(0.5, level: DistanceLevel.near)]);
+      expect(up(100, [], lidar: const LidarClear()), isNull);
+      expect(up(600, [], lidar: const LidarObstacle(0.8)), isNull);
+      expect(g.state, NavState.guiding);
+      expect(
+        up(1600, [], lidar: const LidarObstacle(0.8))!.text,
+        'Mất dấu ghế. Đứng yên, xoay người chậm.',
+      );
     });
 
     test('quiet: câu thường bị bỏ không đánh dấu đã nói, sau đó còn nói', () {
