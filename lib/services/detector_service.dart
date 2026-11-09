@@ -8,8 +8,9 @@ import 'package:flutter/services.dart';
 import 'package:tflite_flutter/tflite_flutter.dart';
 
 import '../models/Recognition.dart';
-import '../models/scene_info.dart';
+import '../utils/image_utils.dart';
 import '../utils/label_catalog.dart';
+import 'detection/model_metadata.dart';
 import 'performance_metrics.dart';
 import 'processing_worker.dart';
 
@@ -17,12 +18,23 @@ import 'processing_worker.dart';
 /// Kích thước input, layout (NCHW/NHWC) và kiểu dữ liệu được đọc từ chính model,
 /// nên đổi model (320/640, float/int8) không cần sửa code.
 class DetectorService {
-  /// Model train riêng (có lớp cầu thang, cột điện...) — chỉ cần chép file vào đây là app tự dùng.
+  /// Model v4 (YOLO11n, 27 lớp, FP32) — tên lớp nhúng trong metadata của model.
   static const String _customModelPath = 'assets/models/smart_eye.tflite';
 
-  /// Model COCO mặc định (dùng khi chưa có model train riêng)
+  /// Model COCO mặc định — dùng khi chưa có model v4 hoặc model không có tên lớp trong metadata.
   static const String _defaultModelPath = 'assets/models/yolov8n_int8.tflite';
   static const String _labelPath = 'assets/labels/coco.txt';
+
+  // Ngưỡng lọc, theo model:
+  // - YOLOv8n COCO int8: 0.25 (mặc định Ultralytics; COCO128: precision 0.83, 64 box sai).
+  // - Model v4 FP32 (có metadata): 0.35. Đo trên 1100 ảnh val (COCO val2017 + BPID + cầu thang):
+  //   0.25 → precision 0.71, 857 box sai; 0.35 → precision 0.78, 513 box sai, recall vật lớn 0.73 → 0.70.
+  static const double defaultModelConfidence = 0.25;
+  static const double customModelConfidence = 0.35;
+  static const double iouThreshold = 0.45;
+
+  /// Đường dẫn model đang dùng (cập nhật sau khi nạp).
+  String modelPath = _defaultModelPath;
 
   ProcessingWorker<_DetectionRequest, _DetectionResult>? _worker;
   Future<void>? _loading;
@@ -34,6 +46,7 @@ class DetectorService {
   int lastFrameMs = 0;
   double lastMaxScore = 0;
   String lastMaxLabel = '';
+
   /// Mean brightness of the last processed frame; null if it could not be read.
   double? lastMeanLuma;
   final DetectorPerformance performance = DetectorPerformance();
@@ -47,24 +60,62 @@ class DetectorService {
   Future<void> _load() async {
     // Asset access stays on the root isolate. Native model creation and all
     // frame processing happen in the same persistent background isolate.
-    final model = await rootBundle.load(_modelPath);
-    final labels = (await rootBundle.loadString(_labelPath))
-        .split('\n')
-        .map((line) => line.trim())
-        .where((line) => line.isNotEmpty)
-        .toList(growable: false);
+    final selected = await _selectModel();
     if (_disposed) return;
+    modelPath = selected.path;
+    debugPrint(
+      'Detector model: ${selected.path} · ${selected.labels.length} nhãn '
+      '(${selected.namesFromMetadata ? 'metadata' : 'coco.txt'}) · '
+      'ngưỡng ${selected.confidence}',
+    );
     final worker = await ProcessingWorker.start(
-      _DetectorProcessor(
-        model.buffer.asUint8List(model.offsetInBytes, model.lengthInBytes),
-        labels,
-      ),
+      _DetectorProcessor(selected.bytes, selected.labels, selected.confidence),
     );
     if (_disposed) {
       await worker.close();
     } else {
       _worker = worker;
     }
+  }
+
+  /// Ưu tiên model v4 (tên lớp từ metadata, ngưỡng 0.35). Thiếu file hoặc
+  /// metadata không có tên lớp → YOLOv8n int8 + coco.txt (ngưỡng 0.25).
+  Future<_SelectedModel> _selectModel() async {
+    try {
+      final data = await rootBundle.load(_customModelPath);
+      final bytes = data.buffer.asUint8List(
+        data.offsetInBytes,
+        data.lengthInBytes,
+      );
+      final names = ModelMetadata.parse(bytes).names;
+      if (names != null && names.isNotEmpty) {
+        return _SelectedModel(
+          _customModelPath,
+          bytes,
+          List.unmodifiable(names),
+          customModelConfidence,
+          namesFromMetadata: true,
+        );
+      }
+      debugPrint(
+        '$_customModelPath không có tên lớp trong metadata → dùng model mặc định',
+      );
+    } catch (_) {
+      // Chưa có model v4 → dùng model mặc định.
+    }
+    final data = await rootBundle.load(_defaultModelPath);
+    final labels = (await rootBundle.loadString(_labelPath))
+        .split('\n')
+        .map((line) => line.trim())
+        .where((line) => line.isNotEmpty)
+        .toList(growable: false);
+    return _SelectedModel(
+      _defaultModelPath,
+      data.buffer.asUint8List(data.offsetInBytes, data.lengthInBytes),
+      labels,
+      defaultModelConfidence,
+      namesFromMetadata: false,
+    );
   }
 
   Future<List<Recognition>> detect({
@@ -124,6 +175,21 @@ class DetectorService {
   }
 }
 
+class _SelectedModel {
+  const _SelectedModel(
+    this.path,
+    this.bytes,
+    this.labels,
+    this.confidence, {
+    required this.namesFromMetadata,
+  });
+  final String path;
+  final Uint8List bytes;
+  final List<String> labels;
+  final double confidence;
+  final bool namesFromMetadata;
+}
+
 class _DetectionRequest {
   const _DetectionRequest(this.image, this.width, this.height, this.rotation);
   final CameraImage image;
@@ -149,7 +215,7 @@ class _DetectionResult {
 
 class _DetectorProcessor
     implements IsolateProcessor<_DetectionRequest, _DetectionResult> {
-  _DetectorProcessor(this._modelBytes, this._labels)
+  _DetectorProcessor(this._modelBytes, this._labels, this._confidenceThreshold)
     : _relevantClasses = {
         for (int i = 0; i < _labels.length; i++)
           if (isDetectionRelevant(_labels[i])) i,
@@ -159,10 +225,9 @@ class _DetectorProcessor
   final List<String> _labels;
   final List<Delegate> _delegates = [];
 
-  // Ngưỡng lọc — 0.25 là mặc định Ultralytics. Đo trên COCO128 (xem README):
-  // 0.15 → precision 0.71, 149 box sai; 0.25 → precision 0.83, 64 box sai, recall vật lớn gần như giữ nguyên.
-  static const double _confidenceThreshold = 0.25;
-  static const double _iouThreshold = 0.45;
+  // Ngưỡng lọc theo model (xem DetectorService.defaultModelConfidence / customModelConfidence).
+  final double _confidenceThreshold;
+  static const double _iouThreshold = DetectorService.iouThreshold;
 
   // Derived from label_catalog so the filter and hazard categories cannot drift.
   final Set<int> _relevantClasses;
@@ -467,30 +532,35 @@ class _DetectorProcessor
     return _applyNMS(candidates);
   }
 
-  /// JPEG của frame vừa quét gần nhất (ảnh ghi nhớ)
-  Future<Uint8List?> thumbnail() async => _worker?.thumbnail();
+  /// Non-Maximum Suppression: loại bỏ các box bị chồng lấp quá nhiều
+  List<Recognition> _applyNMS(List<Recognition> detections) {
+    if (detections.isEmpty) return [];
 
-  /// Đổi kết quả (toạ độ chuẩn hoá) sang toạ độ màn hình + tên tiếng Việt
-  List<Recognition> toRecognitions(DetectionBatch batch, Size screen) => [
-        for (final d in batch.detections)
-          Recognition(
-            d.classId,
-            labelVi[_labels[d.classId]] ?? _labels[d.classId],
-            d.score,
-            Rect.fromLTRB(d.left * screen.width, d.top * screen.height, d.right * screen.width, d.bottom * screen.height),
-            labelEn: _labels[d.classId],
-          ),
-      ];
+    // Sắp xếp theo score giảm dần
+    detections.sort((a, b) => b.score.compareTo(a.score));
 
-  /// Tên (tiếng Việt) của lớp — cho dòng chẩn đoán
-  String labelOf(int classId) =>
-      classId < 0 || classId >= _labels.length ? '' : (labelVi[_labels[classId]] ?? _labels[classId]);
+    final List<Recognition> result = [];
+    final List<bool> suppressed = List.filled(detections.length, false);
 
-  /// Nạp lại model với cách chạy khác (nút debug "AI: Tự động / CPU / GPU")
-  Future<void> reload({String preferredBackend = 'auto'}) async {
-    dispose();
-    lastBatch = null;
-    await loadModel(preferredBackend: preferredBackend);
+    for (int i = 0; i < detections.length; i++) {
+      if (suppressed[i]) continue;
+      result.add(detections[i]);
+
+      // Giới hạn tối đa 10 box để không quá rối UI
+      if (result.length >= 10) break;
+
+      for (int j = i + 1; j < detections.length; j++) {
+        if (suppressed[j]) continue;
+        // Chỉ NMS trong cùng class
+        if (detections[i].id != detections[j].id) continue;
+
+        final iou = _computeIoU(detections[i].location, detections[j].location);
+        if (iou > _iouThreshold) {
+          suppressed[j] = true;
+        }
+      }
+    }
+    return result;
   }
 
   /// Tính IoU (Intersection over Union) giữa 2 hình chữ nhật

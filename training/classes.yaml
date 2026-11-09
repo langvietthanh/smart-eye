@@ -37,7 +37,7 @@ classes:
      aliases: [table, diningtable], prompt: table}
   - {name: potted plant, vi: chậu cây, category: obstacle, priority: 3, source: coco,
      aliases: [pottedplant, plant pot, flower pot], prompt: potted plant}
-  - {name: fire hydrant, vi: trụ nước cứu hỏa, category: obstacle, priority: 3, source: coco,
+  - {name: fire hydrant, vi: trụ cứu hỏa, category: obstacle, priority: 3, source: coco,
      aliases: [hydrant], prompt: fire hydrant}
   - {name: umbrella, vi: ô dù, category: obstacle, priority: 3, source: coco,
      aliases: [parasol, beach umbrella], prompt: umbrella}

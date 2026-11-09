@@ -81,9 +81,21 @@ const Map<String, String> labelVi = {
   'hole': 'hố',
 };
 
-// Model COCO hiện tại không nhận ra hố ga, ổ gà, bậc thang, hố;
-// các nhãn này chỉ dùng khi đổi sang model khác.
-const _groundHazards = {'manhole', 'pothole', 'stairs', 'hole'};
+// Model COCO không nhận ra các nhãn mặt đất này; chỉ model v4 (smart_eye.tflite)
+// có stairs up/down, curb, pothole, manhole. 'stairs' là nhãn của model v1–v3.
+const _groundHazards = {
+  'manhole',
+  'pothole',
+  'stairs',
+  'stairs up',
+  'stairs down',
+  'curb',
+  'hole',
+};
+
+/// Nguy hiểm mặt đất "nhẹ": gặp rất thường xuyên (mép vỉa hè) → tối đa chỉ
+/// nhắc chú ý, không bao giờ hô "Dừng lại".
+const mildGroundHazards = {'curb'};
 const _vehicles = {
   'bicycle',
   'car',
@@ -110,6 +122,11 @@ const _obstacles = {
   'fire hydrant',
   // Traffic signs/lights identify the sign or light, not a ground-level pole.
   'parking meter', 'suitcase',
+  'umbrella', // model v4: ô dù / ô bán hàng che vỉa hè
+  // Vật cố định của model v4. 'traffic sign' là cả biển + cột chôn trên vỉa hè
+  // (khác 'stop sign' của COCO); 'vendor cart' thường đứng yên chiếm lối đi.
+  'pole', 'traffic sign', 'tree', 'branch', 'railing', 'barrier',
+  'vendor cart', 'bollard', 'traffic cone',
 };
 const _animals = {
   'dog',
