@@ -3,6 +3,7 @@ import 'dart:ui';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:smart_eye/models/Recognition.dart';
 import 'package:smart_eye/models/scene_info.dart';
+import 'package:smart_eye/models/tracked_object.dart';
 import 'package:smart_eye/models/trip.dart';
 import 'package:smart_eye/services/caption_builder.dart';
 import 'package:smart_eye/services/hazard_engine.dart';
@@ -183,6 +184,85 @@ void main() {
     });
   });
 
+  group('target exclusion', () {
+    final t0 = DateTime(2026);
+
+    TrackedObject track(
+      int id,
+      String en,
+      double boxRatio, {
+      bool approaching = false,
+    }) {
+      final t = TrackedObject(
+        id: id,
+        classId: 0,
+        labelEn: en,
+        labelVi: en,
+        box: centerBox(boxRatio),
+        score: 0.9,
+      );
+      final ratios = approaching
+          ? [0.3, 0.33, 0.36, 0.39]
+          : [boxRatio, boxRatio, boxRatio, boxRatio];
+      for (int i = 0; i < ratios.length; i++) {
+        t.addHistory(t0.add(Duration(milliseconds: 150 * i)), ratios[i]);
+      }
+      return t;
+    }
+
+    final engine = HazardEngine();
+
+    test('chair target is not warned about, other objects still are', () {
+      final chair = track(7, 'chair', 0.7);
+      expect(engine.assess([chair], frame).alert, isNotNull);
+      expect(engine.assess([chair], frame, targetTrackId: 7).alert, isNull);
+      final person = track(3, 'person', 0.7);
+      expect(
+        engine.assess([chair, person], frame, targetTrackId: 7).alert!.subject,
+        'track:3',
+      );
+    });
+
+    test('ground hazard and vehicle targets still warn', () {
+      expect(
+        engine
+            .assess([track(7, 'stairs down', 0.7)], frame, targetTrackId: 7)
+            .alert,
+        isNotNull,
+      );
+      expect(
+        engine.assess([track(7, 'car', 0.7)], frame, targetTrackId: 7).alert,
+        isNotNull,
+      );
+    });
+
+    test('person target warns only while approaching', () {
+      final still = track(7, 'person', 0.4);
+      expect(still.history.length, 4);
+      expect(engine.assess([still], frame).alert, isNotNull);
+      expect(engine.assess([still], frame, targetTrackId: 7).alert, isNull);
+      final moving = track(7, 'person', 0.4, approaching: true);
+      final scene = engine.assess([moving], frame, targetTrackId: 7);
+      expect(scene.objects.single.approaching, isTrue);
+      expect(scene.alert, isNotNull);
+    });
+
+    test('approaching chair target is still skipped', () {
+      final chair = track(7, 'chair', 0.4, approaching: true);
+      final scene = engine.assess([chair], frame, targetTrackId: 7);
+      expect(scene.objects.single.approaching, isTrue);
+      expect(scene.alert, isNull);
+    });
+
+    test('objects and columnLoad are unchanged by the target id', () {
+      final chair = track(7, 'chair', 0.7);
+      final a = engine.assess([chair], frame);
+      final b = engine.assess([chair], frame, targetTrackId: 7);
+      expect(b.columnLoad, a.columnLoad);
+      expect(b.objects.length, a.objects.length);
+    });
+  });
+
   group('CaptionBuilder (CN8/CN13)', () {
     test('mô tả gộp vật cùng loại cùng phía', () {
       final scene = run(ObjectTracker(), HazardEngine(), [
@@ -210,9 +290,14 @@ void main() {
     });
 
     test('phía trước chưa thấy vật nhưng một bên có vật → nói rõ bên nào', () {
-      final scene = run(ObjectTracker(), HazardEngine(), [rec('person', 'người', 0, Rect.fromLTWH(10, 100, 110, 600))]);
+      final scene = run(ObjectTracker(), HazardEngine(), [
+        rec('person', 'người', 0, Rect.fromLTWH(10, 100, 110, 600)),
+      ]);
       final text = CaptionBuilder.describeScene(scene);
-      expect(text, startsWith('Phía trước chưa thấy vật cản. Bên trái có người'));
+      expect(
+        text,
+        startsWith('Phía trước chưa thấy vật cản. Bên trái có người'),
+      );
       expect(text, isNot(contains('trống')));
     });
 
@@ -298,11 +383,7 @@ void main() {
       for (int i = 0; i < 5; i++) {
         final ratio = 0.16 + i * 0.015;
         scene = engine.assess(
-          tracker.update(
-            [rec('chair', 'ghế', 56, centerBox(ratio))],
-            frame,
-            t,
-          ),
+          tracker.update([rec('chair', 'ghế', 56, centerBox(ratio))], frame, t),
           frame,
         );
         t = t.add(const Duration(milliseconds: 150));
@@ -323,11 +404,7 @@ void main() {
         final w = h * 0.6;
         final rightBox = Rect.fromLTWH(300, 400 - h, w, h);
         scene = engine.assess(
-          tracker.update(
-            [rec('motorcycle', 'xe máy', 3, rightBox)],
-            frame,
-            t,
-          ),
+          tracker.update([rec('motorcycle', 'xe máy', 3, rightBox)], frame, t),
           frame,
         );
         t = t.add(const Duration(milliseconds: 150));
@@ -373,40 +450,43 @@ void main() {
   });
 
   group('Lọc nhãn không dùng trong pipeline', () {
-    test('ignoredLabels chứa đúng 7 nhãn nhận nhầm và lọc sạch trước pipeline', () {
-      expect(ignoredLabels, {
-        'elephant',
-        'giraffe',
-        'zebra',
-        'bear',
-        'aeroplane',
-        'airplane',
-        'boat',
-      });
+    test(
+      'ignoredLabels chứa đúng 7 nhãn nhận nhầm và lọc sạch trước pipeline',
+      () {
+        expect(ignoredLabels, {
+          'elephant',
+          'giraffe',
+          'zebra',
+          'bear',
+          'aeroplane',
+          'airplane',
+          'boat',
+        });
 
-      final rawDetections = [
-        rec('elephant', 'voi', 20, centerBox(0.6)),
-        rec('bear', 'gấu', 21, centerBox(0.6)),
-        rec('airplane', 'máy bay', 4, centerBox(0.6)),
-        rec('boat', 'thuyền', 8, centerBox(0.6)),
-        rec('chair', 'ghế', 56, centerBox(0.5)),
-      ];
+        final rawDetections = [
+          rec('elephant', 'voi', 20, centerBox(0.6)),
+          rec('bear', 'gấu', 21, centerBox(0.6)),
+          rec('airplane', 'máy bay', 4, centerBox(0.6)),
+          rec('boat', 'thuyền', 8, centerBox(0.6)),
+          rec('chair', 'ghế', 56, centerBox(0.5)),
+        ];
 
-      final filtered = rawDetections
-          .where((d) => !ignoredLabels.contains(d.labelEn))
-          .toList();
+        final filtered = rawDetections
+            .where((d) => !ignoredLabels.contains(d.labelEn))
+            .toList();
 
-      expect(filtered.map((d) => d.labelEn), ['chair']);
+        expect(filtered.map((d) => d.labelEn), ['chair']);
 
-      final tracker = ObjectTracker();
-      final engine = HazardEngine();
-      final scene = run(tracker, engine, filtered);
+        final tracker = ObjectTracker();
+        final engine = HazardEngine();
+        final scene = run(tracker, engine, filtered);
 
-      expect(scene.objects.map((o) => o.track.labelEn), ['chair']);
-      expect(scene.alert?.message, 'Dừng lại! Có ghế ngay phía trước.');
-      expect(CaptionBuilder.describeScene(scene), isNot(contains('voi')));
-      expect(CaptionBuilder.describeScene(scene), isNot(contains('gấu')));
-    });
+        expect(scene.objects.map((o) => o.track.labelEn), ['chair']);
+        expect(scene.alert?.message, 'Dừng lại! Có ghế ngay phía trước.');
+        expect(CaptionBuilder.describeScene(scene), isNot(contains('voi')));
+        expect(CaptionBuilder.describeScene(scene), isNot(contains('gấu')));
+      },
+    );
 
     test('từ điển nhãn tiếng Việt được cập nhật đúng', () {
       expect(labelVi['laptop'], 'laptop');
