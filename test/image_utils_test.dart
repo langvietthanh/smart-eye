@@ -1,12 +1,11 @@
 import 'dart:typed_data';
 
-import 'package:camera/camera.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:image/image.dart' as img;
 import 'package:smart_eye/utils/image_utils.dart';
 import 'package:tflite_flutter/tflite_flutter.dart';
 
-/// Ảnh YUV 2×2 màu xám (U = V = 128 → R = G = B = Y):
+/// Frame YUV_420_888 (Android) 2×2 màu xám (U = V = 128 → R = G = B = Y):
 ///   (0,0)=10  (1,0)=20
 ///   (0,1)=30  (1,1)=40
 CameraImage grayImage() {
@@ -74,18 +73,22 @@ CameraImage bgraImage() {
 }
 
 /// Frame NV12 2×2 (iOS yuv420): lớp Y + lớp UV xen kẽ, bytesPerPixel = null như trên iOS
-CameraImage nv12GrayImage() {
-  // ignore: deprecated_member_use
-  return CameraImage.fromPlatformData({
-    'format': 875704438, // kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange
-    'width': 2,
-    'height': 2,
-    'planes': [
-      _plane([10, 20, 30, 40], 2),
-      _plane([128, 128], 2),
-    ],
-  });
-}
+FrameData nv12Gray() => FrameData(width: 2, height: 2, planes: [
+      PlaneData(Uint8List.fromList([10, 20, 30, 40]), 2),
+      PlaneData(Uint8List.fromList([128, 128]), 2),
+    ]);
+
+/// Frame xám 4×4 giá trị Y = 10 × (vị trí + 1)
+FrameData gray4x4() => FrameData(width: 4, height: 4, planes: [
+      PlaneData(Uint8List.fromList(List.generate(16, (i) => 10 * (i + 1))), 4, 1),
+      PlaneData(Uint8List.fromList([128, 128, 128, 128]), 2, 1),
+      PlaneData(Uint8List.fromList([128, 128, 128, 128]), 2, 1),
+    ]);
+
+List<int> toBytes(Iterable<double> v) => v.map((e) => (e * 255).round()).toList();
+
+Float32List tensor(FrameData f, {int size = 2, bool nchw = true, int rotation = 0}) =>
+    ImageUtils.toInputTensor(f, size: size, channelsFirst: nchw, rotationDegrees: rotation)!;
 
 Float32List getFloat32(
   CameraImage image,

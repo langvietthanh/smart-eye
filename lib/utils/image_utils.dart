@@ -7,8 +7,11 @@ import 'package:tflite_flutter/tflite_flutter.dart';
 // Packed RGB avoids allocating a record for every sampled pixel.
 typedef _PixelReader = int Function(int x, int y);
 
-/// Các tiện ích xử lý ảnh: lấy mẫu trực tiếp frame camera → RGB đã xoay → tensor float32 / JPEG.
-/// Hỗ trợ 3 định dạng frame:
+/// Nhận 1 mẫu RGB đã lấy từ frame — [index] là vị trí mẫu theo thứ tự hàng rồi cột
+typedef _SampleSink = void Function(int index, int r, int g, int b);
+
+/// Các tiện ích xử lý ảnh: lấy mẫu trực tiếp frame camera → RGB đã xoay →
+/// tensor float32 / JPEG / chữ ký độ sáng. Hỗ trợ 3 định dạng frame:
 /// - YUV_420_888 3 lớp (Android)
 /// - BGRA8888 1 lớp (iOS — app xin định dạng này trên iOS)
 /// - NV12 2 lớp: Y + CbCr xen kẽ (iOS khi xin yuv420 — dự phòng)
@@ -147,27 +150,16 @@ class ImageUtils {
     } catch (e) {
       return null;
     }
+    return sum / (a.length * 255);
   }
 
-  /// CN12 — Tạo ảnh thumbnail JPEG nhỏ (cạnh dài [maxSide] px) từ frame camera,
-  /// đã xoay đúng chiều. Lấy mẫu trực tiếp từ frame nên rất nhẹ.
-  static Uint8List? cameraImageToJpeg(
-    CameraImage image, {
-    int rotationDegrees = 90,
-    int maxSide = 320,
-  }) {
+  /// CN12 — Tạo ảnh thumbnail JPEG nhỏ (cạnh dài [maxSide] px), đã xoay đúng chiều.
+  static Uint8List? toJpeg(FrameData frame, {int rotationDegrees = 0, int maxSide = 320}) {
     try {
-      final read = _readerFor(image);
-      if (read == null) return null;
-      final int srcW = image.width;
-      final int srcH = image.height;
-      final bool swap = rotationDegrees == 90 || rotationDegrees == 270;
-      final int rotW = swap ? srcH : srcW;
-      final int rotH = swap ? srcW : srcH;
-      final double scale = maxSide / (rotW > rotH ? rotW : rotH);
-      final int outW = (rotW * scale).round();
-      final int outH = (rotH * scale).round();
-
+      final rot = rotatedSize(frame.width, frame.height, rotationDegrees);
+      final scale = maxSide / (rot.width > rot.height ? rot.width : rot.height);
+      final outW = (rot.width * scale).round();
+      final outH = (rot.height * scale).round();
       final thumb = img.Image(width: outW, height: outH);
       for (int y = 0; y < outH; y++) {
         final int ry = (y / scale).floor().clamp(0, rotH - 1);
@@ -201,7 +193,7 @@ class ImageUtils {
   }
 
   // ---------------------------------------------------------------------------
-  // Private helpers
+  // Lõi lấy mẫu — không cấp phát bộ nhớ theo từng pixel
   // ---------------------------------------------------------------------------
 
   /// Chọn cách đọc 1 pixel RGB theo định dạng frame (nhận biết qua số lớp — plane)

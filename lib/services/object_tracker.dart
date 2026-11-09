@@ -14,7 +14,11 @@ import 'visual_proximity.dart';
 ///   sau 2 frame liên tiếp có confidence >= 0.4 để cảnh báo sớm.
 /// - Vật chỉ bị xoá sau [maxMisses] frame mất liên tiếp → không báo lại khi AI chớp mất 1 frame
 class ObjectTracker {
-  static const int minHits = 3;
+  static const int minHits = 2;
+
+  /// Vật cao ≥ tỉ lệ này của khung (≈ gần) và điểm ≥ [fastConfirmScore] → xác nhận ngay
+  static const double fastConfirmHeight = 0.45;
+  static const double fastConfirmScore = 0.4;
   static const int maxMisses = 5;
   static const double _iouMatch = 0.3;
   static const double _centroidMatch = 0.15; // theo tỉ lệ đường chéo khung
@@ -115,6 +119,9 @@ class ObjectTracker {
   }
 
   void reset() => _tracks.clear();
+
+  static bool _confirmed(TrackedObject t, Size frame) =>
+      t.hits >= minHits || (t.score >= fastConfirmScore && t.box.height / frame.height >= fastConfirmHeight);
 }
 
 /// IoU (Intersection over Union) giữa 2 hình chữ nhật

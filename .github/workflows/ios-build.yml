@@ -8,7 +8,7 @@ on:
   workflow_dispatch:
   push:
     branches: [main, 'feature/**']
-    paths-ignore: ['**.md', 'tool/**']
+    paths-ignore: ['**.md', 'tool/**', 'training/**']
 
 # Push mới lên cùng nhánh → huỷ lần build cũ đang chờ/chạy, tránh dồn hàng đợi máy Mac
 concurrency:

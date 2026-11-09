@@ -6,7 +6,7 @@ import '../utils/label_catalog.dart';
 /// CN13 — Tóm tắt chuyến đi (recap) bằng template.
 class CaptionBuilder {
   /// Số nhóm vật tối đa trong 1 câu mô tả — nhiều hơn sẽ thành "nói chuyện phiếm"
-  static const int maxGroups = 3;
+  static const int maxGroups = 2;
 
   /// Chỉ mô tả những gì đang được nhận diện; không công bố số mét hay lối đi an toàn.
   static String describeScene(SceneAssessment scene) {
@@ -54,16 +54,13 @@ class CaptionBuilder {
     final shown = sorted.take(maxGroups).toList()
       ..sort((a, b) => posOrder[a.pos]!.compareTo(posOrder[b.pos]!));
 
-    final parts = <String>[];
+    // Người khiếm thị cần biết ĐI HƯỚNG NÀO trước, vật gì sau
+    final parts = <String>[freeSpaceSentence(scene)];
     for (final g in shown) {
       final what = g.count > 1 ? '${g.count} ${g.label}' : g.label;
       final dist = g.count > 1 ? 'gần nhất ${g.nearest.vi}' : g.nearest.vi;
       parts.add('${capitalize(g.pos.vi)} có $what, $dist.');
     }
-    final hidden = sorted.length - shown.length;
-    if (hidden > 0) parts.add('Và $hidden loại vật khác.');
-
-    parts.add(freeSpaceSentence(scene));
     return parts.join(' ');
   }
 

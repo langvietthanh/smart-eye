@@ -8,7 +8,7 @@ import 'package:flutter/services.dart';
 import 'package:tflite_flutter/tflite_flutter.dart';
 
 import '../models/Recognition.dart';
-import '../utils/image_utils.dart';
+import '../models/scene_info.dart';
 import '../utils/label_catalog.dart';
 import 'performance_metrics.dart';
 import 'processing_worker.dart';
@@ -17,7 +17,11 @@ import 'processing_worker.dart';
 /// Kích thước input, layout (NCHW/NHWC) và kiểu dữ liệu được đọc từ chính model,
 /// nên đổi model (320/640, float/int8) không cần sửa code.
 class DetectorService {
-  static const String _modelPath = 'assets/models/yolov8n_int8.tflite';
+  /// Model train riêng (có lớp cầu thang, cột điện...) — chỉ cần chép file vào đây là app tự dùng.
+  static const String _customModelPath = 'assets/models/smart_eye.tflite';
+
+  /// Model COCO mặc định (dùng khi chưa có model train riêng)
+  static const String _defaultModelPath = 'assets/models/yolov8n_int8.tflite';
   static const String _labelPath = 'assets/labels/coco.txt';
 
   ProcessingWorker<_DetectionRequest, _DetectionResult>? _worker;
@@ -463,35 +467,30 @@ class _DetectorProcessor
     return _applyNMS(candidates);
   }
 
-  /// Non-Maximum Suppression: loại bỏ các box bị chồng lấp quá nhiều
-  List<Recognition> _applyNMS(List<Recognition> detections) {
-    if (detections.isEmpty) return [];
+  /// JPEG của frame vừa quét gần nhất (ảnh ghi nhớ)
+  Future<Uint8List?> thumbnail() async => _worker?.thumbnail();
 
-    // Sắp xếp theo score giảm dần
-    detections.sort((a, b) => b.score.compareTo(a.score));
+  /// Đổi kết quả (toạ độ chuẩn hoá) sang toạ độ màn hình + tên tiếng Việt
+  List<Recognition> toRecognitions(DetectionBatch batch, Size screen) => [
+        for (final d in batch.detections)
+          Recognition(
+            d.classId,
+            labelVi[_labels[d.classId]] ?? _labels[d.classId],
+            d.score,
+            Rect.fromLTRB(d.left * screen.width, d.top * screen.height, d.right * screen.width, d.bottom * screen.height),
+            labelEn: _labels[d.classId],
+          ),
+      ];
 
-    final List<Recognition> result = [];
-    final List<bool> suppressed = List.filled(detections.length, false);
+  /// Tên (tiếng Việt) của lớp — cho dòng chẩn đoán
+  String labelOf(int classId) =>
+      classId < 0 || classId >= _labels.length ? '' : (labelVi[_labels[classId]] ?? _labels[classId]);
 
-    for (int i = 0; i < detections.length; i++) {
-      if (suppressed[i]) continue;
-      result.add(detections[i]);
-
-      // Giới hạn tối đa 10 box để không quá rối UI
-      if (result.length >= 10) break;
-
-      for (int j = i + 1; j < detections.length; j++) {
-        if (suppressed[j]) continue;
-        // Chỉ NMS trong cùng class
-        if (detections[i].id != detections[j].id) continue;
-
-        final iou = _computeIoU(detections[i].location, detections[j].location);
-        if (iou > _iouThreshold) {
-          suppressed[j] = true;
-        }
-      }
-    }
-    return result;
+  /// Nạp lại model với cách chạy khác (nút debug "AI: Tự động / CPU / GPU")
+  Future<void> reload({String preferredBackend = 'auto'}) async {
+    dispose();
+    lastBatch = null;
+    await loadModel(preferredBackend: preferredBackend);
   }
 
   /// Tính IoU (Intersection over Union) giữa 2 hình chữ nhật

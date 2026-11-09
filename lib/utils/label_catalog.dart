@@ -62,10 +62,22 @@ const Map<String, String> labelVi = {
   'book': 'sách',
   'clock': 'đồng hồ',
   'vase': 'bình hoa',
-  // Lớp đặc thù VN — chỉ có khi dùng model fine-tune riêng
-  'manhole': 'hố ga',
+  // Lớp mới — chỉ có khi dùng model train riêng (xem training/classes.yaml)
+  'pole': 'cột',
+  'traffic sign': 'biển báo',
+  'tree': 'cây',
+  'branch': 'cành cây',
+  'railing': 'lan can',
+  'barrier': 'rào chắn',
+  'vendor cart': 'xe hàng rong',
+  'stairs': 'bậc thang', // model v1–v3 (chưa tách hướng)
+  'stairs up': 'cầu thang đi lên',
+  'stairs down': 'cầu thang đi xuống',
+  'curb': 'mép vỉa hè',
   'pothole': 'ổ gà',
-  'stairs': 'bậc thang',
+  'manhole': 'hố ga',
+  'bollard': 'cọc chắn',
+  'traffic cone': 'cọc giao thông',
   'hole': 'hố',
 };
 
