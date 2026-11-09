@@ -984,19 +984,6 @@ class _CameraScreenState extends State<CameraScreen>
     });
   }
 
-  void _speakRecap() {
-    HapticFeedback.selectionClick();
-    final trip = _history.currentTrip;
-    _speech.say(
-      // Không im lặng: người khiếm thị sẽ tưởng nút hỏng
-      trip == null
-          ? 'Chưa có chuyến đi để tóm tắt.'
-          : CaptionBuilder.recap(trip),
-      SpeechPriority.description,
-      force: true,
-    );
-  }
-
   void _toggleQuiet() {
     setState(() => _speech.muted = !_speech.muted);
     _saveSettings();
@@ -1250,17 +1237,15 @@ class _CameraScreenState extends State<CameraScreen>
       body: Stack(
         fit: StackFit.expand,
         children: [
-          // Layer 1: Camera preview + cử chỉ (chạm 2 lần = mô tả, giữ lâu = tóm tắt chuyến đi)
+          // Layer 1: Camera preview + cử chỉ (chạm 2 lần = mô tả)
           Semantics(
             button: true,
-            label: 'Khung camera. Chạm hai lần để nghe xung quanh có gì. Giữ lâu để nghe tóm tắt chuyến đi.',
+            label: 'Khung camera. Chạm hai lần để nghe xung quanh có gì.',
             onTap: _requestDescribe,
-            onLongPress: _speakRecap,
             excludeSemantics: true,
             child: GestureDetector(
               behavior: HitTestBehavior.opaque,
               onDoubleTap: _requestDescribe,
-              onLongPress: _speakRecap,
               // Chế độ Test: KHÔNG hiện camera thật để không ai nhầm khung giả lập là kết quả nhận diện
               child: RepaintBoundary(
                 child: cameraReady && !_isMockTest
@@ -1438,13 +1423,6 @@ class _CameraScreenState extends State<CameraScreen>
                           'Xung quanh',
                           'Nghe xung quanh có gì',
                           _requestDescribe,
-                        ),
-                        const SizedBox(width: 8),
-                        _bigButton(
-                          Icons.summarize,
-                          'Tóm tắt',
-                          'Nghe tóm tắt chuyến đi hiện tại',
-                          _speakRecap,
                         ),
                         const SizedBox(width: 8),
                         _bigButton(

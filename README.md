@@ -21,7 +21,6 @@ khi vật chiếm nhiều khung hình phía trước hoặc đang lớn nhanh s�
 
 ### Cách dùng trên màn hình chính
 - **Chạm 2 lần vào màn hình** hoặc nút **Xung quanh**: nghe mô tả xung quanh (F3 on-demand).
-- **Giữ lâu vào màn hình** hoặc nút **Tóm tắt**: nghe tóm tắt chuyến đi hiện tại.
 - Nút **Lịch sử (giữ)**: giữ lâu để mở (chạm thường chỉ đọc hướng dẫn, vì khi mở app tạm ngừng cảnh báo) — danh sách chuyến đi, nghe tóm tắt, xem ảnh ghi nhớ, nghe lại toàn bộ.
 - Chip **Nhắc: đầy đủ / yên lặng**: chế độ yên lặng chỉ báo khi nguy hiểm.
 - Chip **Mô tả: khi hỏi / tự động**: bật tự mô tả tần suất thấp (~45 giây, chỉ khi không có cảnh báo gần đây). Hai chip được lưu lại cho lần mở app sau.
