@@ -107,7 +107,8 @@ class HazardEngine {
       case ObjectCategory.person:
       case ObjectCategory.animal:
         return !object.approaching;
-      default:
+      case ObjectCategory.obstacle:
+      case ObjectCategory.other:
         return true;
     }
   }
