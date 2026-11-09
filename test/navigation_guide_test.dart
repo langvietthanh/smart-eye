@@ -285,4 +285,315 @@ void main() {
     expect(up(1000, [chairAt(0.65)]), isNull);
     expect(up(2000, [chairAt(0.65)]), isNull);
   });
+
+  group('mất dấu, im lặng, hủy, đổi đích', () {
+    TrackedObject bigChair({
+      DistanceLevel level = DistanceLevel.near,
+      double left = 0.35,
+      double right = 0.65,
+      double top = 0.5,
+      double bottom = 0.97,
+    }) => track(
+      1,
+      'chair',
+      Rect.fromLTRB(left, top, right, bottom),
+      level: level,
+    );
+
+    NavCue? upq(
+      int ms,
+      List<TrackedObject> tracks, {
+      bool quiet = false,
+      bool sightLost = false,
+    }) => g.update(
+      tracks: tracks,
+      frame: f,
+      quiet: quiet,
+      sightLost: sightLost,
+      now: at(ms),
+    );
+
+    // Lock onto a mid-frame far chair, then lose it.
+    void lockMid() => up(100, [chairAt(0.5)]);
+
+    test('tụt khỏi đáy khung khi near → tới nơi', () {
+      up(0, [bigChair()]);
+      final cue = up(200, [])!;
+      expect(cue.text, 'Ghế ngay trước mặt, rất gần. Dò bằng gậy.');
+      expect(cue.force, true);
+      expect(cue.end, NavEnd.arrived);
+      expect(g.state, NavState.idle);
+    });
+
+    test('box cao > 0,6 khi near rồi biến mất → tới nơi', () {
+      up(0, [bigChair(top: 0.2, bottom: 0.85)]);
+      expect(up(200, [])!.end, NavEnd.arrived);
+    });
+
+    test('ra mép phải → nói hướng ngay, state lost', () {
+      up(0, [track(1, 'chair', const Rect.fromLTRB(0.8, 0.4, 0.98, 0.6))]);
+      final cue = up(200, [])!;
+      expect(cue.text, 'Ghế ở bên phải. Xoay phải chậm.');
+      expect(cue.end, isNull);
+      expect(g.state, NavState.lost);
+    });
+
+    test('ra mép trái', () {
+      up(0, [track(1, 'chair', const Rect.fromLTRB(0.02, 0.4, 0.2, 0.6))]);
+      expect(up(200, [])!.text, 'Ghế ở bên trái. Xoay trái chậm.');
+      expect(g.state, NavState.lost);
+    });
+
+    test('biến mất giữa khung: im 1,5 s rồi mất dấu', () {
+      lockMid();
+      expect(up(1000, []), isNull);
+      expect(g.state, NavState.guiding);
+      expect(up(1600, [])!.text, 'Mất dấu ghế. Đứng yên, xoay người chậm.');
+      expect(g.state, NavState.lost);
+    });
+
+    test('thấy lại trong 1,5 s → không nói gì, vẫn guiding', () {
+      lockMid();
+      expect(up(1000, []), isNull);
+      expect(up(1200, [chairAt(0.5)]), isNull);
+      expect(g.state, NavState.guiding);
+      expect(g.targetTrackId, 1);
+    });
+
+    test('khi chờ chỉ id đã khóa mới tính là thấy lại', () {
+      lockMid();
+      expect(up(500, [chairAt(0.5, id: 7)]), isNull);
+      expect(g.targetTrackId, 1);
+      expect(up(1700, [chairAt(0.5, id: 7)])!.text, startsWith('Mất dấu'));
+    });
+
+    test('LiDAR ≤ 1 m khi đích biến mất sau near → tới nơi', () {
+      up(0, [chairAt(0.5, level: DistanceLevel.near)]);
+      final cue = up(200, [], lidar: const LidarObstacle(0.8))!;
+      expect(cue.text, 'Đã tới. Ghế ngay trước mặt. Dò bằng gậy.');
+      expect(cue.end, NavEnd.arrived);
+      expect(cue.force, true);
+    });
+
+    test('LiDAR xa hoặc lastLevel không near → không tới nơi', () {
+      up(0, [chairAt(0.5, level: DistanceLevel.near)]);
+      expect(up(200, [], lidar: const LidarObstacle(1.4)), isNull);
+      expect(g.state, NavState.guiding);
+      final g2 = NavigationGuide()..start({'chair'}, 'ghế', at(0));
+      g2.update(tracks: [chairAt(0.5)], frame: f, now: at(100));
+      expect(
+        g2.update(
+          tracks: [],
+          frame: f,
+          lidarCenter: const LidarObstacle(0.5),
+          now: at(200),
+        ),
+        isNull,
+      );
+    });
+
+    test('frame Size.zero cũng tính là không thấy đích', () {
+      up(0, [bigChair()]);
+      final cue = g.update(
+        tracks: [bigChair()],
+        frame: Size.zero,
+        now: at(200),
+      )!;
+      expect(cue.end, NavEnd.arrived);
+    });
+
+    test('lost → thấy lại cùng id', () {
+      lockMid();
+      up(1800, []);
+      expect(up(2000, [chairAt(0.5)])!.text, 'Thấy lại ghế, phía trước.');
+      expect(g.state, NavState.guiding);
+      expect(g.targetTrackId, 1);
+      expect(
+        (NavigationGuide()
+              ..start({'chair'}, 'ghế', at(0))
+              ..update(tracks: [chairAt(0.5)], frame: f, now: at(100))
+              ..update(tracks: [], frame: f, now: at(1800)))
+            .state,
+        NavState.lost,
+      );
+    });
+
+    test('thấy lại hướng 1 giờ / 11 giờ', () {
+      lockMid();
+      up(1800, []);
+      expect(up(2000, [chairAt(0.8)])!.text, 'Thấy lại ghế, hướng 1 giờ.');
+      final g2 = NavigationGuide()..start({'chair'}, 'ghế', at(0));
+      g2.update(tracks: [chairAt(0.5)], frame: f, now: at(100));
+      g2.update(tracks: [], frame: f, now: at(1800));
+      expect(
+        g2.update(tracks: [chairAt(0.2)], frame: f, now: at(2000))!.text,
+        'Thấy lại ghế, hướng 11 giờ.',
+      );
+    });
+
+    test('lost → track cũ bị xóa, chọn track cùng lớp gần nhất', () {
+      lockMid();
+      up(1800, []);
+      final cue = up(2000, [
+        chairAt(0.5, id: 5, h: 0.2),
+        chairAt(0.5, id: 6, h: 0.4),
+        track(
+          9,
+          'person',
+          const Rect.fromLTWH(0.4, 0.2, 0.2, 0.7),
+          level: DistanceLevel.far,
+        ),
+      ])!;
+      expect(cue.text, 'Thấy lại ghế, phía trước.');
+      expect(g.targetTrackId, 6);
+    });
+
+    test('lost 15 s → lostTimeout', () {
+      lockMid();
+      up(1800, []);
+      expect(up(10000, []), isNull);
+      expect(up(16000, []), isNull);
+      final cue = up(16800, [])!;
+      expect(cue.text, 'Không tìm lại được ghế. Đã dừng dẫn đường.');
+      expect(cue.force, true);
+      expect(cue.end, NavEnd.lostTimeout);
+      expect(g.state, NavState.idle);
+    });
+
+    test('thấy lại đặt lại bộ đếm: đứng gần không tới nơi ngay khung đầu', () {
+      lockMid();
+      up(1800, []);
+      up(2000, [chairAt(0.5, level: DistanceLevel.near)]);
+      expect(g.state, NavState.guiding);
+      expect(
+        up(2100, [chairAt(0.5, level: DistanceLevel.near)])!.end,
+        NavEnd.arrived,
+      );
+    });
+
+    test('thấy lại lệch bên phải phải chờ 0,5 s mới nhắc lệch', () {
+      lockMid();
+      up(1800, []);
+      up(2000, [chairAt(0.8)]);
+      expect(up(2300, [chairAt(0.8)]), isNull);
+      expect(up(2600, [chairAt(0.8)])!.text, 'Lệch phải.');
+    });
+
+    test('quiet: không trả câu thường; câu chốt được giữ', () {
+      expect(upq(100, [chairAt(0.5)], quiet: true), isNull);
+      expect(g.state, NavState.guiding);
+      expect(upq(200, [chairAt(0.5, level: DistanceLevel.medium)]), isNotNull);
+      // Final cue held while quiet.
+      final g2 = NavigationGuide()..start({'chair'}, 'ghế', at(0));
+      expect(
+        g2.update(tracks: [bigChair()], frame: f, quiet: true, now: at(100)),
+        isNull,
+      );
+      expect(
+        g2.update(tracks: [], frame: f, quiet: true, now: at(200)),
+        isNull,
+      );
+      expect(g2.state, NavState.idle);
+      expect(g2.isActive, false);
+      expect(
+        g2.update(tracks: [], frame: f, quiet: true, now: at(300)),
+        isNull,
+      );
+      final cue = g2.update(tracks: [], frame: f, now: at(400))!;
+      expect(cue.end, NavEnd.arrived);
+      expect(cue.force, true);
+      expect(g2.update(tracks: [], frame: f, now: at(500)), isNull);
+    });
+
+    test('quiet: câu thường bị bỏ không đánh dấu đã nói, sau đó còn nói', () {
+      up(100, [chairAt(0.8)]);
+      expect(upq(700, [chairAt(0.8)], quiet: true), isNull);
+      expect(up(800, [chairAt(0.8)])!.text, 'Lệch phải.');
+      final g2 = NavigationGuide()..start({'chair'}, 'ghế', at(0));
+      g2.update(tracks: [chairAt(0.5)], frame: f, now: at(100));
+      expect(
+        g2.update(
+          tracks: [chairAt(0.5, level: DistanceLevel.medium)],
+          frame: f,
+          quiet: true,
+          now: at(200),
+        ),
+        isNull,
+      );
+      expect(
+        g2
+            .update(
+              tracks: [chairAt(0.5, level: DistanceLevel.medium)],
+              frame: f,
+              now: at(300),
+            )!
+            .text,
+        'Gần hơn rồi.',
+      );
+    });
+
+    test('quiet không dừng đồng hồ; sightLost dừng đồng hồ 15 s', () {
+      expect(upq(8000, [], quiet: true), isNull);
+      final cue = upq(15000, [], quiet: true);
+      expect(cue, isNull);
+      expect(g.state, NavState.idle);
+      expect(upq(15100, [])!.end, NavEnd.notFound);
+
+      final g2 = NavigationGuide()..start({'chair'}, 'ghế', at(0));
+      for (var ms = 1000; ms <= 20000; ms += 1000) {
+        g2.update(tracks: [], frame: f, sightLost: true, now: at(ms));
+      }
+      expect(g2.state, NavState.searching);
+      g2.update(tracks: [], frame: f, now: at(21000));
+      expect(g2.state, NavState.searching);
+    });
+
+    test('sightLost dừng đồng hồ lost', () {
+      lockMid();
+      up(1800, []);
+      for (var ms = 3000; ms <= 30000; ms += 1000) {
+        g.update(tracks: [], frame: f, sightLost: true, now: at(ms));
+      }
+      expect(g.state, NavState.lost);
+    });
+
+    test(
+      'cancel nói "Đã dừng dẫn đường."; announce:false → null; idle → null',
+      () {
+        lockMid();
+        final cue = g.cancel()!;
+        expect(cue.text, 'Đã dừng dẫn đường.');
+        expect(cue.force, true);
+        expect(cue.end, NavEnd.cancelled);
+        expect(g.state, NavState.idle);
+        expect(g.cancel(), isNull);
+        g.start({'chair'}, 'ghế', at(300));
+        expect(g.cancel(announce: false), isNull);
+        expect(g.isActive, false);
+      },
+    );
+
+    test('cancel / start bỏ câu chốt đang chờ', () {
+      up(0, [bigChair()]);
+      g.update(tracks: [], frame: f, quiet: true, now: at(100));
+      g.cancel();
+      expect(up(200, []), isNull);
+      up(300, [bigChair()]);
+      g.update(tracks: [], frame: f, quiet: true, now: at(400));
+      g.start({'chair'}, 'ghế', at(500));
+      expect(up(600, []), isNull);
+    });
+
+    test('start khi đang dẫn → "Đổi sang tìm bàn." và về searching', () {
+      lockMid();
+      final cue = g.start({'dining table'}, 'bàn', at(300));
+      expect(cue.text, 'Đổi sang tìm bàn.');
+      expect(cue.force, false);
+      expect(cue.end, isNull);
+      expect(g.state, NavState.searching);
+      expect(g.targetTrackId, isNull);
+      expect(g.targetName, 'bàn');
+      expect(up(5300, [])!.text, 'Đang tìm bàn. Xoay người chậm.');
+    });
+  });
 }

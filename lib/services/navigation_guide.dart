@@ -38,8 +38,20 @@ class NavigationGuide {
   String _nameVi = '';
   int? _trackId;
 
-  DateTime? _searchStart;
   DateTime? _lastSearchCue;
+
+  // Timeout clocks: accumulated update deltas, paused while sight is lost.
+  DateTime? _prevNow;
+  Duration _searchElapsed = Duration.zero;
+  Duration _lostElapsed = Duration.zero;
+
+  // Last visible observation of the locked target (normalised box).
+  Rect? _lastBox;
+  DistanceLevel _lastLevel = DistanceLevel.far;
+  DateTime? _lastSeenAt;
+
+  bool _quiet = false;
+  NavCue? _pendingFinal;
 
   // Guiding bookkeeping: only advanced when the matching cue is returned.
   int _announcedLevel = 0;
@@ -57,18 +69,45 @@ class NavigationGuide {
   String? get targetName => isActive ? _nameVi : null;
 
   NavCue start(Set<String> labelsEn, String nameVi, DateTime now) {
+    final retarget = isActive;
     _labels = labelsEn;
     _nameVi = nameVi;
     _trackId = null;
     _state = NavState.searching;
-    _searchStart = now;
     _lastSearchCue = now;
+    _prevNow = now;
+    _searchElapsed = Duration.zero;
+    _lostElapsed = Duration.zero;
+    _pendingFinal = null;
+    _lastBox = null;
+    _lastSeenAt = null;
     _resetGuiding();
-    return NavCue('Đang tìm $_nameVi. Xoay người chậm.');
+    return NavCue(
+      retarget
+          ? 'Đổi sang tìm $_nameVi.'
+          : 'Đang tìm $_nameVi. Xoay người chậm.',
+    );
   }
 
-  /// Quiet mode, sight loss and cancel are handled in a later task; [quiet]
-  /// and [sightLost] are accepted now so callers need not change.
+  /// Stops guiding. Returns the spoken confirmation when [announce] is true and
+  /// a session was active. Any pending final cue is discarded.
+  NavCue? cancel({bool announce = true}) {
+    _pendingFinal = null;
+    if (!isActive) return null;
+    _state = NavState.idle;
+    _trackId = null;
+    _resetGuiding();
+    if (!announce) return null;
+    return const NavCue(
+      'Đã dừng dẫn đường.',
+      force: true,
+      end: NavEnd.cancelled,
+    );
+  }
+
+  /// With [quiet], state keeps advancing but ordinary cues are dropped (and not
+  /// marked as said); a final cue is held and returned by the first update
+  /// with quiet == false. [sightLost] pauses the 15 s timeout clocks.
   NavCue? update({
     required List<TrackedObject> tracks,
     required Size frame,
@@ -77,16 +116,40 @@ class NavigationGuide {
     bool sightLost = false,
     required DateTime now,
   }) {
+    final prev = _prevNow;
+    _prevNow = now;
+    _quiet = quiet;
+    if (prev != null && !sightLost) {
+      final delta = now.difference(prev);
+      if (_state == NavState.searching) _searchElapsed += delta;
+      if (_state == NavState.lost) _lostElapsed += delta;
+    }
+
+    final NavCue? cue;
     switch (_state) {
       case NavState.idle:
-        return null;
+        if (quiet) return null;
+        cue = _pendingFinal;
+        _pendingFinal = null;
+        return cue;
       case NavState.searching:
-        return _updateSearching(tracks, frame, lidarCenter, now);
+        cue = _updateSearching(tracks, frame, lidarCenter, now);
       case NavState.guiding:
-        return _updateGuiding(tracks, frame, lidarCenter, now);
+        cue = _updateGuiding(tracks, frame, lidarCenter, now);
       case NavState.lost:
-        return null;
+        cue = _updateLost(tracks, frame, lidarCenter, now);
     }
+    if (cue != null && cue.end != null && quiet) {
+      _pendingFinal = cue;
+      return null;
+    }
+    return cue;
+  }
+
+  NavCue? _emit(String text, [void Function()? mark]) {
+    if (_quiet) return null;
+    mark?.call();
+    return NavCue(text);
   }
 
   NavCue? _updateSearching(
@@ -103,19 +166,22 @@ class NavigationGuide {
       final level = _levelOf(target);
       _announcedLevel = _rank(level);
       _observe(target, frame, lidar, now);
-      return NavCue(
+      _remember(target, frame, now);
+      return _emit(
         'Thấy $_nameVi ${_entryPhrase(_norm(target, frame), level)}.',
       );
     }
-    if (now.difference(_searchStart!) >= searchTimeout) {
+    if (_searchElapsed >= searchTimeout) {
       return _end(
         'Không tìm thấy $_nameVi. Đã dừng dẫn đường.',
         NavEnd.notFound,
       );
     }
     if (now.difference(_lastSearchCue!) >= searchReminder) {
-      _lastSearchCue = now;
-      return NavCue('Đang tìm $_nameVi. Xoay người chậm.');
+      return _emit(
+        'Đang tìm $_nameVi. Xoay người chậm.',
+        () => _lastSearchCue = now,
+      );
     }
     return null;
   }
@@ -127,9 +193,9 @@ class NavigationGuide {
     DateTime now,
   ) {
     final target = _lockedTrack(tracks, frame);
-    // Target not visible: no cue yet (loss classification comes later).
-    if (target == null) return null;
+    if (target == null) return _classifyLoss(lidar, now);
 
+    _remember(target, frame, now);
     final arrived = _observe(target, frame, lidar, now);
     if (arrived) {
       return _end(
@@ -143,9 +209,9 @@ class NavigationGuide {
 
     // Distance beats lateral cues.
     if (level > _announcedLevel) {
-      _announcedLevel = level;
-      return NavCue(
+      return _emit(
         level == _rank(DistanceLevel.near) ? 'Sắp tới.' : 'Gần hơn rồi.',
+        () => _announcedLevel = level,
       );
     }
 
@@ -154,17 +220,105 @@ class NavigationGuide {
         (_lastLateralCue == null ||
             _lateralSign != _lastSpokenSide ||
             now.difference(_lastLateralCue!) >= lateralRepeat)) {
-      _lastLateralCue = now;
-      _lastSpokenSide = _lateralSign;
-      _lateralSpoken = true;
-      return NavCue(dx < 0 ? 'Lệch trái.' : 'Lệch phải.');
+      final sign = _lateralSign;
+      return _emit(dx < 0 ? 'Lệch trái.' : 'Lệch phải.', () {
+        _lastLateralCue = now;
+        _lastSpokenSide = sign;
+        _lateralSpoken = true;
+      });
     }
 
     if (_lateralSpoken && dx.abs() < backToStraight) {
-      _lateralSpoken = false;
-      _lastLateralCue = null;
-      _lastSpokenSide = 0;
-      return const NavCue('Thẳng rồi.');
+      return _emit('Thẳng rồi.', () {
+        _lateralSpoken = false;
+        _lastLateralCue = null;
+        _lastSpokenSide = 0;
+      });
+    }
+    return null;
+  }
+
+  void _remember(TrackedObject t, Size frame, DateTime now) {
+    _lastBox = _norm(t, frame);
+    _lastLevel = _levelOf(t);
+    _lastSeenAt = now;
+  }
+
+  /// Locked target is not visible: classify by where it was last seen.
+  NavCue? _classifyLoss(LidarReading? lidar, DateTime now) {
+    final box = _lastBox;
+    final seen = _lastSeenAt;
+    if (box == null || seen == null) return null;
+    final near = _lastLevel == DistanceLevel.near;
+    final dx = box.center.dx - 0.5;
+
+    if (near &&
+        (box.bottom >= edgeBottom || box.height > edgeHeight) &&
+        dx.abs() < edgeDx) {
+      return _end(
+        '${_capitalized(_nameVi)} ngay trước mặt, rất gần. Dò bằng gậy.',
+        NavEnd.arrived,
+      );
+    }
+    if (near &&
+        lidar is LidarObstacle &&
+        lidar.distance <= lidarArrivalMeters) {
+      return _end(
+        'Đã tới. ${_capitalized(_nameVi)} ngay trước mặt. Dò bằng gậy.',
+        NavEnd.arrived,
+      );
+    }
+    final atLeft = box.left <= sideEdgeLeft;
+    final atRight = box.right >= sideEdgeRight;
+    if (atLeft || atRight) {
+      final left = atLeft && (!atRight || dx < 0);
+      _enterLost();
+      return _emit(
+        left
+            ? '${_capitalized(_nameVi)} ở bên trái. Xoay trái chậm.'
+            : '${_capitalized(_nameVi)} ở bên phải. Xoay phải chậm.',
+      );
+    }
+    if (now.difference(seen) >= midFrameLossWait) {
+      _enterLost();
+      return _emit('Mất dấu $_nameVi. Đứng yên, xoay người chậm.');
+    }
+    return null;
+  }
+
+  void _enterLost() {
+    _state = NavState.lost;
+    _lostElapsed = Duration.zero;
+    _resetGuiding();
+  }
+
+  NavCue? _updateLost(
+    List<TrackedObject> tracks,
+    Size frame,
+    LidarReading? lidar,
+    DateTime now,
+  ) {
+    final target = _lockedTrack(tracks, frame) ?? _pickTarget(tracks, frame);
+    if (target != null) {
+      _trackId = target.id;
+      _state = NavState.guiding;
+      _resetGuiding();
+      _announcedLevel = _rank(_levelOf(target));
+      _observe(target, frame, lidar, now);
+      _remember(target, frame, now);
+      final dx = _norm(target, frame).center.dx - 0.5;
+      final dir = dx < -clockThreshold
+          ? 'hướng 11 giờ'
+          : dx > clockThreshold
+          ? 'hướng 1 giờ'
+          : 'phía trước';
+      return _emit('Thấy lại $_nameVi, $dir.');
+    }
+    if (_lostElapsed >= lostTimeout) {
+      return _end(
+        'Không tìm lại được $_nameVi. Đã dừng dẫn đường.',
+        NavEnd.lostTimeout,
+      );
     }
     return null;
   }
