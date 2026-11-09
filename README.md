@@ -15,7 +15,9 @@
 
 **Nguyên tắc "nói ít, đúng lúc":** mỗi frame chỉ chọn 1 cảnh báo quan trọng nhất; vật xa phải xuất hiện ≥ 2 lần quét mới được báo (lọc báo nhầm), **vật gần + điểm cao báo ngay từ lần quét đầu**;
 cùng 1 vật chỉ nhắc lại sau 6 giây (nguy hiểm) / 10 giây (chú ý) trừ khi mức nguy hiểm tăng; cảnh báo nguy hiểm ngắt lời mọi câu khác;
-khi vật rất gần ngay trước mặt luôn nói **"Dừng lại"** và chỉ nêu phía trống, không ra lệnh rẽ.
+khi vật chiếm nhiều khung hình phía trước hoặc đang lớn nhanh sẽ nói **"Dừng lại"**, kèm tên vật và vị trí. Cảnh báo chú ý không chờ khoảng lặng 2 giây. App không suy diễn số mét hay lối đi an toàn từ chỗ chưa nhận diện được vật.
+
+Đánh giá tốc độ, RAM, dung lượng và giới hạn hiện tại: [APP-PROCESSING-ASSESSMENT.md](APP-PROCESSING-ASSESSMENT.md).
 
 ### Cách dùng trên màn hình chính
 - **Chạm 2 lần vào màn hình** hoặc nút **Xung quanh**: nghe mô tả xung quanh (F3 on-demand).
@@ -23,6 +25,11 @@ khi vật rất gần ngay trước mặt luôn nói **"Dừng lại"** và ch�
 - Nút **Lịch sử**: danh sách chuyến đi, nghe tóm tắt, xem ảnh ghi nhớ, nghe lại toàn bộ.
 - Chip **Đầy đủ / Yên lặng**: chế độ yên lặng chỉ báo khi nguy hiểm.
 - Chip **Mô tả khi hỏi / Tự mô tả**: bật tự mô tả tần suất thấp (~45 giây, chỉ khi không có cảnh báo gần đây).
+- **Rung liên tục kiểu cảm biến lùi xe**: có vật trong lối đi phía trước thì máy rung, vật càng gần rung càng dày. Không rung chỉ có nghĩa là không *nhận ra* vật nào, không chứng minh đường trống.
+- **Báo khi app không nhìn được**: camera/AI ngừng trả kết quả quá 1,5 giây, phòng quá tối hoặc camera bị che → nói "Dừng lại!" và rung dài; máy chĩa xuống sàn / lên trần → cảnh báo "Dừng lại! Máy đang chĩa xuống sàn..." / "...chĩa lên cao...".
+- **Thấy vật cản không có tên** (tường, cửa, tủ, thùng đồ): model độ sâu MiDaS v2.1 small chạy song song với YOLO (~3 lần/giây). So độ gần của vùng phía trước ngang ngực với mảng sàn ngay trước chân; gần bằng nhau thì báo *"Dừng lại! Có vật cản ngay phía trước."* Độ sâu là tương đối, không phải mét.
+- **Bậc lên / bậc xuống** (bục giảng, bậc cửa, mép bục): từ cùng ảnh độ sâu, so profile sàn ở giữa khung hình với một mặt phẳng; mặt nhô lên = bậc lên, tụt xuống = bậc xuống. Báo *"Chú ý, phía trước có bậc lên"* → *"Dừng lại! Bậc lên ngay phía trước. Dò bằng gậy."*; bậc xuống luôn *"Dừng lại!"*; rung 2 nhịp. Bậc thấp dưới ~10 cm có thể bị bỏ sót; khi đã sát chân, bậc ra khỏi khung hình.
+- Thử nghiệm trong phòng: xem [INDOOR-TEST-PROTOCOL.md](INDOOR-TEST-PROTOCOL.md).
 
 ---
 
@@ -31,11 +38,16 @@ khi vật rất gần ngay trước mặt luôn nói **"Dừng lại"** và ch�
 ```
 smart_eye/
 ├── 📁 assets/
-│   ├── 📁 models/yolov8n_int8.tflite   # Model COCO mặc định (smart_eye.tflite nếu có sẽ được ưu tiên)
-│   └── 📁 labels/coco.txt             # Nhãn dự phòng khi model không có metadata
+│   ├── 📁 models/yolov8n_int8.tflite   # Model YOLOv8 Quantized INT8
+│   │   └── midas_small.tflite        # MiDaS v2.1 small (MIT, isl-org/MiDaS), trọng số fp16 (tool/tflite_fp16_weights.py), 256×256
+│   └── 📁 labels/coco.txt             # 80 nhãn vật thể chuẩn COCO
 ├── 📁 lib/
-│   ├── 📄 main.dart                    # Khởi tạo ứng dụng & danh sách Camera
-│   ├── 📁 models/                      # Recognition, tracked_object, scene_info, trip
+│   ├── 📄 main.dart                    # Khởi tạo ứng dụng
+│   ├── 📁 models/
+│   │   ├── Recognition.dart            # Kết quả nhận diện 1 frame
+│   │   ├── tracked_object.dart         # Vật được theo dõi qua nhiều frame
+│   │   ├── scene_info.dart             # Vị trí, khoảng cách, mức cảnh báo, kết quả đánh giá
+│   │   └── trip.dart                   # Sự kiện & tóm tắt chuyến đi
 │   ├── 📁 utils/
 │   │   ├── image_utils.dart            # Lấy mẫu frame (YUV/BGRA/NV12) → tensor, cắt vùng, JPEG, chữ ký độ sáng
 │   │   └── label_catalog.dart          # Nhãn tiếng Việt + phân loại nguy hiểm (khớp training/classes.yaml)
@@ -67,7 +79,7 @@ smart_eye/
 
 ## 🚀 Hướng Dẫn Chạy Trên Thiết Bị Android Thật (Khuyên Dùng)
 
-Chạy ứng dụng trên thiết bị Android phần cứng thật sẽ cho **hiệu năng cao nhất (15-30 FPS)**, đúng góc dọc camera và đọc âm thanh trực tiếp qua loa điện thoại.
+Nên chạy trên thiết bị Android thật để kiểm tra độ trễ nhận diện, góc dọc camera và âm thanh qua loa điện thoại. App lấy mẫu AI cách nhau ít nhất **150 ms** (trần khoảng **6,7 frame/giây**, tốc độ thực tế phụ thuộc máy); tốc độ preview camera độc lập với tốc độ chạy AI.
 
 ### Bước 1: Chuẩn bị điện thoại
 1. Vào **Cài đặt** (Settings) trên điện thoại Android $\rightarrow$ **Thông tin điện thoại** (About Phone).
@@ -76,24 +88,30 @@ Chạy ứng dụng trên thiết bị Android phần cứng thật sẽ cho **h
 4. Dùng cáp USB cắm điện thoại vào máy tính.
 
 ### Bước 2: Clone & Chạy lệnh
-1. Mở Terminal / PowerShell tại thư mục muốn lưu dự án và gõ:
+1. Cài **Git LFS** trước (model độ sâu `midas_small.tflite` 33 MB lưu bằng LFS; thiếu LFS thì file chỉ là con trỏ vài dòng và app báo không tải được cảm biến độ sâu):
+   ```bash
+   brew install git-lfs   # Windows: tải tại https://git-lfs.com
+   git lfs install
+   ```
+   Clone trước khi cài LFS thì chạy thêm `git lfs pull` trong thư mục dự án.
+2. Mở Terminal / PowerShell tại thư mục muốn lưu dự án và gõ:
    ```bash
    git clone <link_repository_of_project>
    cd smart_eye
    ```
-2. Tải các thư viện phụ thuộc:
+3. Tải các thư viện phụ thuộc:
    ```bash
    flutter pub get
    ```
-3. Kiểm tra máy tính đã nhận diện điện thoại:
+4. Kiểm tra máy tính đã nhận diện điện thoại:
    ```bash
    flutter devices
    ```
-4. Tiến hành chạy ứng dụng lên điện thoại:
+5. Tiến hành chạy ứng dụng lên điện thoại:
    ```bash
    flutter run
    ```
-5. Trên điện thoại, chọn **"Cho phép" (Allow)** khi được yêu cầu cấp quyền Camera.
+6. Trên điện thoại, chọn **"Cho phép" (Allow)** khi được yêu cầu cấp quyền Camera.
 
 ---
 
@@ -117,10 +135,10 @@ flutter run
 
 ### 💡 Các Tiện Ích Hỗ Trợ Test Trên Màn Hình App:
 
-- **🧪 Nút `Test UI` (Góc dưới bên phải)**:
+- **🧪 Nút `Test UI` trên màn hình lỗi camera/loading khi model đã sẵn sàng**:
   - Bấm nút này để kích hoạt chế độ **Giả lập** (lặp mỗi 8 giây, chạy qua đúng pipeline tracker → rules → giọng nói):
-    1. Xe máy phía trước to dần → *"Dừng lại! Xe máy đang tới gần phía trước!"*
-    2. Ghế ở giữa cách ~2m, người sát bên trái → *"Cẩn thận, ghế phía trước, cách khoảng 2 mét. Đi chếch sang phải."*
+    1. Xe máy phía trước to dần → *"Dừng lại! Có xe máy ngay phía trước."*
+    2. Ghế ở giữa, người sát bên trái → *"Chậm lại. Có ghế ngay phía trước."*
   - Không cần camera — nút cũng có ở màn hình loading nếu camera lỗi.
 - **🔄 Xoay màn hình**: app tự xoay theo hướng điện thoại — preview, khung vật thể, 3 cột free-space và ảnh đưa vào AI xoay cùng nhau (tính từ góc cảm biến camera + hướng máy), không cần bấm nút.
 
@@ -158,7 +176,8 @@ rồi cài từ Windows bằng **Sideloadly**.
 - Nếu app báo **thiếu giọng tiếng Việt**: *Cài đặt → Trợ năng → Nội dung được đọc → Giọng nói → Tiếng Việt*.
 
 ### Danh sách kiểm tra trên iPhone
-- [ ] Dòng thông số dưới màn hình có số ms và "max …%" thay đổi theo cảnh (AI đang chạy)
+- [ ] Hình camera và khung nhận diện tiếp tục cập nhật sau 10 lần về màn hình chính rồi quay lại
+- [ ] Với bản debug/profile: chỉ số FPS, ms/p95 và RSS cập nhật; bản release ẩn thông số kỹ thuật
 - [ ] Hướng camera vào người / ô tô → hiện khung, hình đứng thẳng
 - [ ] Gạt nút im lặng → vẫn nghe cảnh báo
 - [ ] Xoay ngang / dọc → khung vật vẫn khớp hình
@@ -186,30 +205,18 @@ rồi cài từ Windows bằng **Sideloadly**.
 flutter test
 ```
 
-### ⚡ Kiến trúc nhận diện (tối ưu tốc độ)
+### Luồng xử lý thời gian thực
+- Một isolate sống xuyên suốt phiên nhận diện giữ model, chuyển ảnh, chạy TFLite và lọc box; luồng giao diện chỉ nhận kết quả.
+- Chỉ xử lý một frame tại một thời điểm, không xếp hàng frame cũ. Bộ đệm tensor được tái sử dụng; ảnh JPEG ghi nhớ được mã hóa ở isolate riêng khi cần.
+- Chỉ cập nhật lớp khung nhận diện khi có kết quả; không rebuild cả màn hình camera mỗi frame.
+- Luồng ảnh được dừng trước khi hủy camera khi app ra nền, mở lịch sử hoặc bật giả lập. Khi quay lại, camera và preview được tạo mới. Nếu luồng im lặng 4 giây, app thử mở lại một lần rồi hiện lỗi có nút thử lại.
+- Kết quả đang chạy bị bỏ nếu camera, hướng máy hoặc màn hình đã thay đổi. Cảnh quá 750 ms kể từ lúc nhận frame được xóa, kể cả khi AI không trả thêm kết quả; cảnh báo đang chờ được cập nhật theo vật và mức nguy hiểm hiện tại.
+- Bản debug/profile hiển thị FPS hoàn tất xử lý, độ trễ nhận kết quả trung bình/p95 của tối đa 120 mẫu và RSS. Độ trễ này chưa gồm camera thu ảnh, dựng giao diện hoặc âm thanh TTS thực sự phát ra.
+- Các test bao phủ chuyển màu/quantization, giao tiếp isolate và đóng tài nguyên, vòng đời camera, tracker và thứ tự ngắt/phát giọng nói.
 
-```
-Camera (~30 fps) ─► Bộ điều phối nhịp quét ─(chỉ gửi khi cần)─► Isolate AI (luồng riêng)
-   luồng UI            máy rảnh là quét; đứng yên thì giãn ra        tiền xử lý → model (CPU/GPU tự chọn)
-                                                                  → giải mã (chỉ lớp liên quan) → NMS
-        ◄──────────── danh sách vật (toạ độ chuẩn hoá) + thời gian từng bước ◄───────┘
-```
+Kiểm tra trên điện thoại bằng `flutter run --profile`: xoay máy khi đang nhận diện, ra nền rồi quay lại nhiều lần, mở/đóng lịch sử và yêu cầu mô tả lúc có cảnh báo. Dùng Flutter DevTools để đo độ trễ/khung hình; unit test trên máy tính không thay thế phép đo hiệu năng hay kiểm tra delegate TFLite trên Android/iOS.
 
-| Kỹ thuật | Tác dụng |
-|---|---|
-| **Isolate AI riêng** | Luồng UI chỉ còn copy frame (~1 ms) → giao diện, nút bấm, giọng nói không giật |
-| **Tự chọn CPU / GPU** (Android) · **CPU / Metal / CoreML** (iOS) | Lúc khởi động đo tốc độ từng cách, kiểm tra kết quả giống CPU, chọn cách nhanh nhất; GPU lỗi giữa chừng tự chuyển về CPU |
-| **Chỉ xét lớp liên quan tới đi lại** | Bỏ cốc, dĩa, bàn chải… → giải mã ít phép tính hơn ~3 lần (15/80 lớp), **nhầm lớp giảm từ 17 → 2** trên COCO128 |
-| **Quét liên tục, độ trễ thấp** | Máy rảnh là quét ngay (GPU ~11 lần/giây trên Samsung A05). *Tiết kiệm*: cảnh đứng yên 3 s và không có vật → 1 lần/giây, nhưng luồng camera vẫn so độ sáng **từng frame** — có chuyển động là quét ngay |
-| **Vật gần báo ngay** | Vật cao ≥ 45% khung và điểm ≥ 0.4 được xác nhận ngay lần quét đầu (không chờ lần 2) — tiết kiệm 100–200 ms khi vật đang sát người |
-| **Không cấp phát theo từng pixel** | Tiền xử lý không tạo đối tượng tạm cho mỗi điểm ảnh (bản cũ tạo ~100 000 đối tượng / frame) |
-
-**Dòng chẩn đoán** (góc dưới màn hình) — ví dụ minh hoạ, số thật tuỳ máy:
-`GPU · 62ms (ảnh 18 · AI 41) · 4.8 lần/s · Thường` / `2 vật · max người 50%`
-= cách chạy · tổng thời gian (tiền xử lý · model · giải mã) · số lần quét mỗi giây · chế độ · vùng vừa quét.
-Log `[Scan N] ...` mỗi 20 lần quét cho số liệu chi tiết (xem bằng `flutter run` hoặc Logcat).
-
-### Đánh giá model (COCO128 hoặc dataset riêng)
+### Đánh giá model trên COCO (COCO128)
 ```bash
 pip install ai-edge-litert pillow numpy pyyaml
 python tool/eval_model.py                                          # model của app trên COCO128

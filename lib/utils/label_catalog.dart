@@ -16,9 +16,9 @@ const Map<String, String> labelVi = {
   'truck': 'xe tải',
   'boat': 'thuyền',
   'traffic light': 'cột đèn giao thông',
-  'fire hydrant': 'trụ nước cứu hỏa',
+  'fire hydrant': 'trụ cứu hỏa',
   'stop sign': 'biển báo',
-  'parking meter': 'cột đồng hồ đỗ xe',
+  'parking meter': 'cột đỗ xe',
   'bench': 'ghế băng',
   'bird': 'chim',
   'cat': 'mèo',
@@ -51,7 +51,7 @@ const Map<String, String> labelVi = {
   'toilet': 'bồn cầu',
   'tvmonitor': 'ti vi',
   'tv': 'ti vi',
-  'laptop': 'máy tính xách tay',
+  'laptop': 'laptop',
   'mouse': 'chuột máy tính',
   'keyboard': 'bàn phím',
   'cell phone': 'điện thoại',
@@ -81,19 +81,58 @@ const Map<String, String> labelVi = {
   'hole': 'hố',
 };
 
-const _groundHazards = {'manhole', 'pothole', 'stairs', 'stairs up', 'stairs down', 'hole', 'curb'};
-
-/// Nguy hiểm mặt đất "nhẹ": gặp rất thường xuyên (mép vỉa hè) → chỉ nhắc chú ý, không hô "Dừng lại"
-const mildGroundHazards = {'curb'};
-const _vehicles = {'bicycle', 'car', 'motorbike', 'motorcycle', 'bus', 'train', 'truck'};
-const _obstacles = {
-  'bench', 'chair', 'sofa', 'couch', 'pottedplant', 'potted plant', 'diningtable',
-  'dining table', 'bed', 'toilet', 'tvmonitor', 'tv', 'refrigerator', 'fire hydrant',
-  'stop sign', 'traffic light', 'parking meter', 'suitcase', 'umbrella',
-  // Lớp mới (model train riêng)
-  'pole', 'traffic sign', 'tree', 'branch', 'railing', 'barrier', 'vendor cart', 'bollard', 'traffic cone',
+// Model COCO hiện tại không nhận ra hố ga, ổ gà, bậc thang, hố;
+// các nhãn này chỉ dùng khi đổi sang model khác.
+const _groundHazards = {'manhole', 'pothole', 'stairs', 'hole'};
+const _vehicles = {
+  'bicycle',
+  'car',
+  'motorbike',
+  'motorcycle',
+  'bus',
+  'train',
+  'truck',
 };
-const _animals = {'dog', 'cat', 'horse', 'cow', 'sheep', 'elephant', 'bear', 'zebra', 'giraffe'};
+const _obstacles = {
+  'bench',
+  'chair',
+  'sofa',
+  'couch',
+  'pottedplant',
+  'potted plant',
+  'diningtable',
+  'dining table',
+  'bed',
+  'toilet',
+  'tvmonitor',
+  'tv',
+  'refrigerator',
+  'fire hydrant',
+  // Traffic signs/lights identify the sign or light, not a ground-level pole.
+  'parking meter', 'suitcase',
+};
+const _animals = {
+  'dog',
+  'cat',
+  'horse',
+  'cow',
+  'sheep',
+  'elephant',
+  'zebra',
+  'giraffe',
+};
+
+/// Các nhãn gần như chắc là nhận nhầm trong môi trường người khiếm thị di chuyển;
+/// được lọc bỏ trước khi đưa vào tracker.
+const ignoredLabels = {
+  'elephant',
+  'giraffe',
+  'zebra',
+  'bear',
+  'aeroplane',
+  'airplane',
+  'boat',
+};
 
 ObjectCategory categoryOf(String labelEn) {
   if (labelEn == 'person') return ObjectCategory.person;
@@ -104,5 +143,13 @@ ObjectCategory categoryOf(String labelEn) {
   return ObjectCategory.other;
 }
 
+/// Classes the detector keeps. Traffic lights and stop signs are not
+/// obstacles but are still worth mentioning in descriptions.
+bool isDetectionRelevant(String labelEn) =>
+    labelEn == 'traffic light' ||
+    labelEn == 'stop sign' ||
+    categoryOf(labelEn) != ObjectCategory.other;
+
 /// Viết hoa chữ cái đầu câu
-String capitalize(String s) => s.isEmpty ? s : s[0].toUpperCase() + s.substring(1);
+String capitalize(String s) =>
+    s.isEmpty ? s : s[0].toUpperCase() + s.substring(1);

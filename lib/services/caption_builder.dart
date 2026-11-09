@@ -8,24 +8,38 @@ class CaptionBuilder {
   /// Số nhóm vật tối đa trong 1 câu mô tả — nhiều hơn sẽ thành "nói chuyện phiếm"
   static const int maxGroups = 2;
 
-  /// "Phía trước có 2 người, gần nhất cách khoảng 2 mét. Bên phải có xe máy, ở xa. Bên trái trống."
+  /// Chỉ mô tả những gì đang được nhận diện; không công bố số mét hay lối đi an toàn.
   static String describeScene(SceneAssessment scene) {
-    final objects = scene.objects.where((o) => o.isRelevant).toList();
-    if (objects.isEmpty) return 'Phía trước không thấy vật cản nào.';
+    final objects = scene.objects.where((o) => o.track.misses == 0).toList();
+    if (objects.isEmpty) {
+      return 'Chưa nhận diện được vật, chưa có lối đi an toàn.';
+    }
 
     // Gộp theo (vị trí, tên vật), giữ khoảng cách gần nhất trong nhóm
-    final groups = <String, ({HPos pos, String label, int count, DistanceLevel nearest, int rank})>{};
+    final groups =
+        <
+          String,
+          ({HPos pos, String label, int count, DistanceLevel nearest, int rank})
+        >{};
     for (final o in objects) {
       final key = '${o.pos.index}|${o.label}';
       final g = groups[key];
       final rank = (o.isRelevant ? 10 : 0) + (2 - o.distance.index);
       groups[key] = g == null
-          ? (pos: o.pos, label: o.label, count: 1, nearest: o.distance, rank: rank)
+          ? (
+              pos: o.pos,
+              label: o.label,
+              count: 1,
+              nearest: o.distance,
+              rank: rank,
+            )
           : (
               pos: g.pos,
               label: g.label,
               count: g.count + 1,
-              nearest: o.distance.index < g.nearest.index ? o.distance : g.nearest,
+              nearest: o.distance.index < g.nearest.index
+                  ? o.distance
+                  : g.nearest,
               rank: rank > g.rank ? rank : g.rank,
             );
     }
@@ -52,18 +66,21 @@ class CaptionBuilder {
 
   /// Câu tóm tắt lối đi dựa trên free-space 3 cột
   static String freeSpaceSentence(SceneAssessment scene) {
+    if (scene.isColumnFree(HPos.center)) {
+      return 'Phía trước chưa thấy vật cản.';
+    }
     final left = scene.isColumnFree(HPos.left);
     final right = scene.isColumnFree(HPos.right);
-    if (scene.isColumnFree(HPos.center)) {
-      if (left && right) return 'Lối đi phía trước thông thoáng.';
-      if (left) return 'Phía trước trống, bên phải có vật cản.';
-      if (right) return 'Phía trước trống, bên trái có vật cản.';
-      return 'Phía trước trống, hai bên có vật cản.';
+    if (left && right) {
+      return 'Vật phía trước. Hai bên chưa thấy vật.';
     }
-    if (left && right) return 'Phía trước bị chắn, hai bên trái phải đều trống.';
-    if (left) return 'Phía trước bị chắn, bên trái trống.';
-    if (right) return 'Phía trước bị chắn, bên phải trống.';
-    return 'Phía trước và hai bên đều có vật cản, nên đứng lại.';
+    if (left) {
+      return 'Vật phía trước và bên phải. Bên trái chưa thấy vật.';
+    }
+    if (right) {
+      return 'Vật phía trước và bên trái. Bên phải chưa thấy vật.';
+    }
+    return 'Đứng lại, có vật ở 3 hướng.';
   }
 
   // ---------------------------------------------------------------------------
@@ -72,27 +89,54 @@ class CaptionBuilder {
 
   /// "Chuyến đi lúc 7 giờ 30 sáng ngày 23 tháng 9: đi khoảng 1,2 ki lô mét trong 45 phút,
   ///  gặp 3 cảnh báo nguy hiểm và 5 lần nhắc chú ý."
-  static String recap(TripSummary trip) {
+  static String recap(TripSummary trip, {DateTime? now}) {
     final start = trip.startTime;
-    final buf = StringBuffer('Chuyến đi lúc ${spokenTime(start)} ngày ${start.day} tháng ${start.month}: ');
+    final current = now ?? DateTime.now();
+    final isToday = start.year == current.year &&
+        start.month == current.month &&
+        start.day == current.day;
+    final dateStr = isToday
+        ? 'hôm nay'
+        : 'ngày ${start.day} tháng ${start.month}';
+    final buf = StringBuffer(
+      'Chuyến đi lúc ${spokenTime(start)} $dateStr: ',
+    );
 
     final activity = <String>[];
-    if (trip.distanceMeters >= 20) activity.add('đi khoảng ${spokenDistance(trip.distanceMeters)}');
+    if (trip.distanceMeters >= 20) {
+      activity.add('đi khoảng ${spokenDistance(trip.distanceMeters)}');
+    }
     activity.add('trong ${spokenDuration(trip.duration)}');
     buf.write(activity.join(' '));
 
     final counts = <String>[];
-    if (trip.dangerCount > 0) counts.add('${trip.dangerCount} cảnh báo nguy hiểm');
-    if (trip.cautionCount > 0) counts.add('${trip.cautionCount} lần nhắc chú ý');
-    buf.write(counts.isEmpty ? ', không gặp cảnh báo nào.' : ', gặp ${counts.join(' và ')}.');
+    if (trip.dangerCount > 0) {
+      counts.add('${trip.dangerCount} cảnh báo nguy hiểm');
+    }
+    if (trip.cautionCount > 0) {
+      counts.add('${trip.cautionCount} lần nhắc chú ý');
+    }
+    buf.write(
+      counts.isEmpty
+          ? ', không gặp cảnh báo nào.'
+          : ', gặp ${counts.join(' và ')}.',
+    );
 
-    if (trip.memoryCount > 0) buf.write(' Đã lưu ${trip.memoryCount} ảnh ghi nhớ.');
+    if (trip.memoryCount > 0) {
+      buf.write(' Đã lưu ${trip.memoryCount} ảnh ghi nhớ.');
+    }
     return buf.toString();
   }
 
   static String spokenTime(DateTime t) {
     final h = t.hour;
-    final period = h < 11 ? 'sáng' : h < 14 ? 'trưa' : h < 18 ? 'chiều' : 'tối';
+    final period = h < 11
+        ? 'sáng'
+        : h < 14
+        ? 'trưa'
+        : h < 18
+        ? 'chiều'
+        : 'tối';
     final h12 = h % 12 == 0 ? 12 : h % 12;
     return t.minute == 0 ? '$h12 giờ $period' : '$h12 giờ ${t.minute} $period';
   }

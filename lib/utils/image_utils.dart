@@ -1,7 +1,11 @@
 import 'dart:typed_data';
-import 'package:image/image.dart' as img;
 
-import '../services/detection/frame_data.dart';
+import 'package:camera/camera.dart';
+import 'package:image/image.dart' as img;
+import 'package:tflite_flutter/tflite_flutter.dart';
+
+// Packed RGB avoids allocating a record for every sampled pixel.
+typedef _PixelReader = int Function(int x, int y);
 
 /// Nhận 1 mẫu RGB đã lấy từ frame — [index] là vị trí mẫu theo thứ tự hàng rồi cột
 typedef _SampleSink = void Function(int index, int r, int g, int b);
@@ -29,51 +33,122 @@ class ImageUtils {
         : (sensorOrientation - deviceDegrees + 360) % 360;
   }
 
-  /// Kích thước (rộng, cao) của frame sau khi xoay
-  static ({int width, int height}) rotatedSize(int width, int height, int rotationDegrees) =>
-      rotationDegrees == 90 || rotationDegrees == 270
-          ? (width: height, height: width)
-          : (width: width, height: height);
-
-  /// Chuyển frame thành tensor float32 [0..1] kích thước [size]×[size] (toàn bộ ảnh đã xoay).
-  /// Layout theo model: [channelsFirst] = NCHW `[1, 3, S, S]`, ngược lại NHWC `[1, S, S, 3]`.
-  static Float32List? toInputTensor(
-    FrameData frame, {
+  /// Chuyển CameraImage thành byte của tensor float32, int8 hoặc uint8.
+  /// [outputBuffer] được tái sử dụng khi đủ lớn; kết quả chỉ chứa đúng số byte
+  /// của tensor và giữ nguyên offset của buffer. Caller không được sửa buffer
+  /// trong khi inference đang đọc nó. Trả null cho frame/metadata không hợp lệ.
+  static Uint8List? cameraImageToModelBytes(
+    CameraImage image, {
     required int size,
     required bool channelsFirst,
-    int rotationDegrees = 0,
+    required TensorType inputType,
+    required double scale,
+    required int zeroPoint,
+    int rotationDegrees = 90,
+    Uint8List? outputBuffer,
   }) {
-    final plane = size * size;
-    final out = Float32List(3 * plane);
-    const k = 1 / 255.0;
-    final ok = _sample(frame, rotationDegrees, size, size, channelsFirst
-        ? (i, r, g, b) {
-            out[i] = r * k;
-            out[plane + i] = g * k;
-            out[2 * plane + i] = b * k;
+    try {
+      final bool isFloat32 = inputType == TensorType.float32;
+      final bool isInt8 = inputType == TensorType.int8;
+      if ((!isFloat32 && !isInt8 && inputType != TensorType.uint8) ||
+          size <= 0 ||
+          image.width <= 0 ||
+          image.height <= 0 ||
+          (!isFloat32 && (!scale.isFinite || scale < 0))) {
+        return null;
+      }
+      final read = _readerFor(image);
+      if (read == null) return null;
+      final int srcW = image.width;
+      final int srcH = image.height;
+      final bool swap = rotationDegrees == 90 || rotationDegrees == 270;
+      final int rotW = swap ? srcH : srcW;
+      final int rotH = swap ? srcW : srcH;
+
+      final int plane = size * size;
+      final int byteLength = 3 * plane * (isFloat32 ? 4 : 1);
+      if (outputBuffer != null && outputBuffer.lengthInBytes < byteLength) {
+        return null;
+      }
+      final Uint8List output = outputBuffer == null
+          ? Uint8List(byteLength)
+          : outputBuffer.lengthInBytes == byteLength
+          ? outputBuffer
+          : Uint8List.sublistView(outputBuffer, 0, byteLength);
+      final bool alignedFloat = isFloat32 && output.offsetInBytes % 4 == 0;
+      final Float32List? fOut = alignedFloat
+          ? Float32List.view(output.buffer, output.offsetInBytes, 3 * plane)
+          : null;
+      // ByteData also supports an unaligned slice supplied by the caller.
+      final ByteData? unalignedFloat = isFloat32 && !alignedFloat
+          ? ByteData.sublistView(output)
+          : null;
+      final List<int>? qOut = isFloat32
+          ? null
+          : isInt8
+          ? Int8List.view(output.buffer, output.offsetInBytes, 3 * plane)
+          : output;
+
+      final double effectiveScale = scale == 0 ? (1.0 / 255.0) : scale;
+      final double multiplier = 1.0 / (255.0 * effectiveScale);
+      if (!isFloat32 && !multiplier.isFinite) return null;
+      final int quantizedMin = isInt8 ? -128 : 0;
+      final int quantizedMax = isInt8 ? 127 : 255;
+      final int greenOffset = channelsFirst ? plane : 1;
+      final int blueOffset = channelsFirst ? 2 * plane : 2;
+
+      for (int y = 0; y < size; y++) {
+        final int ry = y * rotH ~/ size;
+        for (int x = 0; x < size; x++) {
+          final int rx = x * rotW ~/ size;
+          // Keep the public coordinate helper, but avoid its record in the hot loop.
+          final int sx = switch (rotationDegrees) {
+            90 => ry,
+            180 => srcW - 1 - rx,
+            270 => srcW - 1 - ry,
+            _ => rx,
+          };
+          final int sy = switch (rotationDegrees) {
+            90 => srcH - 1 - rx,
+            180 => srcH - 1 - ry,
+            270 => rx,
+            _ => ry,
+          };
+          final int rgb = read(sx, sy);
+          final int r = rgb >> 16;
+          final int g = (rgb >> 8) & 255;
+          final int b = rgb & 255;
+          final int p = y * size + x;
+          final int rIndex = channelsFirst ? p : p * 3;
+          final int gIndex = rIndex + greenOffset;
+          final int bIndex = rIndex + blueOffset;
+
+          if (isFloat32) {
+            if (fOut != null) {
+              fOut[rIndex] = r / 255.0;
+              fOut[gIndex] = g / 255.0;
+              fOut[bIndex] = b / 255.0;
+            } else {
+              unalignedFloat!.setFloat32(rIndex * 4, r / 255.0, Endian.host);
+              unalignedFloat.setFloat32(gIndex * 4, g / 255.0, Endian.host);
+              unalignedFloat.setFloat32(bIndex * 4, b / 255.0, Endian.host);
+            }
+          } else {
+            qOut![rIndex] = (r * multiplier + zeroPoint)
+                .clamp(quantizedMin, quantizedMax)
+                .round();
+            qOut[gIndex] = (g * multiplier + zeroPoint)
+                .clamp(quantizedMin, quantizedMax)
+                .round();
+            qOut[bIndex] = (b * multiplier + zeroPoint)
+                .clamp(quantizedMin, quantizedMax)
+                .round();
           }
-        : (i, r, g, b) {
-            out[i * 3] = r * k;
-            out[i * 3 + 1] = g * k;
-            out[i * 3 + 2] = b * k;
-          });
-    return ok ? out : null;
-  }
-
-  /// "Chữ ký" độ sáng [grid]×[grid] của toàn khung — so 2 chữ ký để biết cảnh có thay đổi không
-  static Uint8List? lumaSignature(FrameData frame, {int rotationDegrees = 0, int grid = 16}) {
-    final sig = Uint8List(grid * grid);
-    final ok = _sample(frame, rotationDegrees, grid, grid,
-        (i, r, g, b) => sig[i] = (r * 77 + g * 150 + b * 29) >> 8);
-    return ok ? sig : null;
-  }
-
-  /// Mức thay đổi giữa 2 chữ ký độ sáng: 0 = giống hệt, 1 = khác hoàn toàn
-  static double signatureDiff(Uint8List a, Uint8List b) {
-    if (a.length != b.length || a.isEmpty) return 1;
-    var sum = 0;
-    for (var i = 0; i < a.length; i++) {
-      sum += (a[i] - b[i]).abs();
+        }
+      }
+      return output;
+    } catch (e) {
+      return null;
     }
     return sum / (a.length * 255);
   }
@@ -86,16 +161,29 @@ class ImageUtils {
       final outW = (rot.width * scale).round();
       final outH = (rot.height * scale).round();
       final thumb = img.Image(width: outW, height: outH);
-      final ok = _sample(frame, rotationDegrees, outW, outH,
-          (i, r, g, b) => thumb.setPixelRgb(i % outW, i ~/ outW, r, g, b));
-      return ok ? img.encodeJpg(thumb, quality: 70) : null;
-    } catch (_) {
+      for (int y = 0; y < outH; y++) {
+        final int ry = (y / scale).floor().clamp(0, rotH - 1);
+        for (int x = 0; x < outW; x++) {
+          final int rx = (x / scale).floor().clamp(0, rotW - 1);
+          final src = sourceCoord(rx, ry, srcW, srcH, rotationDegrees);
+          final rgb = read(src.x, src.y);
+          thumb.setPixelRgb(x, y, rgb >> 16, (rgb >> 8) & 255, rgb & 255);
+        }
+      }
+      return img.encodeJpg(thumb, quality: 70);
+    } catch (e) {
       return null;
     }
   }
 
   /// Toạ độ (rx, ry) trên ảnh đã xoay chiều kim đồng hồ [rotationDegrees] → toạ độ trên ảnh gốc
-  static ({int x, int y}) sourceCoord(int rx, int ry, int srcW, int srcH, int rotationDegrees) {
+  static ({int x, int y}) sourceCoord(
+    int rx,
+    int ry,
+    int srcW,
+    int srcH,
+    int rotationDegrees,
+  ) {
     return switch (rotationDegrees) {
       90 => (x: ry, y: srcH - 1 - rx),
       180 => (x: srcW - 1 - rx, y: srcH - 1 - ry),
@@ -108,81 +196,82 @@ class ImageUtils {
   // Lõi lấy mẫu — không cấp phát bộ nhớ theo từng pixel
   // ---------------------------------------------------------------------------
 
-  /// Lấy mẫu lưới [outW]×[outH] (láng giềng gần nhất) trên toàn bộ ảnh đã xoay,
-  /// đổi sang RGB và đẩy vào [sink]. Trả về false nếu định dạng frame không hỗ trợ.
-  static bool _sample(
-    FrameData f,
-    int rotation,
-    int outW,
-    int outH,
-    _SampleSink sink,
-  ) {
-    final planes = f.planes;
-    if (planes.isEmpty) return false;
-    final format = switch (planes.length) { 1 => 0, 2 => 1, _ => 2 }; // 0 BGRA, 1 NV12, 2 YUV 3 lớp
-    final srcW = f.width;
-    final srcH = f.height;
-    final rot = rotatedSize(srcW, srcH, rotation);
-
-    final p0 = planes[0].bytes;
-    final row0 = planes[0].bytesPerRow;
-    final p1 = format > 0 ? planes[1].bytes : p0;
-    final row1 = format > 0 ? planes[1].bytesPerRow : 0;
-    final p2 = format == 2 ? planes[2].bytes : p0;
-    final px1 = format == 2 ? (planes[1].bytesPerPixel ?? 1) : 2;
-
-    // Toạ độ trên ảnh đã xoay cho từng cột / hàng đầu ra — tính 1 lần
-    final colRx = Int32List(outW);
-    for (var x = 0; x < outW; x++) {
-      colRx[x] = ((x + 0.5) / outW * rot.width).floor().clamp(0, rot.width - 1);
-    }
-
-    var index = 0;
-    for (var y = 0; y < outH; y++) {
-      final ry = ((y + 0.5) / outH * rot.height).floor().clamp(0, rot.height - 1);
-      for (var x = 0; x < outW; x++) {
-        final rx = colRx[x];
-        int sx, sy;
-        switch (rotation) {
-          case 90:
-            sx = ry;
-            sy = srcH - 1 - rx;
-          case 180:
-            sx = srcW - 1 - rx;
-            sy = srcH - 1 - ry;
-          case 270:
-            sx = srcW - 1 - ry;
-            sy = rx;
-          default:
-            sx = rx;
-            sy = ry;
-        }
-
-        int r, g, b;
-        if (format == 0) {
-          final i = sy * row0 + sx * 4; // B, G, R, A
-          b = p0[i];
-          g = p0[i + 1];
-          r = p0[i + 2];
-        } else {
-          final yv = p0[sy * row0 + sx];
-          int u, v;
-          if (format == 1) {
-            final k = (sy >> 1) * row1 + (sx >> 1) * 2; // U, V xen kẽ
-            u = p1[k] - 128;
-            v = p1[k + 1] - 128;
-          } else {
-            final k = (sy >> 1) * row1 + (sx >> 1) * px1;
-            u = p1[k] - 128;
-            v = p2[k] - 128;
-          }
-          r = (yv + 1.370705 * v).round().clamp(0, 255);
-          g = (yv - 0.337633 * u - 0.698001 * v).round().clamp(0, 255);
-          b = (yv + 1.732446 * u).round().clamp(0, 255);
-        }
-        sink(index++, r, g, b);
+  /// Chọn cách đọc 1 pixel RGB theo định dạng frame (nhận biết qua số lớp — plane)
+  /// Mean luma (0..255) from a coarse grid; enough to detect a dark or
+  /// covered camera without touching every pixel. Null for unsupported frames.
+  static double? meanLuma(CameraImage image, {int grid = 24}) {
+    final read = _readerFor(image);
+    if (read == null || image.width <= 0 || image.height <= 0) return null;
+    double sum = 0;
+    for (int gy = 0; gy < grid; gy++) {
+      final y = (gy * 2 + 1) * image.height ~/ (grid * 2);
+      for (int gx = 0; gx < grid; gx++) {
+        final rgb = read((gx * 2 + 1) * image.width ~/ (grid * 2), y);
+        sum += 0.299 * (rgb >> 16) + 0.587 * ((rgb >> 8) & 255) + 0.114 * (rgb & 255);
       }
     }
-    return true;
+    return sum / (grid * grid);
+  }
+
+  static _PixelReader? _readerFor(CameraImage image) {
+    final planes = image.planes;
+
+    if (planes.length == 1) {
+      // BGRA8888: 4 byte/pixel theo thứ tự B, G, R, A; mỗi hàng có thể có byte đệm
+      final bytes = planes[0].bytes;
+      final int row = planes[0].bytesPerRow;
+      return (x, y) {
+        final int i = y * row + x * 4;
+        return (bytes[i + 2] << 16) | (bytes[i + 1] << 8) | bytes[i];
+      };
+    }
+
+    if (planes.length == 2) {
+      // NV12: lớp Y + lớp CbCr xen kẽ (U, V, U, V...) ở nửa độ phân giải
+      final yBytes = planes[0].bytes;
+      final int yRow = planes[0].bytesPerRow;
+      final int yPixel = planes[0].bytesPerPixel ?? 1;
+      final uvBytes = planes[1].bytes;
+      final int uvRow = planes[1].bytesPerRow;
+      final int uvPixel = planes[1].bytesPerPixel ?? 2;
+      return (x, y) {
+        final int uv = (y >> 1) * uvRow + (x >> 1) * uvPixel;
+        return _yuvToRgb(
+          yBytes[y * yRow + x * yPixel],
+          uvBytes[uv],
+          uvBytes[uv + 1],
+        );
+      };
+    }
+
+    if (planes.length >= 3) {
+      // YUV_420_888 (Android): U và V ở 2 lớp riêng, khoảng cách pixel theo bytesPerPixel
+      final yBytes = planes[0].bytes;
+      final int yRow = planes[0].bytesPerRow;
+      final int yPixel = planes[0].bytesPerPixel ?? 1;
+      final uBytes = planes[1].bytes;
+      final vBytes = planes[2].bytes;
+      final int uRow = planes[1].bytesPerRow;
+      final int uPixel = planes[1].bytesPerPixel ?? 1;
+      final int vRow = planes[2].bytesPerRow;
+      final int vPixel = planes[2].bytesPerPixel ?? 1;
+      return (x, y) {
+        final int u = (y >> 1) * uRow + (x >> 1) * uPixel;
+        final int v = (y >> 1) * vRow + (x >> 1) * vPixel;
+        return _yuvToRgb(yBytes[y * yRow + x * yPixel], uBytes[u], vBytes[v]);
+      };
+    }
+    return null;
+  }
+
+  static int _yuvToRgb(int yValue, int u, int v) {
+    final int uValue = u - 128;
+    final int vValue = v - 128;
+    final int r = (yValue + 1.370705 * vValue).round().clamp(0, 255);
+    final int g = (yValue - 0.337633 * uValue - 0.698001 * vValue)
+        .round()
+        .clamp(0, 255);
+    final int b = (yValue + 1.732446 * uValue).round().clamp(0, 255);
+    return (r << 16) | (g << 8) | b;
   }
 }
