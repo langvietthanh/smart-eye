@@ -5,7 +5,7 @@ import 'package:flutter/foundation.dart';
 import 'tts_service.dart';
 
 /// Độ ưu tiên câu nói — giá trị lớn hơn được nói trước và được phép ngắt lời (barge-in)
-enum SpeechPriority { playback, description, caution, danger }
+enum SpeechPriority { playback, description, guidance, caution, danger }
 
 /// Câu đang/vừa nói — hiển thị trên màn hình cho người nhìn kém / demo
 typedef SpokenLine = ({String text, SpeechPriority priority});
@@ -28,13 +28,13 @@ class _Request {
 
   /// Cảnh báo cũ quá 2 giây thì không còn đúng với thực tế → bỏ
   bool isStale(DateTime now) =>
-      priority.index >= SpeechPriority.caution.index &&
+      priority.index >= SpeechPriority.guidance.index &&
       now.difference(createdAt) > const Duration(seconds: 2);
 }
 
 /// CN10 — Speech Manager: điều phối mọi câu nói theo nguyên tắc "nói ít, đúng lúc".
 ///
-/// - Ưu tiên: cảnh báo nguy hiểm > chú ý > mô tả > nghe lại lịch sử
+/// - Ưu tiên: cảnh báo nguy hiểm > chú ý > chỉ dẫn (guidance) > mô tả > nghe lại lịch sử
 /// - Barge-in: câu ưu tiên cao hơn ngắt ngay câu đang nói
 /// - Dedupe + hysteresis theo chủ thể: cùng 1 vật đã gửi tới TTS ở mức ≥ hiện tại
 ///   trong thời gian cooldown thì im lặng; chỉ nói lại khi mức nguy hiểm TĂNG.
@@ -50,6 +50,7 @@ class SpeechManager {
   static const Map<SpeechPriority, Duration> cooldown = {
     SpeechPriority.danger: Duration(seconds: 6),
     SpeechPriority.caution: Duration(seconds: 10),
+    SpeechPriority.guidance: Duration.zero, // guide tự điều nhịp
     SpeechPriority.description: Duration(seconds: 3),
     SpeechPriority.playback: Duration.zero,
   };
@@ -144,7 +145,7 @@ class SpeechManager {
     final current = _current;
     if (current != null &&
         priority.index > current.priority.index &&
-        priority.index >= SpeechPriority.caution.index) {
+        priority.index >= SpeechPriority.guidance.index) {
       // Barge-in: bỏ câu đang nói, nói ngay câu khẩn cấp hơn
       _drop(current);
       _current = null;
