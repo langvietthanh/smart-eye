@@ -72,7 +72,6 @@ class VoiceCommandService {
 
   final SpeechRecognizer _recognizer;
   bool _initialized = false;
-  bool _available = false;
   Completer<VoiceResult>? _pending;
 
   VoiceCommandService([SpeechRecognizer? recognizer])
@@ -92,15 +91,14 @@ class VoiceCommandService {
   Future<void> _start(Completer<VoiceResult> c) async {
     try {
       if (!_initialized) {
-        _available = await _recognizer.initialize(
-          (msg) => _complete(c, VoiceResult(error: mapError(msg))),
+        _initialized = await _recognizer.initialize(
+          (msg) => _completePending(VoiceResult(error: mapError(msg))),
           onDone: () =>
-              _complete(c, const VoiceResult(error: VoiceError.noSpeech)),
+              _completePending(const VoiceResult(error: VoiceError.noSpeech)),
         );
-        _initialized = true;
       }
       if (c.isCompleted) return;
-      if (!_available) {
+      if (!_initialized) {
         _complete(c, const VoiceResult(error: VoiceError.unavailable));
         return;
       }
@@ -117,6 +115,11 @@ class VoiceCommandService {
     } catch (_) {
       _complete(c, const VoiceResult(error: VoiceError.unavailable));
     }
+  }
+
+  void _completePending(VoiceResult r) {
+    final c = _pending;
+    if (c != null) _complete(c, r);
   }
 
   void _complete(Completer<VoiceResult> c, VoiceResult r) {

@@ -156,4 +156,40 @@ void main() {
     expect(fake.initCalls, 1);
     expect(fake.listenCalls, 2);
   });
+
+  test('error and done callbacks work on later listens', () async {
+    final fake = FakeRecognizer();
+    final s = VoiceCommandService(fake);
+    var f = s.listen();
+    await Future<void>.delayed(Duration.zero);
+    fake.onResult!('a', true);
+    await f;
+    expect(s.isListening, isFalse);
+
+    f = s.listen();
+    await Future<void>.delayed(Duration.zero);
+    fake.onError!('error_network');
+    expect((await f).error, VoiceError.network);
+    expect(s.isListening, isFalse);
+
+    f = s.listen();
+    await Future<void>.delayed(Duration.zero);
+    fake.onDone!();
+    expect((await f).error, VoiceError.noSpeech);
+    expect(s.isListening, isFalse);
+  });
+
+  test('failed initialize is retried on next listen', () async {
+    final fake = FakeRecognizer()..initResult = false;
+    final s = VoiceCommandService(fake);
+    expect((await s.listen()).error, VoiceError.unavailable);
+    expect(s.isListening, isFalse);
+
+    fake.initResult = true;
+    final f = s.listen();
+    await Future<void>.delayed(Duration.zero);
+    fake.onResult!('đi đến ghế', true);
+    expect((await f).text, 'đi đến ghế');
+    expect(fake.initCalls, 2);
+  });
 }
