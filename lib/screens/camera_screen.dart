@@ -30,6 +30,7 @@ import '../services/proximity_pulse.dart';
 import '../services/scene_freshness.dart';
 import '../services/sight_monitor.dart';
 import '../services/speech_manager.dart';
+import '../services/ui_settings.dart';
 import '../utils/image_utils.dart';
 import '../utils/label_catalog.dart';
 import 'history_screen.dart';
@@ -265,7 +266,15 @@ class _CameraScreenState extends State<CameraScreen>
         if (_disposed) return;
       }
 
-      // 3. Lịch sử chuyến đi + GPS (không bắt buộc)
+      // 3. Cài đặt đã lưu + lịch sử chuyến đi + GPS (không bắt buộc)
+      final settings = await UiSettings.load();
+      if (_disposed) return;
+      if (mounted) {
+        setState(() {
+          _speech.muted = settings.quiet;
+          _autoDescribe = settings.autoDescribe;
+        });
+      }
       await _history.startTrip();
       _trip = _history.currentTrip;
       if (_disposed) return;
@@ -975,19 +984,9 @@ class _CameraScreenState extends State<CameraScreen>
     });
   }
 
-  void _speakRecap() {
-    HapticFeedback.selectionClick();
-    final trip = _history.currentTrip;
-    if (trip == null) return;
-    _speech.say(
-      CaptionBuilder.recap(trip),
-      SpeechPriority.description,
-      force: true,
-    );
-  }
-
   void _toggleQuiet() {
     setState(() => _speech.muted = !_speech.muted);
+    _saveSettings();
     _speech.say(
       _speech.muted
           ? 'Chế độ yên lặng. Chỉ báo khi nguy hiểm.'
@@ -999,11 +998,26 @@ class _CameraScreenState extends State<CameraScreen>
 
   void _toggleAutoDescribe() {
     setState(() => _autoDescribe = !_autoDescribe);
+    _saveSettings();
     _lastDescribeAt = DateTime.now();
     _speech.say(
       _autoDescribe
           ? 'Bật tự động mô tả, khoảng 45 giây một lần.'
           : 'Tắt tự động mô tả.',
+      SpeechPriority.description,
+      force: true,
+    );
+  }
+
+  void _saveSettings() {
+    UiSettings(quiet: _speech.muted, autoDescribe: _autoDescribe).save();
+  }
+
+  /// Mở lịch sử sẽ dừng camera và ngừng cảnh báo → chạm nhầm chỉ nghe hướng dẫn, giữ lâu mới mở.
+  void _historyHint() {
+    HapticFeedback.selectionClick();
+    _speech.say(
+      'Giữ lâu để mở lịch sử. Khi mở, app tạm ngừng cảnh báo.',
       SpeechPriority.description,
       force: true,
     );
@@ -1223,17 +1237,15 @@ class _CameraScreenState extends State<CameraScreen>
       body: Stack(
         fit: StackFit.expand,
         children: [
-          // Layer 1: Camera preview + cử chỉ (chạm 2 lần = mô tả, giữ lâu = tóm tắt chuyến đi)
+          // Layer 1: Camera preview + cử chỉ (chạm 2 lần = mô tả)
           Semantics(
             button: true,
-            label: 'Khung camera. Chạm hai lần để nghe xung quanh có gì. Giữ lâu để nghe tóm tắt chuyến đi.',
+            label: 'Khung camera. Chạm hai lần để nghe xung quanh có gì.',
             onTap: _requestDescribe,
-            onLongPress: _speakRecap,
             excludeSemantics: true,
             child: GestureDetector(
               behavior: HitTestBehavior.opaque,
               onDoubleTap: _requestDescribe,
-              onLongPress: _speakRecap,
               // Chế độ Test: KHÔNG hiện camera thật để không ai nhầm khung giả lập là kết quả nhận diện
               child: RepaintBoundary(
                 child: cameraReady && !_isMockTest
@@ -1309,7 +1321,9 @@ class _CameraScreenState extends State<CameraScreen>
                           icon: _speech.muted
                               ? Icons.volume_off
                               : Icons.volume_up,
-                          label: _speech.muted ? 'Yên lặng' : 'Đầy đủ',
+                          label: _speech.muted
+                              ? 'Nhắc: yên lặng'
+                              : 'Nhắc: đầy đủ',
                           semantics: _speech.muted
                               ? 'Chế độ yên lặng đang bật, chỉ báo nguy hiểm. Chạm để tắt.'
                               : 'Chế độ nhắc đầy đủ. Chạm để chuyển sang yên lặng.',
@@ -1319,7 +1333,9 @@ class _CameraScreenState extends State<CameraScreen>
                         const SizedBox(width: 8),
                         _toggleChip(
                           icon: Icons.record_voice_over,
-                          label: _autoDescribe ? 'Tự mô tả' : 'Mô tả khi hỏi',
+                          label: _autoDescribe
+                              ? 'Mô tả: tự động'
+                              : 'Mô tả: khi hỏi',
                           semantics: _autoDescribe
                               ? 'Tự động mô tả đang bật. Chạm để tắt.'
                               : 'Tự động mô tả đang tắt. Chạm để bật.',
@@ -1410,17 +1426,11 @@ class _CameraScreenState extends State<CameraScreen>
                         ),
                         const SizedBox(width: 8),
                         _bigButton(
-                          Icons.summarize,
-                          'Tóm tắt',
-                          'Nghe tóm tắt chuyến đi hiện tại',
-                          _speakRecap,
-                        ),
-                        const SizedBox(width: 8),
-                        _bigButton(
                           Icons.history,
-                          'Lịch sử',
-                          'Mở lịch sử các chuyến đi',
-                          _openHistory,
+                          'Lịch sử (giữ)',
+                          'Lịch sử chuyến đi. Giữ lâu để mở. Khi mở, app tạm ngừng cảnh báo.',
+                          _historyHint,
+                          onLongPress: _openHistory,
                         ),
                       ],
                     ),
@@ -1519,18 +1529,22 @@ class _CameraScreenState extends State<CameraScreen>
     IconData icon,
     String label,
     String semantics,
-    VoidCallback onTap,
-  ) {
+    VoidCallback onTap, {
+    VoidCallback? onLongPress,
+  }) {
     return Expanded(
       child: Semantics(
         button: true,
         label: semantics,
+        onTap: onTap,
+        onLongPress: onLongPress,
         excludeSemantics: true,
         child: Material(
           color: Colors.yellow.shade600,
           borderRadius: BorderRadius.circular(16),
           child: InkWell(
             onTap: onTap,
+            onLongPress: onLongPress,
             borderRadius: BorderRadius.circular(16),
             child: SizedBox(
               height: 76,
