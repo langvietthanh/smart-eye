@@ -451,11 +451,21 @@ class _CameraScreenState extends State<CameraScreen>
     }
   }
 
+  bool get _showsBothSidesBlocked =>
+      _speech.showing.value?.text.endsWith(bothSidesBlocked) ?? false;
+
+  /// Leaving a trap also clears its banner, so a quick re-trap is not mistaken
+  /// for a line that was just spoken.
+  void _endTrap() {
+    _trapAnnounced = false;
+    _speech.dropSubject('path:trapped');
+    if (_showsBothSidesBlocked) _speech.showing.value = null;
+  }
+
   void _onBlockage(PathEvent? event) {
     const subject = 'path:trapped';
     if (event == PathEvent.cleared) {
-      _trapAnnounced = false;
-      _speech.dropSubject(subject);
+      _endTrap();
       _speech.say(
         'Đường đi thông thoáng.',
         SpeechPriority.caution,
@@ -466,12 +476,17 @@ class _CameraScreenState extends State<CameraScreen>
     if (event == PathEvent.opened) {
       // Facing a single obstacle with a side open: stop "turn slowly" and let
       // the next obstacle alert speak at once, with its verified side clause.
-      _trapAnnounced = false;
-      _speech.dropSubject(subject);
+      _endTrap();
       _speech.dropSubject('depth:center');
       return;
     }
     if (!_blockage.trapped) return;
+    if (!_trapAnnounced && _showsBothSidesBlocked) {
+      // An obstacle alert is saying (or just said) both sides are blocked:
+      // one alert, already logged by that alert.
+      _trapAnnounced = true;
+      return;
+    }
     if (!_speech.canSay(SpeechPriority.danger, subject: subject)) return;
     _lastAlertAt = DateTime.now();
     _lastDangerAt = _lastAlertAt;
@@ -483,11 +498,9 @@ class _CameraScreenState extends State<CameraScreen>
       );
       return;
     }
-    const text =
-        'Đứng lại! Phía trước và hai bên đều có vật cản. Xoay người chậm để tìm lối.';
-    final log = _eventLogger(TripEventType.danger, text);
+    final log = _eventLogger(TripEventType.danger, trapAlertText);
     _speech.say(
-      text,
+      trapAlertText,
       SpeechPriority.danger,
       subject: subject,
       onStart: () {
