@@ -84,6 +84,7 @@ class _CameraScreenState extends State<CameraScreen>
   bool _encodingMemory = false;
   Timer? _diagnosticTimer;
   final ValueNotifier<String> _diagnostics = ValueNotifier('');
+  final ValueNotifier<bool> _listening = ValueNotifier(false);
   int _diagnosticFrames = 0;
   int _diagnosticAtMs = 0;
   int _frameGeneration = 0;
@@ -1130,7 +1131,7 @@ class _CameraScreenState extends State<CameraScreen>
     );
   }
 
-  /// Long press: listen for one spoken command and dispatch it.
+  /// Double tap / long press: listen for one spoken command and dispatch it.
   Future<void> _listenForCommand() async {
     if (_disposed || _commandBusy || _voice.isListening) return;
     _commandBusy = true;
@@ -1149,6 +1150,18 @@ class _CameraScreenState extends State<CameraScreen>
     await _speech.stopAll();
     _speech.resetDedupe();
     if (_disposed || !_foreground || _paused) return;
+    // Spoken cue, finished before the mic opens so it is not transcribed.
+    await _speech
+        .sayAndWait(
+          'Đang nghe. Hãy nói đích đến.',
+          SpeechPriority.guidance,
+          subject: 'nav',
+          force: true,
+        )
+        .timeout(const Duration(seconds: 3), onTimeout: () => false);
+    if (_disposed || !_foreground || _paused) return;
+    HapticFeedback.mediumImpact();
+    _listening.value = true;
     _listenCancelledByApp = false;
     // Alerts are never muted, so the microphone may hear them: remember every
     // line spoken while listening and strip it from the transcript.
@@ -1164,7 +1177,9 @@ class _CameraScreenState extends State<CameraScreen>
       result = await _voice.listen();
     } finally {
       _speech.showing.removeListener(recordEcho);
+      if (!_disposed) _listening.value = false;
     }
+    HapticFeedback.lightImpact(); // Mic closed
     // Cancelled because the app left the screen: say nothing.
     if (_listenCancelledByApp || _disposed || !_foreground || _paused) return;
     var text = result.text;
@@ -1178,7 +1193,7 @@ class _CameraScreenState extends State<CameraScreen>
           'Chưa có quyền dùng micro. Hãy cấp quyền trong cài đặt.',
         VoiceError.unavailable => 'Máy này chưa hỗ trợ lệnh giọng nói.',
         VoiceError.network => 'Cần mạng để nhận lệnh giọng nói.',
-        VoiceError.noSpeech => 'Không nghe rõ. Giữ lâu để nói lại.',
+        VoiceError.noSpeech => 'Không nghe rõ. Chạm hai lần để nói lại.',
       });
       return;
     }
@@ -1374,6 +1389,7 @@ class _CameraScreenState extends State<CameraScreen>
     _disposed = true;
     _diagnosticTimer?.cancel();
     _diagnostics.dispose();
+    _listening.dispose();
     WidgetsBinding.instance.removeObserver(this);
     _mockTimer?.cancel();
     _describeFallback?.cancel();
@@ -1492,18 +1508,17 @@ class _CameraScreenState extends State<CameraScreen>
       body: Stack(
         fit: StackFit.expand,
         children: [
-          // Layer 1: Camera preview + cử chỉ (chạm 2 lần = mô tả, giữ lâu = nói lệnh)
+          // Layer 1: Camera preview + cử chỉ (chạm 2 lần hoặc giữ lâu = nói lệnh / đích đến)
           Semantics(
             button: true,
             label:
-                'Khung camera. Chạm hai lần để nghe xung quanh có gì. '
-                'Giữ lâu để nói lệnh, ví dụ: đi đến ghế.',
-            onTap: _requestDescribe,
+                'Khung camera. Chạm hai lần để nói đích đến, ví dụ: đi đến ghế.',
+            onTap: _listenForCommand,
             onLongPress: _listenForCommand,
             excludeSemantics: true,
             child: GestureDetector(
               behavior: HitTestBehavior.opaque,
-              onDoubleTap: _requestDescribe,
+              onDoubleTap: _listenForCommand,
               onLongPress: _listenForCommand,
               // Chế độ Test: KHÔNG hiện camera thật để không ai nhầm khung giả lập là kết quả nhận diện
               child: RepaintBoundary(
@@ -1617,6 +1632,37 @@ class _CameraScreenState extends State<CameraScreen>
                           ),
                         ),
                       ),
+                    ExcludeSemantics(
+                      child: ValueListenableBuilder<bool>(
+                        valueListenable: _listening,
+                        builder: (_, on, _) => !on
+                            ? const SizedBox.shrink()
+                            : Container(
+                                margin: const EdgeInsets.only(bottom: 8),
+                                padding: const EdgeInsets.all(12),
+                                decoration: BoxDecoration(
+                                  color: Colors.blue.shade700,
+                                  borderRadius: BorderRadius.circular(12),
+                                ),
+                                child: const Row(
+                                  children: [
+                                    Icon(Icons.mic, color: Colors.white),
+                                    SizedBox(width: 8),
+                                    Expanded(
+                                      child: Text(
+                                        'Đang nghe… hãy nói đích đến',
+                                        style: TextStyle(
+                                          color: Colors.white,
+                                          fontSize: 20,
+                                          fontWeight: FontWeight.bold,
+                                        ),
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                      ),
+                    ),
                     if (!_speech.vietnameseAvailable) ...[
                       _voiceMissingBanner(),
                       const SizedBox(height: 8),
