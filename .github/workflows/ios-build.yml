@@ -34,6 +34,14 @@ jobs:
       - name: Cài thư viện
         run: flutter pub get
 
+      # Pod TensorFlow Lite (tflite_flutter) nặng: giữ lại giữa các lần build
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ios/Pods
+            ~/Library/Caches/CocoaPods
+          key: pods-${{ runner.os }}-${{ hashFiles('pubspec.lock', 'ios/Podfile') }}
+
       - name: Unit test
         run: flutter test
 
