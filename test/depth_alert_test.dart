@@ -3,6 +3,17 @@ import 'package:smart_eye/models/scene_info.dart';
 import 'package:smart_eye/services/depth_alert.dart';
 
 void main() {
+  test('trap line is the danger alert with both sides blocked', () {
+    expect(
+      depthAlertText(
+        depthLevel: AlertLevel.danger,
+        left: SideState.blocked,
+        right: SideState.blocked,
+      ),
+      trapAlertText,
+    );
+  });
+
   group('depthAlertText', () {
     test('depthLevel info returns null', () {
       expect(depthAlertText(depthLevel: AlertLevel.info), isNull);
@@ -41,26 +52,23 @@ void main() {
       );
     });
 
-    test(
-      'detectorLevel caution + depth danger returns "Dừng lại! Vật cản ngay trước mặt."',
-      () {
-        expect(
-          depthAlertText(
-            depthLevel: AlertLevel.danger,
-            detectorLevel: AlertLevel.caution,
-          ),
-          'Dừng lại! Vật cản ngay trước mặt.',
-        );
-        expect(
-          depthAlertText(
-            depthLevel: AlertLevel.danger,
-            detectorLevel: AlertLevel.caution,
-            metres: 0.9,
-          ),
-          'Dừng lại! Vật cản ngay trước mặt.',
-        );
-      },
-    );
+    test('detectorLevel caution + depth danger returns "Dừng lại! Vật cản ngay trước mặt."', () {
+      expect(
+        depthAlertText(
+          depthLevel: AlertLevel.danger,
+          detectorLevel: AlertLevel.caution,
+        ),
+        'Dừng lại! Vật cản ngay trước mặt.',
+      );
+      expect(
+        depthAlertText(
+          depthLevel: AlertLevel.danger,
+          detectorLevel: AlertLevel.caution,
+          metres: 0.9,
+        ),
+        'Dừng lại! Vật cản ngay trước mặt.',
+      );
+    });
 
     test('detectorLevel caution + depth caution returns null', () {
       expect(
@@ -92,57 +100,48 @@ void main() {
       );
     });
 
-    test(
-      'không có YOLO + caution + metres 1.4 returns "Chậm lại. Vật cản cách 1,5 mét."',
-      () {
-        expect(
-          depthAlertText(
-            depthLevel: AlertLevel.caution,
-            detectorLevel: null,
-            metres: 1.4,
-          ),
-          'Chậm lại. Vật cản cách 1,5 mét.',
-        );
-      },
-    );
-
-    test(
-      'không có YOLO + caution + metres 2.0 returns "Chậm lại. Vật cản cách 2 mét."',
-      () {
-        expect(
-          depthAlertText(
-            depthLevel: AlertLevel.caution,
-            detectorLevel: null,
-            metres: 2.0,
-          ),
-          'Chậm lại. Vật cản cách 2 mét.',
-        );
-      },
-    );
-
-    test(
-      'không có YOLO + caution + metres null returns "Chậm lại. Có vật phía trước."',
-      () {
-        expect(
-          depthAlertText(
-            depthLevel: AlertLevel.caution,
-            detectorLevel: null,
-            metres: null,
-          ),
-          'Chậm lại. Có vật phía trước.',
-        );
-      },
-    );
-
-    test('không có YOLO + danger returns "Dừng lại! Vật cản ngay trước mặt."', () {
+    test('không có YOLO + caution + metres 1.4 returns "Chậm lại. Vật cản cách 1,5 mét."', () {
       expect(
         depthAlertText(
-          depthLevel: AlertLevel.danger,
+          depthLevel: AlertLevel.caution,
           detectorLevel: null,
+          metres: 1.4,
         ),
-        'Dừng lại! Vật cản ngay trước mặt.',
+        'Chậm lại. Vật cản cách 1,5 mét.',
       );
     });
+
+    test('không có YOLO + caution + metres 2.0 returns "Chậm lại. Vật cản cách 2 mét."', () {
+      expect(
+        depthAlertText(
+          depthLevel: AlertLevel.caution,
+          detectorLevel: null,
+          metres: 2.0,
+        ),
+        'Chậm lại. Vật cản cách 2 mét.',
+      );
+    });
+
+    test('không có YOLO + caution + metres null returns "Chậm lại. Có vật phía trước."', () {
+      expect(
+        depthAlertText(
+          depthLevel: AlertLevel.caution,
+          detectorLevel: null,
+          metres: null,
+        ),
+        'Chậm lại. Có vật phía trước.',
+      );
+    });
+
+    test(
+      'không có YOLO + danger returns "Dừng lại! Vật cản ngay trước mặt."',
+      () {
+        expect(
+          depthAlertText(depthLevel: AlertLevel.danger, detectorLevel: null),
+          'Dừng lại! Vật cản ngay trước mặt.',
+        );
+      },
+    );
 
     test('detectorLevel info does not suppress caution or danger', () {
       expect(
@@ -166,11 +165,11 @@ void main() {
   group('sideClause', () {
     const c = SideState.clear, b = SideState.blocked, u = SideState.unknown;
     test('one side clear', () {
-      expect(sideClause(c, b), 'Bên trái trống.');
-      expect(sideClause(u, c), 'Bên phải trống.');
+      expect(sideClause(c, b), 'Đi chéo sang trái.');
+      expect(sideClause(u, c), 'Đi chéo sang phải.');
     });
-    test('both clear / both blocked', () {
-      expect(sideClause(c, c), 'Hai bên trống.');
+    test('both clear goes right / both blocked', () {
+      expect(sideClause(c, c), 'Đi chéo sang phải.');
       expect(sideClause(b, b), 'Hai bên có vật cản.');
     });
     test('nothing certain says nothing', () {
@@ -188,7 +187,7 @@ void main() {
           left: SideState.blocked,
           right: SideState.clear,
         ),
-        'Chậm lại. Vật cản cách 1,5 mét. Bên phải trống.',
+        'Chậm lại. Vật cản cách 1,5 mét. Đi chéo sang phải.',
       );
     });
 
@@ -213,7 +212,7 @@ void main() {
           left: SideState.clear,
           right: SideState.blocked,
         ),
-        'Dừng lại! Có ghế ngay phía trước. Bên trái trống.',
+        'Dừng lại! Có ghế ngay phía trước. Đi chéo sang trái.',
       );
     });
 

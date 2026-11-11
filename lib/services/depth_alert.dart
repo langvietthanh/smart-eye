@@ -17,7 +17,7 @@ String? depthAlertText({
   }
   final String head;
   if (depthLevel == AlertLevel.danger) {
-    head = 'Dừng lại! Vật cản ngay trước mặt.';
+    head = _dangerHead;
   } else if (metres != null) {
     head = 'Chậm lại. Vật cản cách ${spokenMetres(metres)} mét.';
   } else {
@@ -26,16 +26,25 @@ String? depthAlertText({
   return _join(head, sideClause(left, right));
 }
 
-/// Hai bên của vật cản phía trước; null khi không chắc chắn điều gì.
-/// Chỉ mô tả, không ra lệnh rẽ.
+/// Hướng lách qua vật cản phía trước; null khi không chắc chắn điều gì.
+/// Làn trống chỉ rộng 40 cm nên lệnh là "đi chéo", không phải quay hẳn.
 String? sideClause(SideState left, SideState right) {
   const c = SideState.clear, b = SideState.blocked;
-  if (left == c && right == c) return 'Hai bên trống.';
-  if (left == c) return 'Bên trái trống.';
-  if (right == c) return 'Bên phải trống.';
-  if (left == b && right == b) return 'Hai bên có vật cản.';
+  // Hai bên trống: ưu tiên bên phải.
+  if (right == c) return 'Đi chéo sang phải.';
+  if (left == c) return 'Đi chéo sang trái.';
+  if (left == b && right == b) return bothSidesBlocked;
   return null;
 }
+
+const _dangerHead = 'Dừng lại! Vật cản ngay trước mặt.';
+
+/// Ends every obstacle alert that already says what the trap line says.
+const bothSidesBlocked = 'Hai bên có vật cản.';
+
+/// The trap line is the same sentence as a danger depth alert with both sides
+/// blocked.
+const trapAlertText = '$_dangerHead $bothSidesBlocked';
 
 /// Nối câu hai bên vào cảnh báo của YOLO, chỉ khi vật nằm ở giữa: với vật
 /// bên trái/phải, câu "bên ... trống" dễ mâu thuẫn với chính cảnh báo.
