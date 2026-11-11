@@ -90,22 +90,30 @@ class CommandParser {
     ].join(' ');
   }
 
-  static final Map<String, _Entry> _dict = _buildDict();
+  // Keyed with diacritics: folded, "chỗ" (place) would match "chó" (dog).
+  static final Map<String, _Entry> _dictVi = _buildDict(_lower);
+  // For transcripts with no diacritics at all ("di den ghe").
+  static final Map<String, _Entry> _dict = _buildDict(fold);
 
-  static Map<String, _Entry> _buildDict() {
+  static String _lower(String s) => s
+      .toLowerCase()
+      .replaceAll(RegExp(r'[^\p{L}\p{M}\p{N}]+', unicode: true), ' ')
+      .trim();
+
+  static Map<String, _Entry> _buildDict(String Function(String) keyOf) {
     final d = <String, _Entry>{};
-    void add(String nameVi, Iterable<String> labels, [String? key]) {
-      final k = key ?? fold(nameVi);
+    void add(String nameVi, Iterable<String> labels, [String? alias]) {
+      final k = keyOf(alias ?? nameVi);
       final e = d.putIfAbsent(k, () => _Entry(nameVi, <String>{}));
       e.labels.addAll(labels);
     }
 
     labelVi.forEach((en, vi) => add(vi, [en]));
-    add('ghế', ['chair'], 'cho ngoi');
-    add('bàn', ['dining table'], 'ban an');
-    add('cầu thang', _stairs, 'cau thang');
-    add('cửa', ['door'], 'cua');
-    add('cửa', ['door'], 'cua ra vao');
+    add('ghế', ['chair'], 'chỗ ngồi');
+    add('bàn', ['dining table'], 'bàn ăn');
+    add('cầu thang', _stairs, 'cầu thang');
+    add('cửa', ['door'], 'cửa');
+    add('cửa', ['door'], 'cửa ra vào');
     return d;
   }
 
@@ -117,9 +125,14 @@ class CommandParser {
   static Command parse(String text, Set<String> available) {
     final folded = fold(text);
     if (folded.isEmpty) return Unknown(text);
-    final tokens = folded.split(' ');
+    // Folding merges dừng/đứng/đúng and chỗ/chó: match with diacritics unless
+    // the transcript has none.
+    final plain = !RegExp(r'[^\x00-\x7F]').hasMatch(text);
+    final matchText = plain ? folded : _lower(text);
+    final dict = plain ? _dict : _dictVi;
 
-    if (const {'dung', 'thoi', 'huy'}.contains(tokens.first)) {
+    if ((plain ? const {'dung', 'thoi', 'huy'} : const {'dừng', 'thôi', 'hủy'})
+        .contains(matchText.split(' ').first)) {
       return const Stop();
     }
     if (folded.contains('xung quanh') || folded.startsWith('mo ta')) {
@@ -127,10 +140,10 @@ class CommandParser {
     }
     if (folded.contains('tom tat')) return const Recap();
 
-    final padded = ' $folded ';
+    final padded = ' $matchText ';
     _Entry? best;
     var bestKey = '';
-    _dict.forEach((k, e) {
+    dict.forEach((k, e) {
       if (k.length > bestKey.length && padded.contains(' $k ')) {
         best = e;
         bestKey = k;

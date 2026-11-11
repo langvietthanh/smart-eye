@@ -67,6 +67,17 @@ void main() {
     expect(parse('', v4), isA<Unknown>());
   });
 
+  test('words that only differ by diacritics are not confused', () {
+    // "chỗ" (place) is not "chó" (dog); đúng/đứng are not dừng.
+    expect(
+      parse('đi đến chỗ của Lan', v4),
+      isA<UnsupportedTarget>().having((c) => c.nameVi, 'n', 'của lan'),
+    );
+    expect(parse('đúng rồi đi đến ghế', v4), navigateTo({'chair'}));
+    expect(parse('đứng lên đi đến ghế', v4), navigateTo({'chair'}));
+    expect(parse('dung lai', v4), isA<Stop>());
+  });
+
   test('unknown name after verb is unsupported', () {
     expect(
       parse('đi đến cái đàn piano', v4),
