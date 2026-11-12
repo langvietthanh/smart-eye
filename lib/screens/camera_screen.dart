@@ -487,17 +487,12 @@ class _CameraScreenState extends State<CameraScreen>
       _trapAnnounced = true;
       return;
     }
+    // Said once per trap: in a long narrow spot repeats were only noise; the
+    // proximity pulse keeps running.
+    if (_trapAnnounced) return;
     if (!_speech.canSay(SpeechPriority.danger, subject: subject)) return;
     _lastAlertAt = DateTime.now();
     _lastDangerAt = _lastAlertAt;
-    if (_trapAnnounced) {
-      _speech.say(
-        'Vẫn bị chặn. Xoay người chậm.',
-        SpeechPriority.danger,
-        subject: subject,
-      );
-      return;
-    }
     final log = _eventLogger(TripEventType.danger, trapAlertText);
     _speech.say(
       trapAlertText,
@@ -1524,8 +1519,7 @@ class _CameraScreenState extends State<CameraScreen>
           // Layer 1: Camera preview + cử chỉ (chạm 2 lần hoặc giữ lâu = nói lệnh / đích đến)
           Semantics(
             button: true,
-            label:
-                'Khung camera. Chạm hai lần để nói đích đến, ví dụ: đi đến ghế.',
+            label: 'Khung camera. Chạm hai lần để nói đích đến, ví dụ: đi đến ghế.',
             onTap: _listenForCommand,
             onLongPress: _listenForCommand,
             excludeSemantics: true,
