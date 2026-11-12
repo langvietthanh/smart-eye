@@ -88,10 +88,21 @@ void main() {
     expect(p.trapped, false);
   });
 
-  test('YOLO sides and LiDAR centre combine', () {
-    expect(run(p, sides, 0, 1500, depth: scan(null, 1.2, null)), [
+  test('with LiDAR, metres decide: YOLO "near" sides do not trap', () {
+    // Desks beside an aisle look "khá gần" to YOLO but are beyond 1.5 m.
+    expect(run(p, sides, 0, 3000, depth: scan(null, 1.2, null)), isEmpty);
+    expect(run(p, sides, 3250, 4750, depth: scan(1.0, 1.2, 0.8)), [
       PathEvent.trapped,
     ]);
+  });
+
+  test('a column LiDAR cannot read falls back to YOLO', () {
+    final s = LidarScan(
+      const LidarUnknown(),
+      LidarObstacle(1.2),
+      LidarObstacle(1),
+    );
+    expect(run(p, [1, 0, 0], 0, 1500, depth: s), [PathEvent.trapped]);
   });
 
   test('LiDAR beyond 1.5 m does not block', () {

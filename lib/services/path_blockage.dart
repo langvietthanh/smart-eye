@@ -61,18 +61,19 @@ class PathBlockage {
   bool _fresh(DateTime? t, DateTime now, Duration maxAge) =>
       t != null && now.difference(t) <= maxAge;
 
-  /// `[left, centre, right]`: YOLO column full, or LiDAR obstacle within
-  /// [blockedWithin] metres, from inputs that are still fresh.
+  /// `[left, centre, right]` from inputs that are still fresh: a LiDAR
+  /// obstacle within [blockedWithin] metres, or, where LiDAR has no reading,
+  /// a full YOLO column. YOLO's "near" is box size, not metres: a chair 2–3 m
+  /// away reads "khá gần", so it never overrules a LiDAR measurement.
   List<bool> blocked(DateTime now) {
     final yolo = _fresh(_loadAt, now, detectionMaxAge);
     final lidar = _fresh(_scanAt, now, depthMaxAge);
     return List.generate(3, (i) {
-      if (yolo && _load![i] >= 1.0) return true;
-      if (lidar) {
-        final r = _scan![HPos.values[i]];
+      final r = lidar ? _scan![HPos.values[i]] : const LidarUnknown();
+      if (r is! LidarUnknown) {
         return r is LidarObstacle && r.distance <= blockedWithin;
       }
-      return false;
+      return yolo && _load![i] >= 1.0;
     });
   }
 
