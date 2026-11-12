@@ -1,4 +1,3 @@
-import '../services/visual_proximity.dart';
 import 'tracked_object.dart';
 
 /// Vị trí ngang của vật trong khung hình (chia 3 cột — CN6)
@@ -45,9 +44,6 @@ class ObjectInfo {
   final bool approaching;
   final bool closingQuickly;
 
-  /// Reaches the core of the walking corridor ([PathCorridor.contains]).
-  final bool inPath;
-
   const ObjectInfo({
     required this.track,
     required this.pos,
@@ -55,7 +51,6 @@ class ObjectInfo {
     required this.category,
     required this.approaching,
     this.closingQuickly = false,
-    this.inPath = false,
   });
 
   String get label => track.labelVi;
@@ -89,19 +84,14 @@ class HazardAlert {
 class SceneAssessment {
   final List<ObjectInfo> objects;
 
-  /// Trọng số vật đã nhận diện bên trái / trong / bên phải lối đi
-  /// ([corridor]). 0 không chứng minh lối đi an toàn.
+  /// Trọng số vật đã nhận diện trong 3 cột. 0 không chứng minh lối đi an toàn.
   final List<double> columnLoad;
   final HazardAlert? alert;
-
-  /// The corridor this frame was judged with; null = [PathCorridor.typical].
-  final PathCorridor? corridor;
 
   const SceneAssessment({
     required this.objects,
     required this.columnLoad,
     this.alert,
-    this.corridor,
   });
 
   static const empty = SceneAssessment(objects: [], columnLoad: [0, 0, 0]);

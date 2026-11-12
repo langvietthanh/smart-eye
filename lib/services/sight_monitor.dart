@@ -98,10 +98,6 @@ class SightMonitor {
     _up = _pitch! < (_up ? upExit : upEnter);
   }
 
-  /// Smoothed camera pitch below the horizon, degrees; null before the
-  /// first accelerometer reading.
-  double? get pitch => _pitch;
-
   SightProblem? check(DateTime now) {
     final deadline = _deadline;
     if (deadline == null) return null;
