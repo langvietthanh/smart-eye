@@ -181,7 +181,7 @@ class _CameraScreenState extends State<CameraScreen>
 
   /// "Đi thẳng." repeats this often while the way ahead stays open, and is
   /// said again when it reopens, but never closer together than the min gap.
-  static const Duration _straightRepeat = Duration(seconds: 10);
+  static const Duration _straightRepeat = Duration(seconds: 3);
   static const Duration _straightMinGap = Duration(seconds: 3);
   DateTime? _straightAt;
   bool _straightOwed = false;
