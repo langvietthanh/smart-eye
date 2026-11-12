@@ -47,18 +47,26 @@ LidarDepthFrame render({
   double range = 5,
   bool tracking = true,
   List<(double, double, double, double)> holes = const [],
+  double yawDeg = 0, // positive turns the phone towards +x
+  double cameraX = 0,
 }) {
   final p = pitchDeg * pi / 180, r = rollDeg * pi / 180;
-  final look = [0.0, -sin(p), cos(p)];
+  final y = yawDeg * pi / 180;
+  List<double> yawed(List<double> v) => [
+    v[0] * cos(y) + v[2] * sin(y),
+    v[1],
+    -v[0] * sin(y) + v[2] * cos(y),
+  ];
+  final look = yawed([0.0, -sin(p), cos(p)]);
   final right0 = [1.0, 0.0, 0.0];
   final up0 = [0.0, cos(p), sin(p)];
-  final right = [
+  final right = yawed([
     for (var i = 0; i < 3; i++) cos(r) * right0[i] + sin(r) * up0[i],
-  ];
-  final up = [
+  ]);
+  final up = yawed([
     for (var i = 0; i < 3; i++) -sin(r) * right0[i] + cos(r) * up0[i],
-  ];
-  final origin = [0.0, cameraHeight, 0.0];
+  ]);
+  final origin = [cameraX, cameraHeight, 0.0];
   final depth = Float32List(w * h);
   final conf = Uint8List(w * h);
   const cx = (w - 1) / 2, cy = (h - 1) / 2;
@@ -229,10 +237,10 @@ void sideStabilityTests() {
     for (var i = 0; i < 3; i++) {
       s.update(both);
     }
-    expect(
-      s.update(rightBlocked),
-      (left: SideState.clear, right: SideState.blocked),
-    );
+    expect(s.update(rightBlocked), (
+      left: SideState.clear,
+      right: SideState.blocked,
+    ));
   });
 
   test('a broken clear streak starts over', () {
@@ -439,6 +447,54 @@ void warningTests() {
     expect(s.left, isA<LidarObstacle>());
     expect(s.right, isA<LidarObstacle>());
     expect(s.center, isA<LidarClear>());
+  });
+
+  test('a 1.2 m aisle walked off-centre and at an angle is open ahead', () {
+    for (final x in [0.0, -0.25, 0.25]) {
+      for (final yaw in [-10.0, 10.0]) {
+        final c = LidarAnalysis()
+            .analyzeScan(
+              render(
+                cameraX: x,
+                yawDeg: yaw,
+                boxes: [sideWall(-0.6), sideWall(0.6)],
+              ),
+            )
+            .center;
+        expect(
+          c is LidarClear ||
+              (c as LidarObstacle).distance > LidarWarning.cautionExit,
+          isTrue,
+          reason: 'offset $x m, yaw $yaw°: $c',
+        );
+      }
+    }
+  });
+
+  test('the end wall of an aisle walked at an angle still blocks', () {
+    final c = LidarAnalysis().analyzeScan(
+      render(
+        cameraX: -0.25,
+        yawDeg: -10,
+        boxes: [sideWall(-0.6), sideWall(0.6), wall(1.4)],
+      ),
+    );
+    expect(c.center, isA<LidarObstacle>());
+    expect((c.center as LidarObstacle).distance, lessThan(1.5));
+  });
+
+  test('a chair in front of a wall is the nearest obstacle', () {
+    final c = LidarAnalysis()
+        .analyzeScan(render(boxes: [chair(1.0), wall(2.0)]))
+        .center;
+    expect((c as LidarObstacle).distance, closeTo(1.0, 0.08));
+  });
+
+  test('a thin pole ahead is an obstacle', () {
+    final c = LidarAnalysis()
+        .analyzeScan(render(boxes: [const Box(-0.05, 0, 1.5, 0.05, 2, 1.6)]))
+        .center;
+    expect((c as LidarObstacle).distance, closeTo(1.5, 0.08));
   });
 
   test('analyze is the centre of analyzeScan', () {

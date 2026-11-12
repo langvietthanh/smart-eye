@@ -176,6 +176,9 @@ class _CameraScreenState extends State<CameraScreen>
   /// warnings stay silent only while this holds.
   bool _trapAnnounced = false;
 
+  /// An obstacle or trap warning was spoken and "Đi thẳng." is still owed.
+  bool _frontWarned = false;
+
   // Voice-command navigation: the guide is silent while a danger line was
   // spoken in the last [_navQuietAfterDanger], during a trap or a sight
   // problem, while the microphone is listening, and while an alert is
@@ -436,6 +439,7 @@ class _CameraScreenState extends State<CameraScreen>
   void _resetBlockage() {
     _blockage.reset();
     _trapAnnounced = false;
+    _frontWarned = false;
   }
 
   /// Shared by the sight tick, each detection frame and each LiDAR scan:
@@ -444,11 +448,28 @@ class _CameraScreenState extends State<CameraScreen>
     final problem = _sightProblem;
     if (problem == null) {
       _onBlockage(_blockage.evaluate(now));
+      _maybeSayStraight(now);
     } else if (problem.isBlind) {
       _resetBlockage();
     } else {
       _blockage.interrupt();
     }
+  }
+
+  /// "Đi thẳng." once after an obstacle or trap warning, when the way ahead
+  /// has stayed open for a second. Silent otherwise, and while navigating
+  /// (the guide gives its own directions).
+  void _maybeSayStraight(DateTime now) {
+    final open = _blockage.aheadOpenSettled(now); // keeps its timer current
+    if (!_frontWarned || !open || _blockage.trapped || _guide.isActive) return;
+    _frontWarned = false;
+    _speech.say('Đi thẳng.', SpeechPriority.caution, subject: 'path:straight');
+  }
+
+  /// A warning started: owe "Đi thẳng." only if the way ahead was not already
+  /// open (a warning about a side object needs no follow-up).
+  void _noteWarning() {
+    if (!_blockage.aheadOpenSettled(DateTime.now())) _frontWarned = true;
   }
 
   bool get _showsBothSidesBlocked =>
@@ -466,11 +487,7 @@ class _CameraScreenState extends State<CameraScreen>
     const subject = 'path:trapped';
     if (event == PathEvent.cleared) {
       _endTrap();
-      _speech.say(
-        'Đường đi thông thoáng.',
-        SpeechPriority.caution,
-        subject: 'path:cleared',
-      );
+      _frontWarned = true; // _maybeSayStraight says "Đi thẳng."
       return;
     }
     if (event == PathEvent.opened) {
@@ -487,17 +504,12 @@ class _CameraScreenState extends State<CameraScreen>
       _trapAnnounced = true;
       return;
     }
+    // Said once per trap: in a long narrow spot repeats were only noise; the
+    // proximity pulse keeps running.
+    if (_trapAnnounced) return;
     if (!_speech.canSay(SpeechPriority.danger, subject: subject)) return;
     _lastAlertAt = DateTime.now();
     _lastDangerAt = _lastAlertAt;
-    if (_trapAnnounced) {
-      _speech.say(
-        'Vẫn bị chặn. Xoay người chậm.',
-        SpeechPriority.danger,
-        subject: subject,
-      );
-      return;
-    }
     final log = _eventLogger(TripEventType.danger, trapAlertText);
     _speech.say(
       trapAlertText,
@@ -866,6 +878,7 @@ class _CameraScreenState extends State<CameraScreen>
       priority,
       subject: subject,
       onStart: () {
+        _noteWarning();
         if (isDanger) HapticFeedback.heavyImpact();
         log();
       },
@@ -1033,6 +1046,7 @@ class _CameraScreenState extends State<CameraScreen>
       priority,
       subject: alert.subject,
       onStart: () {
+        _noteWarning();
         if (isDanger) HapticFeedback.heavyImpact();
         log();
       },
@@ -1524,8 +1538,7 @@ class _CameraScreenState extends State<CameraScreen>
           // Layer 1: Camera preview + cử chỉ (chạm 2 lần hoặc giữ lâu = nói lệnh / đích đến)
           Semantics(
             button: true,
-            label:
-                'Khung camera. Chạm hai lần để nói đích đến, ví dụ: đi đến ghế.',
+            label: 'Khung camera. Chạm hai lần để nói đích đến, ví dụ: đi đến ghế.',
             onTap: _listenForCommand,
             onLongPress: _listenForCommand,
             excludeSemantics: true,
