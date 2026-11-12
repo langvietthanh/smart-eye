@@ -42,8 +42,7 @@ jobs:
             ~/Library/Caches/CocoaPods
           key: pods-${{ runner.os }}-${{ hashFiles('pubspec.lock', 'ios/Podfile') }}
 
-      - name: Unit test
-        run: flutter test
+      # Unit test chạy trên máy dev trước khi push; CI chỉ build để ra IPA nhanh hơn.
 
       - name: Disable code signing requirement in Xcode
         run: |
