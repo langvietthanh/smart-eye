@@ -25,6 +25,9 @@ Mục tiêu: đo xem app báo **kịp** và **không bỏ sót** khi người d�
 | 11 | Ghế cuối dãy bàn, phía bên kia trống, đứng cách ~2 m | Mong đợi *"Chậm lại. Vật cản cách 2 mét. Đi chéo sang X."* về phía trống; ghi bên nào và có đúng không |
 | 12 | Hành lang: ba lô hoặc một bạn đứng giữa, đứng cách ~2 m | Mong đợi *"…Đi chéo sang phải."* (hai bên trống thì luôn chọn phải) |
 | 13 | Đi về phía bục giảng, bục nằm lệch một bên | Cảnh báo bậc lên vẫn có; app **không bao giờ** bảo đi chéo về phía có bục |
+| 14 | Ghế giữa lối đi; sau khi app báo, bước chéo sang bên trống rồi quay mặt về hướng cũ (lối trước mặt trống ≥ 3 m) | Khoảng 1 giây sau mới nghe *"Phía trước thông thoáng. Đi thẳng."*, chỉ một lần. Ghi lần nào nói khi phía trước **chưa** trống (lỗi nghiêm trọng) |
+| 15 | **Máy không LiDAR (Android)**: lặp lại #11 và #12 | Có nghe *"Đi chéo sang X."* không, X có đúng phía trống không; ghi số lần chỉ sai phía (lỗi nghiêm trọng) và số lần không nói hướng |
+| 16 | Đi thẳng tới tường trống trơn, dừng, quay 90° về hành lang trống | Không bao giờ nói "thông thoáng" khi vẫn đối diện tường |
 
 ## Dẫn đường bằng giọng nói (mỗi kịch bản 5 lần)
 Giữ lâu màn hình, nghe "tít" rồi nói *"đi đến ghế"*. Ghi câu nghe được và có tới trước ghế không.

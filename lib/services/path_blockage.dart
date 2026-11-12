@@ -1,7 +1,9 @@
 import '../models/scene_info.dart';
+import 'depth_analysis.dart';
 import 'lidar_analysis.dart';
 
-/// `cleared`: the way ahead is open. `opened`: a side opened while the
+/// `cleared`: the way ahead is open (leaving a trap, or after a centre
+/// warning, see [PathBlockage.watchAhead]). `opened`: a side opened while the
 /// centre is still blocked (the user turned towards a single obstacle).
 enum PathEvent { trapped, cleared, opened }
 
@@ -13,14 +15,20 @@ class PathBlockage {
   static const settle = Duration(seconds: 1);
   static const detectionMaxAge = Duration(seconds: 1);
   static const depthMaxAge = Duration(milliseconds: 500);
+  // MiDaS runs every >= 300 ms plus inference time, slower than LiDAR.
+  static const monoMaxAge = Duration(seconds: 1);
 
   List<double>? _load;
   DateTime? _loadAt;
   LidarScan? _scan;
   DateTime? _scanAt;
+  DepthReading? _mono;
+  DateTime? _monoAt;
   bool _seenDepth = false;
   bool _trapped = false;
   DateTime? _since;
+  bool _watching = false;
+  DateTime? _clearSince;
 
   bool get trapped => _trapped;
 
@@ -33,6 +41,21 @@ class PathBlockage {
     _scan = scan;
     _scanAt = at;
     _seenDepth = true;
+  }
+
+  /// Relative depth (no LiDAR). Only used as evidence that a way is open;
+  /// blocking stays with YOLO, as MiDaS thresholds are not field-calibrated.
+  void onMonoDepth(DateTime at, DepthReading reading) {
+    _mono = reading;
+    _monoAt = at;
+    _seenDepth = true;
+  }
+
+  /// A centre obstacle was just announced: emit [PathEvent.cleared] once the
+  /// way ahead has been open for [settle], with depth evidence.
+  void watchAhead() {
+    _watching = true;
+    _clearSince = null;
   }
 
   bool _fresh(DateTime? t, DateTime now, Duration maxAge) =>
@@ -58,12 +81,23 @@ class PathBlockage {
   bool _open(DateTime now, HPos pos) {
     if (blocked(now)[pos.index]) return false;
     if (!_seenDepth) return true;
-    if (!_fresh(_scanAt, now, depthMaxAge)) return false;
-    return switch (_scan![pos]) {
-      LidarClear() => true,
-      LidarObstacle(:final distance) => distance > exitClearBeyond,
-      LidarUnknown() => false,
-    };
+    if (_fresh(_scanAt, now, depthMaxAge)) {
+      return switch (_scan![pos]) {
+        LidarClear() => true,
+        LidarObstacle(:final distance) => distance > exitClearBeyond,
+        LidarUnknown() => false,
+      };
+    }
+    if (_fresh(_monoAt, now, monoMaxAge)) {
+      final m = _mono!;
+      final closeness = switch (pos) {
+        HPos.left => m.left,
+        HPos.center => m.center,
+        HPos.right => m.right,
+      };
+      return closeness < DepthAnalysis.clearBelow;
+    }
+    return false;
   }
 
   PathEvent? evaluate(DateTime now) {
@@ -73,27 +107,54 @@ class PathBlockage {
         : blocked(now).every((b) => b);
     if (!holds) {
       _since = null;
+    } else {
+      _since ??= now;
+      if (now.difference(_since!) >= settle) {
+        _trapped = !_trapped;
+        _since = null;
+        _clearSince = null;
+        if (_trapped) {
+          _watching = true;
+          return PathEvent.trapped;
+        }
+        if (centreOpen) {
+          _watching = false;
+          return PathEvent.cleared;
+        }
+        return PathEvent.opened;
+      }
+    }
+    // Outside a trap, "open ahead" is never claimed from YOLO alone: it
+    // cannot see walls, doors or boxes it has no class for.
+    if (_trapped || !_watching || !_seenDepth || !_open(now, HPos.center)) {
+      _clearSince = null;
       return null;
     }
-    _since ??= now;
-    if (now.difference(_since!) < settle) return null;
-    _trapped = !_trapped;
-    _since = null;
-    if (_trapped) return PathEvent.trapped;
-    return centreOpen ? PathEvent.cleared : PathEvent.opened;
+    _clearSince ??= now;
+    if (now.difference(_clearSince!) < settle) return null;
+    _watching = false;
+    _clearSince = null;
+    return PathEvent.cleared;
   }
 
-  /// The view cannot be trusted right now: restart the settle timer without
-  /// changing [trapped], so neither entry nor exit completes meanwhile.
-  void interrupt() => _since = null;
+  /// The view cannot be trusted right now: restart the settle timers without
+  /// changing [trapped], so neither entry, exit nor clearing completes.
+  void interrupt() {
+    _since = null;
+    _clearSince = null;
+  }
 
   void reset() {
     _load = null;
     _loadAt = null;
     _scan = null;
     _scanAt = null;
+    _mono = null;
+    _monoAt = null;
     _seenDepth = false;
     _trapped = false;
     _since = null;
+    _watching = false;
+    _clearSince = null;
   }
 }

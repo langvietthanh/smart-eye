@@ -466,8 +466,13 @@ class _CameraScreenState extends State<CameraScreen>
     const subject = 'path:trapped';
     if (event == PathEvent.cleared) {
       _endTrap();
+      // A queued obstacle line is stale once the way has been open 1 s.
+      _speech.dropSubject('depth:center');
+      // While guiding, the guide owns the heading ("Lệch trái/phải").
       _speech.say(
-        'Đường đi thông thoáng.',
+        _guide.isActive
+            ? 'Phía trước thông thoáng.'
+            : 'Phía trước thông thoáng. Đi thẳng.',
         SpeechPriority.caution,
         subject: 'path:cleared',
       );
@@ -738,7 +743,20 @@ class _CameraScreenState extends State<CameraScreen>
   void _onDepth(DepthReading reading) {
     // Dark frames and floor/ceiling views give meaningless depth; the sight
     // monitor already tells the user what to fix.
-    if (_sight.check(DateTime.now()) != null) return;
+    final now = DateTime.now();
+    if (_sight.check(now) != null) {
+      _sideStability.reset();
+      _sides = _noSides;
+      return;
+    }
+    final load = _scene.columnLoad;
+    _sides = _sideStability.updateSides(
+      monoSide(reading.left, load[0]),
+      monoSide(reading.right, load[2]),
+    );
+    _sidesAtMs = _frameClock.elapsedMilliseconds;
+    _blockage.onMonoDepth(now, reading);
+    _evaluateBlockage(now);
     _depthProximity = (
       proximity: ProximityPulse.fromCloseness(reading.center),
       atMs: _frameClock.elapsedMilliseconds,
@@ -750,7 +768,10 @@ class _CameraScreenState extends State<CameraScreen>
       _announceStep(step.kind, step.level);
       return;
     }
-    _announceDepth(_depthWarning.update(reading.center));
+    _announceDepth(
+      _depthWarning.update(reading.center),
+      sides: _speakableSides(),
+    );
   }
 
   /// LiDAR depth packets arrive ~10 Hz; analysis runs off the UI isolate and
@@ -825,18 +846,16 @@ class _CameraScreenState extends State<CameraScreen>
     );
   }
 
-  ({SideState left, SideState right}) _speakableSides() => _useLidar
-      ? speakableSides(
-          _sides,
-          capturedAtMs: _sidesAtMs,
-          nowMs: _frameClock.elapsedMilliseconds,
-          trapped: _trapAnnounced || _blockage.trapped,
-        )
-      : _noSides;
+  ({SideState left, SideState right}) _speakableSides() => speakableSides(
+    _sides,
+    capturedAtMs: _sidesAtMs,
+    nowMs: _frameClock.elapsedMilliseconds,
+    trapped: _trapAnnounced || _blockage.trapped,
+  );
 
   /// Speaks a class-agnostic depth warning unless the detector already names
-  /// the obstacle with equal or higher urgency. [metres] and [sides] are
-  /// known only with LiDAR.
+  /// the obstacle with equal or higher urgency. [metres] is known only with
+  /// LiDAR; [sides] come from LiDAR lanes or, without it, MiDaS + YOLO.
   void _announceDepth(
     AlertLevel level, {
     double? metres,
@@ -870,6 +889,7 @@ class _CameraScreenState extends State<CameraScreen>
         log();
       },
     );
+    _blockage.watchAhead();
   }
 
   void _announceStep(StepKind kind, AlertLevel level) {
@@ -1014,7 +1034,8 @@ class _CameraScreenState extends State<CameraScreen>
     }
     if (isDanger) _lastDangerAt = now;
 
-    // LiDAR sides: only fresh, never during a trap, only for a centre object.
+    if (alert.pos == HPos.center) _blockage.watchAhead();
+    // Sides: only fresh, never during a trap, only for a centre object.
     final sides = _speakableSides();
     final text = withSideClause(
       alert.message,

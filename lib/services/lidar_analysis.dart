@@ -325,12 +325,16 @@ class SideStability {
 
   final _left = _SideTrack(), _right = _SideTrack();
 
-  ({SideState left, SideState right}) update(LidarReading reading) {
-    final (l, r) = reading is LidarObstacle
-        ? (reading.left, reading.right)
-        : (SideState.unknown, SideState.unknown);
-    return (left: _left.update(l), right: _right.update(r));
-  }
+  ({SideState left, SideState right}) update(LidarReading reading) =>
+      reading is LidarObstacle
+      ? updateSides(reading.left, reading.right)
+      : updateSides(SideState.unknown, SideState.unknown);
+
+  /// Raw per-reading side states from any source (MiDaS without LiDAR).
+  ({SideState left, SideState right}) updateSides(
+    SideState left,
+    SideState right,
+  ) => (left: _left.update(left), right: _right.update(right));
 
   void reset() {
     _left.update(SideState.unknown);

@@ -1,4 +1,5 @@
 import '../models/scene_info.dart';
+import 'depth_analysis.dart';
 
 /// Trả về câu cần đọc, hoặc null nếu không cần nói.
 /// [left]/[right] chỉ có khi dùng LiDAR; câu về hai bên được nối vào cuối.
@@ -35,6 +36,18 @@ String? sideClause(SideState left, SideState right) {
   if (left == c) return 'Đi chéo sang trái.';
   if (left == b && right == b) return bothSidesBlocked;
   return null;
+}
+
+/// Một bên khi không có LiDAR: MiDaS (độ gần tương đối, không phải mét) và
+/// tải cột YOLO. Chỉ "trống" khi cả hai cùng thấy trống; vật YOLO không có lớp
+/// (thùng, tường) thì chỉ MiDaS thấy, nên ngưỡng trống thấp hơn hẳn ngưỡng báo.
+SideState monoSide(double closeness, double columnLoad) {
+  if (columnLoad >= 1.0 || closeness >= DepthAnalysis.caution) {
+    return SideState.blocked;
+  }
+  return columnLoad == 0 && closeness < DepthAnalysis.clearBelow
+      ? SideState.clear
+      : SideState.unknown;
 }
 
 const _dangerHead = 'Dừng lại! Vật cản ngay trước mặt.';

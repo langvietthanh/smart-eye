@@ -277,4 +277,17 @@ void main() {
       expect(spokenMetres(2.3), '2,5');
     });
   });
+
+  group('monoSide', () {
+    test('clear only when MiDaS is far and YOLO is empty', () {
+      expect(monoSide(0.2, 0), SideState.clear);
+      expect(monoSide(0.2, 0.5), SideState.unknown);
+      expect(monoSide(0.6, 0), SideState.unknown);
+    });
+
+    test('blocked by MiDaS caution or a YOLO object', () {
+      expect(monoSide(0.8, 0), SideState.blocked);
+      expect(monoSide(0.1, 1), SideState.blocked);
+    });
+  });
 }

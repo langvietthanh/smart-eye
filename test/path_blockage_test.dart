@@ -1,4 +1,5 @@
 import 'package:flutter_test/flutter_test.dart';
+import 'package:smart_eye/services/depth_analysis.dart';
 import 'package:smart_eye/services/lidar_analysis.dart';
 import 'package:smart_eye/services/path_blockage.dart';
 
@@ -158,5 +159,85 @@ void main() {
     p.reset();
     expect(run(p, all, 1750, 3000), [PathEvent.trapped]);
     expect(run(p, sides, 3250, 4500), [PathEvent.cleared]);
+  });
+
+  group('watchAhead', () {
+    List<PathEvent> mono(
+      int from,
+      int to,
+      double centre, {
+      double sideLoad = 0,
+    }) {
+      final events = <PathEvent>[];
+      for (var ms = from; ms <= to; ms += 250) {
+        p.onDetections(at(ms), [sideLoad, 0, sideLoad]);
+        p.onMonoDepth(at(ms), DepthReading(0.2, centre, 0.2));
+        final e = p.evaluate(at(ms));
+        if (e != null) events.add(e);
+      }
+      return events;
+    }
+
+    test('silent without a warning first', () {
+      expect(run(p, none, 0, 2000, depth: scan(null, null, null)), isEmpty);
+    });
+
+    test('after a warning, a LiDAR-clear centre for a second clears once', () {
+      p.watchAhead();
+      expect(run(p, none, 0, 750, depth: scan(null, null, null)), isEmpty);
+      expect(run(p, none, 1000, 3000, depth: scan(null, null, null)), [
+        PathEvent.cleared,
+      ]);
+    });
+
+    test('LiDAR obstacle within caution exit keeps it silent', () {
+      p.watchAhead();
+      expect(run(p, none, 0, 3000, depth: scan(null, 2.0, null)), isEmpty);
+    });
+
+    test('YOLO alone never claims open ahead', () {
+      p.watchAhead();
+      expect(run(p, none, 0, 3000), isEmpty);
+    });
+
+    test('MiDaS far centre clears, near centre does not', () {
+      p.watchAhead();
+      expect(mono(0, 2000, 0.6), isEmpty);
+      expect(mono(2250, 3500, 0.3), [PathEvent.cleared]);
+    });
+
+    test('stale MiDaS does not count', () {
+      p.watchAhead();
+      p.onMonoDepth(at(0), const DepthReading(0, 0, 0));
+      p.onDetections(at(1500), none);
+      expect(p.evaluate(at(1500)), isNull);
+      p.onDetections(at(2600), none);
+      expect(p.evaluate(at(2600)), isNull);
+    });
+
+    test('a new warning restarts the second', () {
+      p.watchAhead();
+      expect(run(p, none, 0, 750, depth: scan(null, null, null)), isEmpty);
+      p.watchAhead();
+      expect(run(p, none, 1000, 1750, depth: scan(null, null, null)), isEmpty);
+      expect(run(p, none, 2000, 2000, depth: scan(null, null, null)), [
+        PathEvent.cleared,
+      ]);
+    });
+
+    test('MiDaS evidence is also needed to leave a trap', () {
+      expect(mono(0, 1500, 0.95, sideLoad: 1), isEmpty); // YOLO centre free
+      run(p, all, 1750, 3250);
+      expect(p.trapped, isTrue);
+      final events = <PathEvent>[];
+      for (var ms = 3500; ms <= 5000; ms += 250) {
+        p.onDetections(at(ms), sides);
+        p.onMonoDepth(at(ms), const DepthReading(1, 0.9, 1));
+        final e = p.evaluate(at(ms));
+        if (e != null) events.add(e);
+      }
+      expect(events, isEmpty);
+      expect(p.trapped, isTrue);
+    });
   });
 }
