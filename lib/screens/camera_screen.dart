@@ -451,13 +451,10 @@ class _CameraScreenState extends State<CameraScreen>
     }
   }
 
-  /// The banner is an obstacle alert that already says what the trap line
-  /// says (both sides blocked, or a wall with no way round).
-  bool get _showsBothSidesBlocked {
-    final text = _speech.showing.value?.text;
-    return text != null &&
-        (text.endsWith(bothSidesBlocked) || text.endsWith(wallTurn));
-  }
+  /// The banner already tells the user to turn (a wall with no way round,
+  /// or a trap line), so the trap line would only repeat it.
+  bool get _showsBothSidesBlocked =>
+      _speech.showing.value?.text.endsWith(wallTurn) ?? false;
 
   /// Leaving a trap also clears its banner, so a quick re-trap is not mistaken
   /// for a line that was just spoken.
@@ -872,6 +869,9 @@ class _CameraScreenState extends State<CameraScreen>
   /// Speaks a class-agnostic depth warning unless the detector already names
   /// the obstacle with equal or higher urgency. [metres] is known only with
   /// LiDAR; [sides] come from LiDAR lanes or, without it, MiDaS + YOLO.
+  /// Metres in the last obstacle line sent to speech (null: none or a wall).
+  double? _spokenMetres;
+
   void _announceDepth(
     AlertLevel level, {
     double? metres,
@@ -887,11 +887,21 @@ class _CameraScreenState extends State<CameraScreen>
       right: sides.right,
       wall: wall,
     );
-    if (text == null) return;
+    if (text == null) {
+      if (level == AlertLevel.info) _spokenMetres = null;
+      return;
+    }
     final isDanger = level == AlertLevel.danger;
     final priority = isDanger ? SpeechPriority.danger : SpeechPriority.caution;
     const subject = 'depth:center';
+    // The spoken distance is wrong once the user is 0.5 m closer: say it anew
+    // instead of waiting out the cooldown.
+    final last = _spokenMetres;
+    if (!wall && metres != null && last != null && metres <= last - 0.5) {
+      _speech.dropSubject(subject);
+    }
     if (!_speech.canSay(priority, subject: subject)) return;
+    _spokenMetres = wall ? null : metres;
     _lastAlertAt = DateTime.now();
     if (isDanger) _lastDangerAt = _lastAlertAt;
     final log = _eventLogger(
@@ -1586,8 +1596,7 @@ class _CameraScreenState extends State<CameraScreen>
           // Layer 1: Camera preview + cử chỉ (chạm 2 lần hoặc giữ lâu = nói lệnh / đích đến)
           Semantics(
             button: true,
-            label:
-                'Khung camera. Chạm hai lần để nói đích đến, ví dụ: đi đến ghế.',
+            label: 'Khung camera. Chạm hai lần để nói đích đến, ví dụ: đi đến ghế.',
             onTap: _listenForCommand,
             onLongPress: _listenForCommand,
             excludeSemantics: true,
