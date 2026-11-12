@@ -179,6 +179,13 @@ class _CameraScreenState extends State<CameraScreen>
   /// An obstacle or trap warning was spoken and "Đi thẳng." is still owed.
   bool _frontWarned = false;
 
+  /// "Đi thẳng." repeats this often while the way ahead stays open, and is
+  /// said again when it reopens, but never closer together than the min gap.
+  static const Duration _straightRepeat = Duration(seconds: 3);
+  static const Duration _straightMinGap = Duration(seconds: 3);
+  DateTime? _straightAt;
+  bool _straightOwed = false;
+
   // Voice-command navigation: the guide is silent while a danger line was
   // spoken in the last [_navQuietAfterDanger], during a trap or a sight
   // problem, while the microphone is listening, and while an alert is
@@ -456,14 +463,32 @@ class _CameraScreenState extends State<CameraScreen>
     }
   }
 
-  /// "Đi thẳng." once after an obstacle or trap warning, when the way ahead
-  /// has stayed open for a second. Silent otherwise, and while navigating
-  /// (the guide gives its own directions).
+  /// "Đi thẳng." when the way ahead (centre column and LiDAR) has stayed open
+  /// for a second, then every [_straightRepeat] while it stays open. Not while
+  /// trapped, navigating (the guide gives its own directions) or speaking.
   void _maybeSayStraight(DateTime now) {
-    final open = _blockage.aheadOpenSettled(now); // keeps its timer current
-    if (!_frontWarned || !open || _blockage.trapped || _guide.isActive) return;
-    _frontWarned = false;
-    _speech.say('Đi thẳng.', SpeechPriority.caution, subject: 'path:straight');
+    if (!_blockage.aheadOpenSettled(now)) {
+      _straightOwed = true; // say it again as soon as the way reopens
+      return;
+    }
+    if (_blockage.trapped || _guide.isActive || _speech.isBusy) return;
+    final last = _straightAt;
+    final since = last == null ? null : now.difference(last);
+    final due =
+        since == null ||
+        since >= _straightRepeat ||
+        ((_frontWarned || _straightOwed) && since >= _straightMinGap);
+    if (!due) return;
+    // Guidance: any warning cuts in; filtered in quiet mode.
+    if (_speech.say(
+      'Đi thẳng.',
+      SpeechPriority.guidance,
+      subject: 'path:straight',
+    )) {
+      _straightAt = now;
+      _straightOwed = false;
+      _frontWarned = false;
+    }
   }
 
   /// A warning started: owe "Đi thẳng." only if the way ahead was not already
@@ -471,6 +496,10 @@ class _CameraScreenState extends State<CameraScreen>
   void _noteWarning() {
     if (!_blockage.aheadOpenSettled(DateTime.now())) _frontWarned = true;
   }
+
+  /// The way ahead has been measured open, so "Đi thẳng." holds: a caution
+  /// about the way ahead would contradict it (danger is always spoken).
+  bool _aheadOpen() => _blockage.aheadOpenSettled(DateTime.now());
 
   bool get _showsBothSidesBlocked =>
       _speech.showing.value?.text.endsWith(bothSidesBlocked) ?? false;
@@ -864,6 +893,7 @@ class _CameraScreenState extends State<CameraScreen>
     );
     if (text == null) return;
     final isDanger = level == AlertLevel.danger;
+    if (!isDanger && _aheadOpen()) return;
     final priority = isDanger ? SpeechPriority.danger : SpeechPriority.caution;
     const subject = 'depth:center';
     if (!_speech.canSay(priority, subject: subject)) return;
@@ -1021,6 +1051,7 @@ class _CameraScreenState extends State<CameraScreen>
     _lastAlertAt = now;
     final isDanger = alert.level == AlertLevel.danger;
     if (_trapAnnounced && !isDanger) return;
+    if (!isDanger && alert.pos == HPos.center && _aheadOpen()) return;
     final priority = isDanger ? SpeechPriority.danger : SpeechPriority.caution;
     if (!_speech.canSay(priority, subject: alert.subject)) {
       return; // Đã báo / đang chờ đọc
