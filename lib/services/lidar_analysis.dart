@@ -60,6 +60,7 @@ class LidarObstacle extends LidarReading {
     this.left = SideState.unknown,
     this.right = SideState.unknown,
     this.where,
+    this.wall = false,
   });
 
   /// Horizontal distance to the nearest substantial obstacle, metres.
@@ -69,7 +70,12 @@ class LidarObstacle extends LidarReading {
   /// (only set on the centre reading of [LidarAnalysis.analyzeScan]).
   final SideState left, right;
 
-  /// Diagnostics only (centre reading): the hits up to [distance], sideways
+  /// Centre reading only: a tall surface from near the floor to above the
+  /// phone, across the whole corridor core, with both lanes blocked.
+  final bool wall;
+
+  /// Diagnostics only (centre reading): the obstacle's front
+  /// [LidarAnalysis.frontDepth] of hits, sideways
   /// (+ = left of the corridor axis) and above the floor, in metres, and the
   /// phone's height above the estimated floor.
   final ({
@@ -118,6 +124,12 @@ class LidarAnalysis {
   /// reaching just into the outer 10 cm (a table edge) is passed by. Such
   /// hits still block the lanes (see [analyzeScan]) and the side corridors.
   static const coreHalfWidth = 0.25;
+
+  /// Depth of the obstacle's front face used to describe it ([wallReach]).
+  static const frontDepth = 0.3;
+
+  /// A wall covers the core to at least this far each side of the axis.
+  static const wallReach = 0.2;
 
   /// Outer edge of the side corridors, either side of the centre one.
   static const sideOuter = 1.05;
@@ -306,17 +318,27 @@ class LidarAnalysis {
       var sMin = double.infinity, sMax = -double.infinity;
       var hMin = double.infinity, hMax = -double.infinity;
       for (final i in centreAt) {
-        if (forwards[i] > center.distance) continue;
+        if (forwards[i] > center.distance + frontDepth) continue;
         sMin = min(sMin, sides[i]);
         sMax = max(sMax, sides[i]);
         hMin = min(hMin, heights[i] - floor);
         hMax = max(hMax, heights[i] - floor);
       }
       // Positive `side` points left (see the corridor split above).
+      final leftLane = lane(1), rightLane = lane(-1);
       center = LidarObstacle(
         center.distance,
-        left: lane(1),
-        right: lane(-1),
+        left: leftLane,
+        right: rightLane,
+        // Heights here are still above the floor; [headroom] is above the
+        // phone, so the top check is relative to the phone again.
+        wall:
+            sMin <= -wallReach &&
+            sMax >= wallReach &&
+            hMin <= floorMargin + 0.3 &&
+            hMax + floor >= headroom - 0.2 &&
+            leftLane == SideState.blocked &&
+            rightLane == SideState.blocked,
         where: (
           sideMin: sMin,
           sideMax: sMax,

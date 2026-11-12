@@ -116,6 +116,16 @@ LidarObstacle obstacleOf(LidarReading r) {
 }
 
 void sideLaneTests() {
+  test('a wall ahead is told apart from a chair or a person', () {
+    final a = LidarAnalysis();
+    a.analyze(render());
+    expect(obstacleOf(a.analyze(render(boxes: [wall(1.5)]))).wall, isTrue);
+    expect(obstacleOf(a.analyze(render(boxes: [chair(1.5)]))).wall, isFalse);
+    // Shoulder-wide and tall, but not across the whole core.
+    final person = const Box(-0.2, 0, 1.5, 0.2, 1.8, 1.8);
+    expect(obstacleOf(a.analyze(render(boxes: [person]))).wall, isFalse);
+  });
+
   test('a table edge only in the outer 10 cm is passed by', () {
     // 28–60 cm right of the axis (world x is right), 75 cm tall, at 1.2 m.
     final s = LidarAnalysis().analyzeScan(

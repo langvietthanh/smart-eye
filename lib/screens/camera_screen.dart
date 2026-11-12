@@ -452,8 +452,13 @@ class _CameraScreenState extends State<CameraScreen>
     }
   }
 
-  bool get _showsBothSidesBlocked =>
-      _speech.showing.value?.text.endsWith(bothSidesBlocked) ?? false;
+  /// The banner is an obstacle alert that already says what the trap line
+  /// says (both sides blocked, or a wall with no way round).
+  bool get _showsBothSidesBlocked {
+    final text = _speech.showing.value?.text;
+    return text != null &&
+        (text.endsWith(bothSidesBlocked) || text.endsWith(wallTurn));
+  }
 
   /// Leaving a trap also clears its banner, so a quick re-trap is not mistaken
   /// for a line that was just spoken.
@@ -504,9 +509,13 @@ class _CameraScreenState extends State<CameraScreen>
       );
       return;
     }
-    final log = _eventLogger(TripEventType.danger, trapAlertText);
+    final centre = _freshLidarCenter();
+    final text = centre is LidarObstacle && centre.wall
+        ? wallTrapText
+        : trapAlertText;
+    final log = _eventLogger(TripEventType.danger, text);
     _speech.say(
-      trapAlertText,
+      text,
       SpeechPriority.danger,
       subject: subject,
       onStart: () {
@@ -821,7 +830,7 @@ class _CameraScreenState extends State<CameraScreen>
     _sidesAtMs = capturedAtMs;
     _lidarStatus =
         '${switch (reading) {
-          LidarObstacle(:final distance, :final where) => '${distance.toStringAsFixed(2)} m${where == null ? '' : ' (vật ${_sideCm(where.sideMin)}…${_sideCm(where.sideMax)} cm, cao ${_cm(where.heightMin)}…${_cm(where.heightMax)} cm, máy cao ${_cm(where.phoneHeight)} cm)'}',
+          LidarObstacle(:final distance, :final where, :final wall) => '${distance.toStringAsFixed(2)} m${wall ? ' tường' : ''}${where == null ? '' : ' (vật ${_sideCm(where.sideMin)}…${_sideCm(where.sideMax)} cm, cao ${_cm(where.heightMin)}…${_cm(where.heightMax)} cm, máy cao ${_cm(where.phoneHeight)} cm)'}',
           LidarClear() => 'thông ≤ ${LidarAnalysis.maxForward.toStringAsFixed(0)} m',
           LidarUnknown() => 'không đo được',
         }} · trống: ${sideClause(_sides.left, _sides.right) ?? '—'}'
@@ -844,6 +853,7 @@ class _CameraScreenState extends State<CameraScreen>
       _lidarWarning.update(reading, now),
       metres: distance,
       sides: _speakableSides(),
+      wall: reading is LidarObstacle && reading.wall,
     );
   }
 
@@ -867,6 +877,7 @@ class _CameraScreenState extends State<CameraScreen>
     AlertLevel level, {
     double? metres,
     ({SideState left, SideState right}) sides = _noSides,
+    bool wall = false,
   }) {
     if (_trapAnnounced) return;
     final text = depthAlertText(
@@ -875,6 +886,7 @@ class _CameraScreenState extends State<CameraScreen>
       metres: metres,
       left: sides.left,
       right: sides.right,
+      wall: wall,
     );
     if (text == null) return;
     final isDanger = level == AlertLevel.danger;
@@ -1486,9 +1498,29 @@ class _CameraScreenState extends State<CameraScreen>
   // UI
   // ---------------------------------------------------------------------------
 
+  /// The camera image fitted into the screen without cropping or stretching.
+  /// Detection, the overlay and the preview share this one rectangle, so the
+  /// black bars around it are never scanned or drawn on.
+  static Size _cameraView(Size screen, FeedHandle? handle) {
+    // The camera plugin only knows its preview size once initialised.
+    if (handle == null ||
+        !handle.isInitialized ||
+        screen.width <= 0 ||
+        screen.height <= 0) {
+      return screen;
+    }
+    final long = handle.aspectRatio;
+    // Width / height of the image as shown: the app turns it with the phone.
+    final ratio = screen.height >= screen.width ? 1 / long : long;
+    return screen.width / screen.height < ratio
+        ? Size(screen.width, screen.width / ratio)
+        : Size(screen.height * ratio, screen.height);
+  }
+
   @override
   Widget build(BuildContext context) {
-    final size = MediaQuery.sizeOf(context);
+    final handle = _handle;
+    final size = _cameraView(MediaQuery.sizeOf(context), handle);
     if (_screenWidth != 0 &&
         (size.width != _screenWidth || size.height != _screenHeight)) {
       // Vừa xoay màn hình: toạ độ cũ không còn đúng → theo dõi lại từ đầu
@@ -1496,7 +1528,6 @@ class _CameraScreenState extends State<CameraScreen>
     }
     _screenWidth = size.width;
     _screenHeight = size.height;
-    final handle = _handle;
     final cameraReady = handle != null && handle.isInitialized;
 
     // Loading / Error screen
@@ -1572,13 +1603,18 @@ class _CameraScreenState extends State<CameraScreen>
               onDoubleTap: _listenForCommand,
               onLongPress: _listenForCommand,
               // Chế độ Test: KHÔNG hiện camera thật để không ai nhầm khung giả lập là kết quả nhận diện
-              child: RepaintBoundary(
-                child: cameraReady && !_isMockTest
-                    ? RotatedBox(
-                        quarterTurns: _debugRotationOffset ~/ 90,
-                        child: _feed?.buildPreview(),
-                      )
-                    : const ColoredBox(color: Color(0xFF1A1A2E)),
+              child: Center(
+                child: SizedBox.fromSize(
+                  size: size,
+                  child: RepaintBoundary(
+                    child: cameraReady && !_isMockTest
+                        ? RotatedBox(
+                            quarterTurns: _debugRotationOffset ~/ 90,
+                            child: _feed?.buildPreview(),
+                          )
+                        : const ColoredBox(color: Color(0xFF1A1A2E)),
+                  ),
+                ),
               ),
             ),
           ),
@@ -1598,25 +1634,30 @@ class _CameraScreenState extends State<CameraScreen>
               ),
             ),
 
-          // Layer 2: Bounding boxes + free-space
+          // Layer 2: Bounding boxes + free-space, on the camera image only
           IgnorePointer(
-            child: RepaintBoundary(
-              child: ValueListenableBuilder<SceneAssessment>(
-                valueListenable: _sceneNotifier,
-                builder: (_, scene, _) {
-                  // Layout changes invalidate immediately, before the deferred
-                  // notifier update can clear boxes from the old orientation.
-                  final visibleScene = identical(scene, _scene)
-                      ? scene
-                      : SceneAssessment.empty;
-                  return CustomPaint(
-                    painter: BoundingBoxPainter(
-                      visibleScene,
-                      alertSubject: visibleScene.alert?.subject,
-                      alertLevel: visibleScene.alert?.level,
-                    ),
-                  );
-                },
+            child: Center(
+              child: SizedBox.fromSize(
+                size: size,
+                child: RepaintBoundary(
+                  child: ValueListenableBuilder<SceneAssessment>(
+                    valueListenable: _sceneNotifier,
+                    builder: (_, scene, _) {
+                      // Layout changes invalidate immediately, before the deferred
+                      // notifier update can clear boxes from the old orientation.
+                      final visibleScene = identical(scene, _scene)
+                          ? scene
+                          : SceneAssessment.empty;
+                      return CustomPaint(
+                        painter: BoundingBoxPainter(
+                          visibleScene,
+                          alertSubject: visibleScene.alert?.subject,
+                          alertLevel: visibleScene.alert?.level,
+                        ),
+                      );
+                    },
+                  ),
+                ),
               ),
             ),
           ),

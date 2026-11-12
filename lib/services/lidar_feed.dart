@@ -41,6 +41,10 @@ class LidarHandle implements FeedHandle {
   DeviceOrientation get deviceOrientation => _orientation;
   @override
   bool get isInitialized => true;
+
+  /// ARKit's captured image is 1920 × 1440.
+  @override
+  double get aspectRatio => 4 / 3;
   @override
   int get frameRotation => (90 - deviceDegrees[_orientation]! + 360) % 360;
 }

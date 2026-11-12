@@ -15,6 +15,9 @@ abstract interface class FeedHandle {
 
   /// Degrees to rotate delivered frames so the AI sees the world upright.
   int get frameRotation;
+
+  /// Long side / short side of the delivered frames (e.g. 4 / 3).
+  double get aspectRatio;
 }
 
 const deviceDegrees = {
@@ -48,6 +51,8 @@ class CameraControllerHandle implements FeedHandle {
   DeviceOrientation get deviceOrientation => controller.value.deviceOrientation;
   @override
   bool get isInitialized => controller.value.isInitialized;
+  @override
+  double get aspectRatio => controller.value.aspectRatio;
 
   @override
   bool operator ==(Object other) =>
