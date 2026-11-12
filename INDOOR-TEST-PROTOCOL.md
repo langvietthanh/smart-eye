@@ -21,7 +21,7 @@ Mục tiêu: đo xem app báo **kịp** và **không bỏ sót** khi người d�
 | 7 | Lấy tay che camera | Có nói "Quá tối" hoặc "Camera không hoạt động" không |
 | 8 | Cầm máy chĩa xuống sàn, rồi chĩa lên trần | Có cảnh báo "Dừng lại! Máy đang chĩa xuống sàn..." / "...chĩa lên cao..." không |
 | 9 | Phòng có 4–6 vật, đi từ cửa tới đích | Số lần va chạm (người quan sát chặn trước), số lần báo nhầm |
-| 10 | **Bên trống (chỉ iPhone có LiDAR)**: ghế chắn lối đi giữa hai dãy bàn, đi chậm tới, nghe ở ~2 m | Câu nghe được (mong đợi *"…Hai bên có vật cản."*) và đuôi `trống:` trên dòng LiDAR |
+| 10 | **Bên trống (chỉ iPhone có LiDAR)**: ghế chắn lối đi giữa hai dãy bàn, đi chậm tới, nghe ở ~2 m | Câu nghe được (mong đợi chỉ *"Chậm lại. Vật cản cách … mét."*, không nói gì về hai bên) và đuôi `trống:` trên dòng LiDAR |
 | 11 | Ghế cuối dãy bàn, phía bên kia trống, đi chậm tới, nghe ở ~2 m | Mong đợi *"Chậm lại. Vật cản cách 2 mét. Đi chéo sang X."* về phía trống; ghi bên nào và có đúng không |
 | 12 | Hành lang: ba lô hoặc một bạn đứng giữa, đi chậm tới, nghe ở ~2 m | Mong đợi *"…Đi chéo sang phải."* (hai bên trống thì luôn chọn phải) |
 | 13 | Đi về phía bục giảng, bục nằm lệch một bên | Cảnh báo bậc lên vẫn có; app **không bao giờ** bảo đi chéo về phía có bục |

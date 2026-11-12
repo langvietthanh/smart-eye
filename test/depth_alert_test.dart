@@ -3,15 +3,16 @@ import 'package:smart_eye/models/scene_info.dart';
 import 'package:smart_eye/services/depth_alert.dart';
 
 void main() {
-  test('trap line is the danger alert with both sides blocked', () {
+  test('no alert says both sides are blocked; the trap line says turn', () {
     expect(
       depthAlertText(
         depthLevel: AlertLevel.danger,
         left: SideState.blocked,
         right: SideState.blocked,
       ),
-      trapAlertText,
+      'Dừng lại! Vật cản ngay trước mặt.',
     );
+    expect(trapAlertText, 'Dừng lại! Vật cản ngay trước mặt. $wallTurn');
   });
 
   group('depthAlertText', () {
@@ -168,9 +169,9 @@ void main() {
       expect(sideClause(c, b), 'Đi chéo sang trái.');
       expect(sideClause(u, c), 'Đi chéo sang phải.');
     });
-    test('both clear goes right / both blocked', () {
+    test('both clear goes right / both blocked says nothing', () {
       expect(sideClause(c, c), 'Đi chéo sang phải.');
-      expect(sideClause(b, b), 'Hai bên có vật cản.');
+      expect(sideClause(b, b), isNull);
     });
     test('nothing certain says nothing', () {
       expect(sideClause(u, u), isNull);

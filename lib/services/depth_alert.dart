@@ -38,12 +38,11 @@ String? depthAlertText({
 /// Hướng lách qua vật cản phía trước; null khi không chắc chắn điều gì.
 /// Làn trống chỉ rộng 40 cm nên lệnh là "đi chéo", không phải quay hẳn.
 String? sideClause(SideState left, SideState right) {
-  const c = SideState.clear, b = SideState.blocked;
+  const c = SideState.clear;
   // Hai bên trống: ưu tiên bên phải.
   if (right == c) return 'Đi chéo sang phải.';
   if (left == c) return 'Đi chéo sang trái.';
-  if (left == b && right == b) return bothSidesBlocked;
-  return null;
+  return null; // không nói "hai bên có vật cản": dễ sai, không giúp đi tiếp
 }
 
 /// Một bên khi không có LiDAR: MiDaS (độ gần tương đối, không phải mét) và
@@ -60,18 +59,13 @@ SideState monoSide(double closeness, double columnLoad) {
 
 const _dangerHead = 'Dừng lại! Vật cản ngay trước mặt.';
 
-/// Ends every obstacle alert that already says what the trap line says.
-const bothSidesBlocked = 'Hai bên có vật cản.';
-
-/// The trap line is the same sentence as a danger depth alert with both sides
-/// blocked.
-const trapAlertText = '$_dangerHead $bothSidesBlocked';
-
 const _wallDangerHead = 'Dừng lại! Tường phía trước.';
 
-/// Ends a wall alert when neither side is open; a wall blocks its own lanes,
-/// so "Hai bên có vật cản" would be wrong.
+/// Ends a wall alert when neither side is open, and every trap line.
 const wallTurn = 'Xoay người tìm lối.';
+
+/// The trap line: front and both sides blocked.
+const trapAlertText = '$_dangerHead $wallTurn';
 
 /// The trap line in front of a wall: the danger wall alert, same sentence.
 const wallTrapText = '$_wallDangerHead $wallTurn';
