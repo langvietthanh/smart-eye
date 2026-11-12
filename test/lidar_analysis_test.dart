@@ -116,6 +116,36 @@ LidarObstacle obstacleOf(LidarReading r) {
 }
 
 void sideLaneTests() {
+  test('a table edge only in the outer 10 cm is passed by', () {
+    // 28–60 cm right of the axis (world x is right), 75 cm tall, at 1.2 m.
+    final s = LidarAnalysis().analyzeScan(
+      render(boxes: [const Box(0.28, 0, 1.2, 0.6, 0.75, 1.8)]),
+    );
+    expect(s.center, isA<LidarClear>());
+    expect(distanceOf(s.right), closeTo(1.2, 0.1));
+  });
+
+  test('a 64 cm obstacle does not block its own lanes', () {
+    final r = obstacleOf(
+      LidarAnalysis().analyze(
+        render(boxes: [const Box(-0.32, 0, 1.8, 0.32, 0.9, 2.2)]),
+      ),
+    );
+    expect(r.left, SideState.clear);
+    expect(r.right, SideState.clear);
+  });
+
+  test('an edge grazer before the obstacle blocks that lane', () {
+    final r = obstacleOf(
+      LidarAnalysis().analyze(
+        render(boxes: [chair(1.8), const Box(-0.33, 0, 1.0, -0.27, 0.8, 1.1)]),
+      ),
+    );
+    expect(r.distance, closeTo(1.8, 0.1));
+    expect(r.left, SideState.blocked);
+    expect(r.right, SideState.clear);
+  });
+
   test('diagnostics locate an obstacle at the left edge of the corridor', () {
     final a = LidarAnalysis();
     a.analyze(render());

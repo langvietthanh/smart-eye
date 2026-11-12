@@ -54,9 +54,7 @@ class ProximityPulse {
     double? best;
     for (final object in scene.objects) {
       final box = object.track.observedBox;
-      if (!object.isRelevant ||
-          object.track.misses != 0 ||
-          !VisualProximity.inPath(box, frame)) {
+      if (!object.isRelevant || object.track.misses != 0 || !object.inPath) {
         continue;
       }
       final occupancy = VisualProximity.occupancy(box, frame);

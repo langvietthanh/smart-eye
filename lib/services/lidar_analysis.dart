@@ -114,6 +114,11 @@ class LidarAnalysis {
   /// Half the corridor width: shoulders plus margin. A 0.8 m door fits.
   static const halfWidth = 0.35;
 
+  /// Only hits this close to the axis make a centre obstacle: something
+  /// reaching just into the outer 10 cm (a table edge) is passed by. Such
+  /// hits still block the lanes (see [analyzeScan]) and the side corridors.
+  static const coreHalfWidth = 0.25;
+
   /// Outer edge of the side corridors, either side of the centre one.
   static const sideOuter = 1.05;
 
@@ -232,7 +237,7 @@ class LidarAnalysis {
           height > headroom) {
         continue;
       }
-      if (side.abs() <= halfWidth) {
+      if (side.abs() <= coreHalfWidth) {
         centre.add(forward);
         centreAt.add(i);
       } else if (side > 0 && side <= sideOuter) {
@@ -254,6 +259,18 @@ class LidarAnalysis {
         for (var i = 0; i < count; i++) {
           final s = sign * sides[i];
           final forward = forwards[i];
+          final height = heights[i];
+          // An edge-grazer on the way there is in the path of a step aside;
+          // the obstacle's own flank (its last 20 cm) is not.
+          if (s > coreHalfWidth &&
+              s <= halfWidth &&
+              forward >= minForward &&
+              forward < d - 0.2 &&
+              height >= low &&
+              height <= headroom) {
+            obstacles++;
+            continue;
+          }
           // Anything seen on the way to the gap counts, not only beside the
           // obstacle; the floor is only checked where it is in view.
           if (s <= halfWidth ||
@@ -262,7 +279,6 @@ class LidarAnalysis {
               forward > end) {
             continue;
           }
-          final height = heights[i];
           if (height >= low && height <= headroom) {
             obstacles++;
           } else if (forward >= d && (height - floor).abs() <= laneFloorBand) {

@@ -34,6 +34,7 @@ import '../services/scene_freshness.dart';
 import '../services/sight_monitor.dart';
 import '../services/speech_manager.dart';
 import '../services/ui_settings.dart';
+import '../services/visual_proximity.dart';
 import '../services/voice_command_service.dart';
 import '../utils/image_utils.dart';
 import '../utils/label_catalog.dart';
@@ -966,7 +967,16 @@ class _CameraScreenState extends State<CameraScreen>
         .toList();
     final now = DateTime.now();
     final frame = Size(_screenWidth, _screenHeight);
-    final tracks = _tracker.update(filtered, frame, capturedAt ?? now);
+    final corridor = PathCorridor.forPitch(
+      _sight.pitch,
+      portrait: frame.height >= frame.width,
+    );
+    final tracks = _tracker.update(
+      filtered,
+      frame,
+      capturedAt ?? now,
+      corridor: corridor,
+    );
     // Just after arrival the target is right in front of the user: keep it
     // out of warnings so the arrival cue is not cut by a warning about it.
     final scene = _engine.assess(
@@ -975,6 +985,7 @@ class _CameraScreenState extends State<CameraScreen>
       targetTrackId:
           _guide.targetTrackId ??
           _guide.arrivedTrackId(tracks: tracks, now: now),
+      corridor: corridor,
     );
     _blockage.onDetections(now, scene.columnLoad);
     _evaluateBlockage(now);

@@ -29,8 +29,9 @@ class ObjectTracker {
   List<TrackedObject> update(
     List<Recognition> detections,
     Size frame,
-    DateTime now,
-  ) {
+    DateTime now, {
+    PathCorridor? corridor,
+  }) {
     if (frame.width <= 0 || frame.height <= 0) return [];
     _tracks.removeWhere(
       (track) =>
@@ -106,7 +107,10 @@ class ObjectTracker {
           track.hits >= 2 &&
           track.confirmationConfidence >= 0.4 &&
           categoryOf(track.labelEn) != ObjectCategory.other &&
-          VisualProximity.inPath(track.observedBox, frame) &&
+          (corridor ?? PathCorridor.typical).contains(
+            track.observedBox,
+            frame,
+          ) &&
           VisualProximity.occupancy(track.observedBox, frame) >=
               VisualProximity.nearEnter;
       if (track.hits >= minHits || earlyWarning) track.confirmed = true;

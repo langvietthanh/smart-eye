@@ -5,7 +5,12 @@ import 'package:smart_eye/models/scene_info.dart';
 import 'package:smart_eye/models/tracked_object.dart';
 import 'package:smart_eye/services/proximity_pulse.dart';
 
-ObjectInfo object(Rect box, ObjectCategory category, {int misses = 0}) {
+ObjectInfo object(
+  Rect box,
+  ObjectCategory category, {
+  int misses = 0,
+  bool inPath = true,
+}) {
   final track = TrackedObject(
     id: 1,
     classId: 56,
@@ -20,6 +25,7 @@ ObjectInfo object(Rect box, ObjectCategory category, {int misses = 0}) {
     distance: DistanceLevel.medium,
     category: category,
     approaching: false,
+    inPath: inPath,
   );
 }
 
@@ -57,6 +63,7 @@ void main() {
     final offPath = object(
       const Rect.fromLTWH(0, 0, 60, 580),
       ObjectCategory.obstacle,
+      inPath: false,
     );
     final cup = object(
       const Rect.fromLTWH(100, 100, 100, 500),

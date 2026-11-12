@@ -1,4 +1,3 @@
-import 'dart:math';
 import 'dart:ui';
 
 import '../models/scene_info.dart';
@@ -19,21 +18,27 @@ class HazardEngine {
   /// [targetTrackId] is the object the user is being guided to: it is not
   /// warned about unless it is a real danger (ground hazard, vehicle, or a
   /// person/animal approaching). Objects and column load are unaffected.
+  /// [corridor] defaults to [PathCorridor.typical].
   SceneAssessment assess(
     List<TrackedObject> tracks,
     Size frame, {
     int? targetTrackId,
+    PathCorridor? corridor,
   }) {
     if (frame.width <= 0 || frame.height <= 0) return SceneAssessment.empty;
-    final objects = tracks.map((track) => _describe(track, frame)).toList();
+    final path = corridor ?? PathCorridor.typical;
+    final objects = tracks
+        .map((track) => _describe(track, frame, path))
+        .toList();
     return SceneAssessment(
       objects: objects,
-      columnLoad: _columnLoad(objects, frame),
-      alert: _decide(objects, frame, targetTrackId),
+      columnLoad: _columnLoad(objects, frame, path),
+      alert: _decide(objects, targetTrackId),
+      corridor: path,
     );
   }
 
-  ObjectInfo _describe(TrackedObject track, Size frame) {
+  ObjectInfo _describe(TrackedObject track, Size frame, PathCorridor path) {
     final ratio = VisualProximity.occupancy(track.observedBox, frame);
     final distance = distanceWithHysteresis(track.distanceLevel, ratio);
     track.distanceLevel = distance;
@@ -45,9 +50,14 @@ class HazardEngine {
         category != ObjectCategory.other &&
         track.growth >= approachGrowth &&
         track.occupancyGrowthPerSecond >= 0.06;
+    final inPath = path.contains(track.observedBox, frame);
     return ObjectInfo(
       track: track,
-      pos: hPosOf(track.observedBox, frame),
+      // In the way: where it sits relative to the corridor, not the thirds.
+      pos: inPath
+          ? path.posOf(track.observedBox, frame)
+          : hPosOf(track.observedBox, frame),
+      inPath: inPath,
       distance: distance,
       category: category,
       approaching: approaching,
@@ -72,9 +82,14 @@ class HazardEngine {
     double ratio,
   ) => VisualProximity.level(prev, ratio);
 
-  List<double> _columnLoad(List<ObjectInfo> objects, Size frame) {
+  /// Left of / inside / right of the corridor. A side counts when the box
+  /// covers at least a quarter of a third of the frame width there.
+  List<double> _columnLoad(
+    List<ObjectInfo> objects,
+    Size frame,
+    PathCorridor path,
+  ) {
     final load = [0.0, 0.0, 0.0];
-    final colW = frame.width / 3;
     for (final object in objects) {
       if (!object.isRelevant ||
           object.track.misses != 0 ||
@@ -86,14 +101,10 @@ class HazardEngine {
         continue;
       }
       final weight = object.distance == DistanceLevel.near ? 2.0 : 1.0;
-      for (int col = 0; col < 3; col++) {
-        final box = object.track.observedBox;
-        final overlap = max(
-          0.0,
-          min(box.right, (col + 1) * colW) - max(box.left, col * colW),
-        );
-        if (overlap >= 0.25 * colW) load[col] += weight;
-      }
+      final (left, right) = path.sides(object.track.observedBox, frame);
+      if (left >= 0.25 / 3) load[0] += weight;
+      if (object.inPath) load[1] += weight;
+      if (right >= 0.25 / 3) load[2] += weight;
     }
     return load;
   }
@@ -113,18 +124,14 @@ class HazardEngine {
     }
   }
 
-  HazardAlert? _decide(
-    List<ObjectInfo> objects,
-    Size frame,
-    int? targetTrackId,
-  ) {
+  HazardAlert? _decide(List<ObjectInfo> objects, int? targetTrackId) {
     ({ObjectInfo object, AlertLevel level, bool inPath})? best;
     for (final object in objects) {
       if (_isSkippedTarget(object, targetTrackId)) continue;
       // Keep briefly occluded tracks for display, but never dispatch a new
       // warning from a box absent in the current observation.
       if (!object.isRelevant || object.track.misses != 0) continue;
-      final inPath = VisualProximity.inPath(object.track.observedBox, frame);
+      final inPath = object.inPath;
       final level = _levelOf(object, inPath);
       if (level == AlertLevel.info) continue;
       if (best == null ||
