@@ -229,10 +229,10 @@ void sideStabilityTests() {
     for (var i = 0; i < 3; i++) {
       s.update(both);
     }
-    expect(
-      s.update(rightBlocked),
-      (left: SideState.clear, right: SideState.blocked),
-    );
+    expect(s.update(rightBlocked), (
+      left: SideState.clear,
+      right: SideState.blocked,
+    ));
   });
 
   test('a broken clear streak starts over', () {
@@ -352,10 +352,16 @@ void main() {
 }
 
 void warningTests() {
+  // One LiDAR reading every 100 ms.
+  var clock = DateTime(2026);
   AlertLevel feed(LidarWarning w, List<double?> metres) {
     var level = AlertLevel.info;
     for (final m in metres) {
-      level = w.update(m == null ? const LidarClear() : LidarObstacle(m));
+      clock = clock.add(const Duration(milliseconds: 100));
+      level = w.update(
+        m == null ? const LidarClear() : LidarObstacle(m),
+        clock,
+      );
     }
     return level;
   }
@@ -369,7 +375,7 @@ void warningTests() {
 
   test('hysteresis holds levels until the exit distance', () {
     final w = LidarWarning();
-    expect(feed(w, [1.9, 1.9, 2.1, 2.15]), AlertLevel.caution);
+    expect(feed(w, [2.4, 1.9, 1.9, 2.1, 2.15]), AlertLevel.caution);
     expect(feed(w, [2.3]), AlertLevel.info);
     expect(feed(w, [0.9, 0.9, 1.1]), AlertLevel.danger);
     expect(feed(w, [1.3, 1.3]), AlertLevel.caution);
@@ -378,9 +384,36 @@ void warningTests() {
 
   test('a single unknown frame does not break the streak', () {
     final w = LidarWarning();
-    feed(w, [1.5]);
-    expect(w.update(const LidarUnknown()), AlertLevel.info);
-    expect(feed(w, [1.5]), AlertLevel.caution);
+    feed(w, [1.4]);
+    expect(w.update(const LidarUnknown(), clock), AlertLevel.info);
+    expect(feed(w, [1.4]), AlertLevel.caution);
+  });
+
+  test('standing still 1.5–2 m away is not warned', () {
+    final w = LidarWarning();
+    expect(feed(w, List.filled(30, 1.8)), AlertLevel.info);
+    expect(feed(w, List.filled(30, 1.5)), AlertLevel.info);
+  });
+
+  test('walking towards it warns from 2 m', () {
+    final w = LidarWarning();
+    expect(feed(w, [2.6, 2.4, 2.2, 2.0, 1.9, 1.8]), AlertLevel.caution);
+  });
+
+  test('stopping after the warning goes quiet within the window', () {
+    final w = LidarWarning();
+    expect(feed(w, [2.4, 2.2, 1.9, 1.8]), AlertLevel.caution);
+    expect(feed(w, List.filled(12, 1.8)), AlertLevel.info);
+  });
+
+  test('something stepping into the corridor is approaching', () {
+    final w = LidarWarning();
+    expect(feed(w, [null, 1.9, 1.9]), AlertLevel.caution);
+  });
+
+  test('under 1.5 m caution holds standing still', () {
+    final w = LidarWarning();
+    expect(feed(w, List.filled(30, 1.4)), AlertLevel.caution);
   });
 
   test('pulse proximity from metres', () {

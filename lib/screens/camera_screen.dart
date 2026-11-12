@@ -840,7 +840,7 @@ class _CameraScreenState extends State<CameraScreen>
     );
     _updatePulse();
     _announceDepth(
-      _lidarWarning.update(reading),
+      _lidarWarning.update(reading, now),
       metres: distance,
       sides: _speakableSides(),
     );

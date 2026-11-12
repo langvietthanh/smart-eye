@@ -366,19 +366,36 @@ class LidarWarning {
   static const dangerEnter = 1.0;
   static const dangerExit = 1.2;
 
+  /// From here out to [cautionExit], caution needs the obstacle getting
+  /// closer (the user walking towards it): standing still 1.5–2 m away is
+  /// not warned. The warning starts that far out only because the side
+  /// lanes ("Đi chéo sang…") are fully in view from ~1.5 m.
+  static const cautionAlways = 1.5;
+  static const approachMetres = 0.15;
+  static const approachWindow = Duration(seconds: 1);
+
   AlertLevel _raw = AlertLevel.info;
   int _streak = 0;
+  final _recent = <({DateTime at, double d})>[];
 
-  AlertLevel update(LidarReading reading) {
+  AlertLevel update(LidarReading reading, DateTime now) {
     // One unreadable frame neither raises nor clears the warning; a lasting
     // gap is announced by the sight monitor instead.
     if (reading is LidarUnknown) return AlertLevel.info;
     final d = reading is LidarObstacle ? reading.distance : double.infinity;
+    _recent.removeWhere((r) => now.difference(r.at) > approachWindow);
+    final approaching = _recent.any((r) => r.d - d >= approachMetres);
+    // Clear counts as the far end of the range: something stepping into
+    // the corridor is approaching.
+    _recent.add((at: now, d: min(d, LidarAnalysis.maxForward)));
     _raw = d < dangerEnter || (_raw == AlertLevel.danger && d <= dangerExit)
         ? AlertLevel.danger
         : d < cautionEnter || (_raw != AlertLevel.info && d <= cautionExit)
         ? AlertLevel.caution
         : AlertLevel.info;
+    if (_raw == AlertLevel.caution && d >= cautionAlways && !approaching) {
+      _raw = AlertLevel.info;
+    }
     _streak = _raw == AlertLevel.info ? 0 : _streak + 1;
     return _streak >= 2 ? _raw : AlertLevel.info;
   }
@@ -386,5 +403,6 @@ class LidarWarning {
   void reset() {
     _raw = AlertLevel.info;
     _streak = 0;
+    _recent.clear();
   }
 }
