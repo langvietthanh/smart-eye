@@ -7,6 +7,7 @@ import 'package:smart_eye/models/tracked_object.dart';
 import 'package:smart_eye/models/trip.dart';
 import 'package:smart_eye/services/caption_builder.dart';
 import 'package:smart_eye/services/hazard_engine.dart';
+import 'package:smart_eye/services/lidar_analysis.dart';
 import 'package:smart_eye/services/object_tracker.dart';
 import 'package:smart_eye/utils/label_catalog.dart';
 
@@ -370,6 +371,85 @@ void main() {
         ),
         'Đứng lại, có vật ở 3 hướng.',
       );
+    });
+  });
+
+  group('LiDAR kiểm tra cảnh báo YOLO', () {
+    LidarScan centre(LidarReading c) =>
+        LidarScan(const LidarClear(), c, const LidarClear());
+
+    SceneAssessment judge(List<Recognition> dets, LidarScan? lidar) {
+      final tracker = ObjectTracker();
+      var tracks = <TrackedObject>[];
+      for (var i = 0; i < 3; i++) {
+        tracks = tracker.update(dets, frame, DateTime(2026));
+      }
+      return HazardEngine().assess(tracks, frame, lidar: lidar);
+    }
+
+    final nearChair = [rec('chair', 'ghế', 56, centerBox(0.7))];
+
+    test('ghế "rất gần" theo khung nhưng LiDAR thấy trống → im', () {
+      expect(judge(nearChair, null).alert?.level, AlertLevel.danger);
+      expect(judge(nearChair, centre(const LidarClear())).alert, isNull);
+      expect(judge(nearChair, centre(const LidarObstacle(2.5))).alert, isNull);
+    });
+
+    test('LiDAR 1,5 m hạ "Dừng lại" xuống "Chậm lại"', () {
+      final alert = judge(nearChair, centre(const LidarObstacle(1.5))).alert;
+      expect(alert?.level, AlertLevel.caution);
+      expect(alert?.message, 'Chậm lại. Có ghế ngay phía trước.');
+    });
+
+    test('LiDAR dưới 1,2 m giữ "Dừng lại"', () {
+      final alert = judge(nearChair, centre(const LidarObstacle(0.9))).alert;
+      expect(alert?.level, AlertLevel.danger);
+    });
+
+    test('LiDAR không đọc được thì giữ nguyên mức YOLO', () {
+      final alert = judge(nearChair, centre(const LidarUnknown())).alert;
+      expect(alert?.level, AlertLevel.danger);
+    });
+
+    test('bậc, hố, xe và vật đang lao tới không bị LiDAR hạ mức', () {
+      final ground = HazardEngine.lidarCapped(
+        AlertLevel.danger,
+        ObjectInfo(
+          track: TrackedObject(
+            id: 1,
+            classId: 0,
+            labelEn: 'stairs',
+            labelVi: 'cầu thang',
+            box: Rect.zero,
+            score: 0.9,
+          ),
+          pos: HPos.center,
+          distance: DistanceLevel.near,
+          category: ObjectCategory.groundHazard,
+          approaching: false,
+        ),
+        centre(const LidarClear()),
+      );
+      expect(ground, AlertLevel.danger);
+      final mover = HazardEngine.lidarCapped(
+        AlertLevel.danger,
+        ObjectInfo(
+          track: TrackedObject(
+            id: 2,
+            classId: 0,
+            labelEn: 'person',
+            labelVi: 'người',
+            box: Rect.zero,
+            score: 0.9,
+          ),
+          pos: HPos.center,
+          distance: DistanceLevel.near,
+          category: ObjectCategory.person,
+          approaching: true,
+        ),
+        centre(const LidarClear()),
+      );
+      expect(mover, AlertLevel.danger);
     });
   });
 

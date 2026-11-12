@@ -185,7 +185,7 @@ class _CameraScreenState extends State<CameraScreen>
   static const Duration _navQuietAfterDanger = Duration(seconds: 2);
   static const int _lidarCenterMaxAgeMs = 500;
   DateTime _lastDangerAt = DateTime.fromMillisecondsSinceEpoch(0);
-  LidarReading? _lidarCenter;
+  LidarScan? _lidarScan;
   int _lidarCenterAtMs = -1;
 
   /// A command is being listened for or dispatched; long presses are ignored.
@@ -802,7 +802,7 @@ class _CameraScreenState extends State<CameraScreen>
               return;
             }
             final now = DateTime.now();
-            _lidarCenter = scan.center;
+            _lidarScan = scan;
             _lidarCenterAtMs = _frameClock.elapsedMilliseconds;
             _blockage.onDepth(now, scan);
             _evaluateBlockage(now);
@@ -987,6 +987,8 @@ class _CameraScreenState extends State<CameraScreen>
       targetTrackId:
           _guide.targetTrackId ??
           _guide.arrivedTrackId(tracks: tracks, now: now),
+      // A badly aimed phone's LiDAR cannot vouch that the way is clear.
+      lidar: _sightProblem == null ? _freshLidarScan() : null,
     );
     _blockage.onDetections(now, scene.columnLoad);
     _evaluateBlockage(now);
@@ -1301,11 +1303,13 @@ class _CameraScreenState extends State<CameraScreen>
       _voice.isListening ||
       _speech.alertActive;
 
-  LidarReading? _freshLidarCenter() =>
+  LidarReading? _freshLidarCenter() => _freshLidarScan()?.center;
+
+  LidarScan? _freshLidarScan() =>
       _useLidar &&
           _frameClock.elapsedMilliseconds - _lidarCenterAtMs <=
               _lidarCenterMaxAgeMs
-      ? _lidarCenter
+      ? _lidarScan
       : null;
 
   /// Camera stopped or app left the screen: end guiding silently.
