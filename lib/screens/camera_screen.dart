@@ -497,6 +497,10 @@ class _CameraScreenState extends State<CameraScreen>
     if (!_blockage.aheadOpenSettled(DateTime.now())) _frontWarned = true;
   }
 
+  /// The way ahead has been measured open, so "Đi thẳng." holds: a caution
+  /// about the way ahead would contradict it (danger is always spoken).
+  bool _aheadOpen() => _blockage.aheadOpenSettled(DateTime.now());
+
   bool get _showsBothSidesBlocked =>
       _speech.showing.value?.text.endsWith(bothSidesBlocked) ?? false;
 
@@ -889,6 +893,7 @@ class _CameraScreenState extends State<CameraScreen>
     );
     if (text == null) return;
     final isDanger = level == AlertLevel.danger;
+    if (!isDanger && _aheadOpen()) return;
     final priority = isDanger ? SpeechPriority.danger : SpeechPriority.caution;
     const subject = 'depth:center';
     if (!_speech.canSay(priority, subject: subject)) return;
@@ -1046,6 +1051,7 @@ class _CameraScreenState extends State<CameraScreen>
     _lastAlertAt = now;
     final isDanger = alert.level == AlertLevel.danger;
     if (_trapAnnounced && !isDanger) return;
+    if (!isDanger && alert.pos == HPos.center && _aheadOpen()) return;
     final priority = isDanger ? SpeechPriority.danger : SpeechPriority.caution;
     if (!_speech.canSay(priority, subject: alert.subject)) {
       return; // Đã báo / đang chờ đọc
