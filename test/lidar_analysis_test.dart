@@ -116,6 +116,22 @@ LidarObstacle obstacleOf(LidarReading r) {
 }
 
 void sideLaneTests() {
+  test('diagnostics locate an obstacle at the left edge of the corridor', () {
+    final a = LidarAnalysis();
+    a.analyze(render());
+    // A knee-high box 15–35 cm left of the axis (world x is right).
+    final r = obstacleOf(
+      a.analyze(render(boxes: [const Box(-0.35, 0, 1.2, -0.15, 0.6, 1.5)])),
+    );
+    expect(r.distance, closeTo(1.2, 0.1));
+    final where = r.where!;
+    expect(where.sideMin, greaterThan(0.1));
+    expect(where.sideMax, lessThanOrEqualTo(LidarAnalysis.halfWidth));
+    expect(where.heightMin, greaterThanOrEqualTo(LidarAnalysis.floorMargin));
+    expect(where.heightMax, lessThan(0.65));
+    expect(where.phoneHeight, closeTo(1.3, 0.05));
+  });
+
   test('free floor beside a chair is clear on both sides', () {
     final r = obstacleOf(LidarAnalysis().analyze(render(boxes: [chair(1.8)])));
     expect(r.distance, closeTo(1.8, 0.1));

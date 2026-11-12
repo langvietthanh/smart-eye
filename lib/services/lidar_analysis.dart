@@ -59,6 +59,7 @@ class LidarObstacle extends LidarReading {
     this.distance, {
     this.left = SideState.unknown,
     this.right = SideState.unknown,
+    this.where,
   });
 
   /// Horizontal distance to the nearest substantial obstacle, metres.
@@ -67,6 +68,18 @@ class LidarObstacle extends LidarReading {
   /// The 40 cm lanes beside the centre corridor, around this obstacle
   /// (only set on the centre reading of [LidarAnalysis.analyzeScan]).
   final SideState left, right;
+
+  /// Diagnostics only (centre reading): the hits up to [distance], sideways
+  /// (+ = left of the corridor axis) and above the floor, in metres, and the
+  /// phone's height above the estimated floor.
+  final ({
+    double sideMin,
+    double sideMax,
+    double heightMin,
+    double heightMax,
+    double phoneHeight,
+  })?
+  where;
 }
 
 /// Not enough trustworthy depth to say anything.
@@ -208,6 +221,7 @@ class LidarAnalysis {
     final floor = _floor ?? defaultFloor;
     final low = floor + floorMargin;
     final left = <double>[], centre = <double>[], right = <double>[];
+    final centreAt = <int>[];
     for (var i = 0; i < count; i++) {
       final forward = forwards[i];
       final height = heights[i];
@@ -220,6 +234,7 @@ class LidarAnalysis {
       }
       if (side.abs() <= halfWidth) {
         centre.add(forward);
+        centreAt.add(i);
       } else if (side > 0 && side <= sideOuter) {
         // up × forward in ARKit's right-handed camera frame points left.
         left.add(forward);
@@ -272,8 +287,28 @@ class LidarAnalysis {
             : SideState.unknown;
       }
 
+      var sMin = double.infinity, sMax = -double.infinity;
+      var hMin = double.infinity, hMax = -double.infinity;
+      for (final i in centreAt) {
+        if (forwards[i] > center.distance) continue;
+        sMin = min(sMin, sides[i]);
+        sMax = max(sMax, sides[i]);
+        hMin = min(hMin, heights[i] - floor);
+        hMax = max(hMax, heights[i] - floor);
+      }
       // Positive `side` points left (see the corridor split above).
-      center = LidarObstacle(center.distance, left: lane(1), right: lane(-1));
+      center = LidarObstacle(
+        center.distance,
+        left: lane(1),
+        right: lane(-1),
+        where: (
+          sideMin: sMin,
+          sideMax: sMax,
+          heightMin: hMin,
+          heightMax: hMax,
+          phoneHeight: -floor,
+        ),
+      );
     }
     return LidarScan(
       _nearest(left, needed),

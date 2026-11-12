@@ -820,7 +820,7 @@ class _CameraScreenState extends State<CameraScreen>
     _sidesAtMs = capturedAtMs;
     _lidarStatus =
         '${switch (reading) {
-          LidarObstacle(:final distance) => '${distance.toStringAsFixed(2)} m',
+          LidarObstacle(:final distance, :final where) => '${distance.toStringAsFixed(2)} m${where == null ? '' : ' (vật ${_sideCm(where.sideMin)}…${_sideCm(where.sideMax)} cm, cao ${_cm(where.heightMin)}…${_cm(where.heightMax)} cm, máy cao ${_cm(where.phoneHeight)} cm)'}',
           LidarClear() => 'thông ≤ ${LidarAnalysis.maxForward.toStringAsFixed(0)} m',
           LidarUnknown() => 'không đo được',
         }} · trống: ${sideClause(_sides.left, _sides.right) ?? '—'}'
@@ -845,6 +845,12 @@ class _CameraScreenState extends State<CameraScreen>
       sides: _speakableSides(),
     );
   }
+
+  static int _cm(double metres) => (metres * 100).round();
+
+  /// T = left of the corridor axis, P = right (diagnostics only).
+  static String _sideCm(double side) =>
+      '${side >= 0 ? 'T' : 'P'}${_cm(side.abs())}';
 
   ({SideState left, SideState right}) _speakableSides() => speakableSides(
     _sides,
