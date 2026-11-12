@@ -62,7 +62,7 @@ const _dangerHead = 'Dừng lại! Vật cản ngay trước mặt.';
 const _wallDangerHead = 'Dừng lại! Tường phía trước.';
 
 /// Ends a wall alert when neither side is open, and every trap line.
-const wallTurn = 'Xoay người tìm lối.';
+const wallTurn = 'Quay lại hoặc xoay người tìm lối.';
 
 /// The trap line: front and both sides blocked.
 const trapAlertText = '$_dangerHead $wallTurn';

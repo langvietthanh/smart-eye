@@ -13,6 +13,8 @@ void main() {
       'Dừng lại! Vật cản ngay trước mặt.',
     );
     expect(trapAlertText, 'Dừng lại! Vật cản ngay trước mặt. $wallTurn');
+    // A narrow classroom aisle has desks on both sides: turning alone is no way out.
+    expect(wallTurn, 'Quay lại hoặc xoay người tìm lối.');
   });
 
   group('depthAlertText', () {

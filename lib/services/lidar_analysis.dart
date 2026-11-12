@@ -131,8 +131,9 @@ class LidarAnalysis {
   /// A wall covers the core to at least this far each side of the axis.
   static const wallReach = 0.2;
 
-  /// Outer edge of the side corridors, either side of the centre one.
-  static const sideOuter = 1.05;
+  /// Outer edge of the side corridors, either side of the centre one: a body
+  /// width past the shoulder, so desks across a ~1 m aisle do not count.
+  static const sideOuter = 0.75;
 
   /// Lanes beside the centre corridor, used to say a side is free: a
   /// portrait LiDAR sees sideways only ~0.5 × the distance ahead, so a lane

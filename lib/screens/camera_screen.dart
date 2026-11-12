@@ -499,7 +499,7 @@ class _CameraScreenState extends State<CameraScreen>
     _lastDangerAt = _lastAlertAt;
     if (_trapAnnounced) {
       _speech.say(
-        'Vẫn bị chặn. Xoay người chậm.',
+        'Vẫn bị chặn. Quay lại hoặc xoay người chậm.',
         SpeechPriority.danger,
         subject: subject,
       );

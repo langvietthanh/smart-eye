@@ -521,6 +521,18 @@ void warningTests() {
     }
   });
 
+  test('a seated student 32 cm off the walking line is not ahead', () {
+    // ~1 m classroom aisle: only hits within coreHalfWidth (±25 cm) are ahead.
+    final s = LidarAnalysis().analyzeScan(render(boxes: [sideWall(0.32)]));
+    expect(s.center, isA<LidarClear>());
+    expect(s.right, isA<LidarObstacle>());
+  });
+
+  test('desks 85 cm to the side do not block that side', () {
+    final s = LidarAnalysis().analyzeScan(render(boxes: [sideWall(-0.85)]));
+    expect(s.left, isA<LidarClear>());
+  });
+
   test('a 1.2 m hallway blocks both sides but not the centre', () {
     final s = LidarAnalysis().analyzeScan(
       render(boxes: [sideWall(-0.6), sideWall(0.6)]),
