@@ -11,8 +11,10 @@ enum PathEvent { trapped, cleared, opened }
 /// when the way ahead opens again. Pure Dart; time is passed in explicitly.
 class PathBlockage {
   static const blockedWithin = 1.5;
+  static const wallBlockedWithin = 0.5;
   static const exitClearBeyond = 2.2;
   static const settle = Duration(seconds: 1);
+  static const turningSettle = Duration(milliseconds: 300);
   static const detectionMaxAge = Duration(seconds: 1);
   static const depthMaxAge = Duration(milliseconds: 500);
   // MiDaS runs every >= 300 ms plus inference time, slower than LiDAR.
@@ -26,6 +28,7 @@ class PathBlockage {
   DateTime? _monoAt;
   bool _seenDepth = false;
   bool _trapped = false;
+  bool _wall = false;
   DateTime? _since;
   bool _watching = false;
   DateTime? _clearSince;
@@ -38,10 +41,11 @@ class PathBlockage {
     _loadAt = at;
   }
 
-  void onDepth(DateTime at, LidarScan scan) {
+  void onDepth(DateTime at, LidarScan scan, {bool wall = false}) {
     _scan = scan;
     _scanAt = at;
     _seenDepth = true;
+    _wall = wall;
   }
 
   /// Relative depth (no LiDAR). Only used as evidence that a way is open;
@@ -63,16 +67,18 @@ class PathBlockage {
       t != null && now.difference(t) <= maxAge;
 
   /// `[left, centre, right]` from inputs that are still fresh: a LiDAR
-  /// obstacle within [blockedWithin] metres, or, where LiDAR has no reading,
-  /// a full YOLO column. YOLO's "near" is box size, not metres: a chair 2–3 m
-  /// away reads "khá gần", so it never overrules a LiDAR measurement.
+  /// obstacle within [blockedWithin] metres (or [wallBlockedWithin] for a
+  /// centre wall), or, where LiDAR has no reading, a full YOLO column.
+  /// YOLO's "near" is box size, not metres: a chair 2–3 m away reads "khá gần",
+  /// so it never overrules a LiDAR measurement.
   List<bool> blocked(DateTime now) {
     final yolo = _fresh(_loadAt, now, detectionMaxAge);
     final lidar = _fresh(_scanAt, now, depthMaxAge);
     return List.generate(3, (i) {
       final r = lidar ? _scan![HPos.values[i]] : const LidarUnknown();
       if (r is! LidarUnknown) {
-        return r is LidarObstacle && r.distance <= blockedWithin;
+        final limit = i == 1 && _wall ? wallBlockedWithin : blockedWithin;
+        return r is LidarObstacle && r.distance <= limit;
       }
       return yolo && _load![i] >= 1.0;
     });
@@ -102,7 +108,7 @@ class PathBlockage {
     return false;
   }
 
-  PathEvent? evaluate(DateTime now) {
+  PathEvent? evaluate(DateTime now, {bool turning = false}) {
     final centreOpen = _trapped && _open(now, HPos.center);
     final holds = _trapped
         ? centreOpen || _open(now, HPos.left) || _open(now, HPos.right)
@@ -111,7 +117,8 @@ class PathBlockage {
       _since = null;
     } else {
       _since ??= now;
-      if (now.difference(_since!) >= settle) {
+      final needed = _trapped && turning ? turningSettle : settle;
+      if (now.difference(_since!) >= needed) {
         _trapped = !_trapped;
         _since = null;
         _clearSince = null;
@@ -171,6 +178,7 @@ class PathBlockage {
     _monoAt = null;
     _seenDepth = false;
     _trapped = false;
+    _wall = false;
     _since = null;
     _watching = false;
     _clearSince = null;

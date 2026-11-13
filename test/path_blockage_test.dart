@@ -12,19 +12,22 @@ LidarScan scan(double? l, double? c, double? r) {
   return LidarScan(m(l), m(c), m(r));
 }
 
-/// Feeds [load] every 250 ms from [from] to [to] (inclusive) and evaluates.
+/// Feeds [load] every [step] ms from [from] to [to] (inclusive) and evaluates.
 List<PathEvent> run(
   PathBlockage p,
   List<double> load,
   int from,
   int to, {
   LidarScan? depth,
+  bool wall = false,
+  bool turning = false,
+  int step = 250,
 }) {
   final events = <PathEvent>[];
-  for (var ms = from; ms <= to; ms += 250) {
+  for (var ms = from; ms <= to; ms += step) {
     p.onDetections(at(ms), load);
-    if (depth != null) p.onDepth(at(ms), depth);
-    final e = p.evaluate(at(ms));
+    if (depth != null) p.onDepth(at(ms), depth, wall: wall);
+    final e = p.evaluate(at(ms), turning: turning);
     if (e != null) events.add(e);
   }
   return events;
@@ -33,6 +36,35 @@ List<PathEvent> run(
 void main() {
   late PathBlockage p;
   setUp(() => p = PathBlockage());
+
+  test('facing a wall traps only within 0.5 m', () {
+    expect(
+      run(p, all, 0, 1500, depth: scan(1, 1.0, 1), wall: true),
+      isEmpty,
+    );
+    expect(
+      run(p, all, 1750, 3250, depth: scan(1, 0.45, 1), wall: true),
+      [PathEvent.trapped],
+    );
+  });
+
+  test('turning leaves a trap after 0.3 s', () {
+    run(p, all, 0, 1500);
+    expect(
+      run(p, sides, 1600, 2000, turning: true, step: 100),
+      [PathEvent.cleared],
+    );
+    expect(p.trapped, isFalse);
+  });
+
+  test('standing still still needs a second', () {
+    run(p, all, 0, 1500);
+    expect(
+      run(p, sides, 1600, 2000, turning: false, step: 100),
+      isEmpty,
+    );
+    expect(p.trapped, isTrue);
+  });
 
   test('blocked under one second is not trapped', () {
     expect(run(p, all, 0, 750), isEmpty);
