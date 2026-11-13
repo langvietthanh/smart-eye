@@ -143,3 +143,4 @@ void main() {
     expect(walk.phase, WalkPhase.straight);
   });
 }
+

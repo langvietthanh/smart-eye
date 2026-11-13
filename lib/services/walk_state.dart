@@ -65,3 +65,4 @@ class WalkState {
     _openSince = null;
   }
 }
+
