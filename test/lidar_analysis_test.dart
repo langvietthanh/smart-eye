@@ -529,6 +529,13 @@ void warningTests() {
     }
   });
 
+  test('a wall closer than minForward is unknown, never clear', () {
+    // Face against a wall: every hit is nearer than minForward. "Clear" here
+    // made the app say "Đi thẳng." into the wall.
+    final s = LidarAnalysis().analyzeScan(render(boxes: [wall(0.15)]));
+    expect(s.center, isA<LidarUnknown>());
+  });
+
   test('a seated student 32 cm off the walking line is not ahead', () {
     // ~1 m classroom aisle: only hits within coreHalfWidth (±25 cm) are ahead.
     final s = LidarAnalysis().analyzeScan(render(boxes: [sideWall(0.32)]));

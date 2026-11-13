@@ -249,14 +249,14 @@ class LidarAnalysis {
     final left = <double>[], centre = <double>[], right = <double>[];
     final centreAt = <int>[];
     final centreSide = <double>[];
+    var tooClose = 0;
     for (var i = 0; i < count; i++) {
       final forward = forwards[i];
       final height = heights[i];
       final side = sides[i];
-      if (forward < minForward ||
-          forward > maxForward ||
-          height < low ||
-          height > headroom) {
+      if (forward > maxForward || height < low || height > headroom) continue;
+      if (forward < minForward) {
+        if (side.abs() <= coreHalfWidth) tooClose++;
         continue;
       }
       if (side.abs() <= coreHalfWidth) {
@@ -272,6 +272,9 @@ class LidarAnalysis {
     }
     final needed = (minPoints / (step * step)).ceil();
     var center = _frontal(centre, centreSide, needed);
+    // Face against a wall every hit is nearer than minForward: that is not a
+    // clear way ahead (it made the app say "Đi thẳng." into the wall).
+    if (center is LidarClear && tooClose >= needed) center = const LidarUnknown();
     if (center is LidarObstacle) {
       SideState lane(double sign) {
         final d = center is LidarObstacle ? center.distance : 0.0;
