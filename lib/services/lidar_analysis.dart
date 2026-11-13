@@ -481,6 +481,73 @@ class _SideTrack {
   }
 }
 
+/// Remembers a side lane verified [SideState.clear] while approaching an obstacle:
+/// closer than ~1.5 m, the side lanes leave the camera's field of view and turn
+/// [SideState.unknown]. The latch preserves the previously seen clear lane so
+/// the app can still tell the user to step aside.
+///
+/// Forgets when:
+/// - That side reads [SideState.blocked].
+/// - The centre path clears ([LidarClear]).
+/// - Distance jumps away by more than 0.5 m (another obstacle).
+///
+/// [LidarUnknown] does not forget.
+class SideLatch {
+  SideState _left = SideState.unknown;
+  SideState _right = SideState.unknown;
+  double _minDistance = double.infinity;
+
+  ({SideState left, SideState right}) update(
+    LidarReading centre,
+    ({SideState left, SideState right}) sides,
+  ) {
+    switch (centre) {
+      case LidarClear():
+        _left = SideState.unknown;
+        _right = SideState.unknown;
+        _minDistance = double.infinity;
+      case LidarObstacle(:final distance):
+        if (distance > _minDistance + 0.5) {
+          _left = SideState.unknown;
+          _right = SideState.unknown;
+          _minDistance = distance;
+        } else {
+          _minDistance = min(_minDistance, distance);
+        }
+      case LidarUnknown():
+        break;
+    }
+
+    _left = switch (sides.left) {
+      SideState.clear => SideState.clear,
+      SideState.blocked => SideState.unknown,
+      SideState.unknown => _left,
+    };
+    final resolvedLeft =
+        sides.left == SideState.unknown && _left == SideState.clear
+            ? SideState.clear
+            : sides.left;
+
+    _right = switch (sides.right) {
+      SideState.clear => SideState.clear,
+      SideState.blocked => SideState.unknown,
+      SideState.unknown => _right,
+    };
+    final resolvedRight =
+        sides.right == SideState.unknown && _right == SideState.clear
+            ? SideState.clear
+            : sides.right;
+
+    return (left: resolvedLeft, right: resolvedRight);
+  }
+
+  void reset() {
+    _left = SideState.unknown;
+    _right = SideState.unknown;
+    _minDistance = double.infinity;
+  }
+}
+
 /// Latches the "facing a wall" verdict: at far distances (1–4 m) the LiDAR
 /// sees the floor and ceiling around the obstacle to classify it as a wall.
 /// Up close (under ~0.8 m), the ceiling and floor leave the frame so [wall]
@@ -535,7 +602,7 @@ class LidarWarning {
   /// From here out to [cautionExit], caution needs the obstacle getting
   /// closer (the user walking towards it): standing still 1.5–2 m away is
   /// not warned. The warning starts that far out only because the side
-  /// lanes ("Đi chéo sang…") are fully in view from ~1.5 m.
+  /// lanes ("Đi chéo phải/trái") are fully in view from ~1.5 m.
   static const cautionAlways = 1.5;
   static const approachMetres = 0.15;
   static const approachWindow = Duration(seconds: 1);

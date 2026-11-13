@@ -679,4 +679,72 @@ void warningTests() {
       expect(level, AlertLevel.danger);
     });
   });
+
+  group('SideLatch', () {
+    const unknown = SideState.unknown;
+    const clear = SideState.clear;
+    const blocked = SideState.blocked;
+
+    test('remembers a clear side when the lane leaves the view', () {
+      final latch = SideLatch();
+      expect(
+        latch.update(
+          const LidarObstacle(2.0),
+          (left: blocked, right: clear),
+        ),
+        (left: blocked, right: clear),
+      );
+      expect(
+        latch.update(
+          const LidarObstacle(1.0),
+          (left: unknown, right: unknown),
+        ),
+        (left: unknown, right: clear),
+      );
+    });
+
+    test('a blocked side forgets', () {
+      final latch = SideLatch();
+      latch.update(const LidarObstacle(2.0), (left: unknown, right: clear));
+      expect(
+        latch.update(const LidarObstacle(1.5), (left: unknown, right: blocked)),
+        (left: unknown, right: blocked),
+      );
+      expect(
+        latch.update(const LidarObstacle(1.0), (left: unknown, right: unknown)),
+        (left: unknown, right: unknown),
+      );
+    });
+
+    test('clear ahead forgets', () {
+      final latch = SideLatch();
+      latch.update(const LidarObstacle(2.0), (left: unknown, right: clear));
+      expect(
+        latch.update(const LidarClear(), (left: unknown, right: unknown)),
+        (left: unknown, right: unknown),
+      );
+      expect(
+        latch.update(const LidarObstacle(1.0), (left: unknown, right: unknown)),
+        (left: unknown, right: unknown),
+      );
+    });
+
+    test('another obstacle forgets', () {
+      final latch = SideLatch();
+      latch.update(const LidarObstacle(1.0), (left: unknown, right: clear));
+      expect(
+        latch.update(const LidarObstacle(1.8), (left: unknown, right: unknown)),
+        (left: unknown, right: unknown),
+      );
+    });
+
+    test('unknown keeps', () {
+      final latch = SideLatch();
+      latch.update(const LidarObstacle(1.0), (left: unknown, right: clear));
+      expect(
+        latch.update(const LidarUnknown(), (left: unknown, right: unknown)),
+        (left: unknown, right: clear),
+      );
+    });
+  });
 }
