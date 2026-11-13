@@ -195,7 +195,7 @@ class _CameraScreenState extends State<CameraScreen>
   static const Duration _navQuietAfterDanger = Duration(seconds: 2);
   static const int _lidarCenterMaxAgeMs = 500;
   DateTime _lastDangerAt = DateTime.fromMillisecondsSinceEpoch(0);
-  LidarReading? _lidarCenter;
+  LidarScan? _lidarScan;
   int _lidarCenterAtMs = -1;
 
   /// A command is being listened for or dispatched; long presses are ignored.
@@ -501,8 +501,10 @@ class _CameraScreenState extends State<CameraScreen>
   /// about the way ahead would contradict it (danger is always spoken).
   bool _aheadOpen() => _blockage.aheadOpenSettled(DateTime.now());
 
+  /// The banner already tells the user to turn (a wall with no way round,
+  /// or a trap line), so the trap line would only repeat it.
   bool get _showsBothSidesBlocked =>
-      _speech.showing.value?.text.endsWith(bothSidesBlocked) ?? false;
+      _speech.showing.value?.text.endsWith(wallTurn) ?? false;
 
   /// Leaving a trap also clears its banner, so a quick re-trap is not mistaken
   /// for a line that was just spoken.
@@ -516,6 +518,8 @@ class _CameraScreenState extends State<CameraScreen>
     const subject = 'path:trapped';
     if (event == PathEvent.cleared) {
       _endTrap();
+      // A queued obstacle line is stale once the way has been open 1 s.
+      _speech.dropSubject('depth:center');
       _frontWarned = true; // _maybeSayStraight says "Đi thẳng."
       return;
     }
@@ -539,9 +543,13 @@ class _CameraScreenState extends State<CameraScreen>
     if (!_speech.canSay(SpeechPriority.danger, subject: subject)) return;
     _lastAlertAt = DateTime.now();
     _lastDangerAt = _lastAlertAt;
-    final log = _eventLogger(TripEventType.danger, trapAlertText);
+    final centre = _freshLidarCenter();
+    final text = centre is LidarObstacle && centre.wall
+        ? wallTrapText
+        : trapAlertText;
+    final log = _eventLogger(TripEventType.danger, text);
     _speech.say(
-      trapAlertText,
+      text,
       SpeechPriority.danger,
       subject: subject,
       onStart: () {
@@ -779,7 +787,20 @@ class _CameraScreenState extends State<CameraScreen>
   void _onDepth(DepthReading reading) {
     // Dark frames and floor/ceiling views give meaningless depth; the sight
     // monitor already tells the user what to fix.
-    if (_sight.check(DateTime.now()) != null) return;
+    final now = DateTime.now();
+    if (_sight.check(now) != null) {
+      _sideStability.reset();
+      _sides = _noSides;
+      return;
+    }
+    final load = _scene.columnLoad;
+    _sides = _sideStability.updateSides(
+      monoSide(reading.left, load[0]),
+      monoSide(reading.right, load[2]),
+    );
+    _sidesAtMs = _frameClock.elapsedMilliseconds;
+    _blockage.onMonoDepth(now, reading);
+    _evaluateBlockage(now);
     _depthProximity = (
       proximity: ProximityPulse.fromCloseness(reading.center),
       atMs: _frameClock.elapsedMilliseconds,
@@ -791,7 +812,10 @@ class _CameraScreenState extends State<CameraScreen>
       _announceStep(step.kind, step.level);
       return;
     }
-    _announceDepth(_depthWarning.update(reading.center));
+    _announceDepth(
+      _depthWarning.update(reading.center),
+      sides: _speakableSides(),
+    );
   }
 
   /// LiDAR depth packets arrive ~10 Hz; analysis runs off the UI isolate and
@@ -813,7 +837,7 @@ class _CameraScreenState extends State<CameraScreen>
               return;
             }
             final now = DateTime.now();
-            _lidarCenter = scan.center;
+            _lidarScan = scan;
             _lidarCenterAtMs = _frameClock.elapsedMilliseconds;
             _blockage.onDepth(now, scan);
             _evaluateBlockage(now);
@@ -840,7 +864,7 @@ class _CameraScreenState extends State<CameraScreen>
     _sidesAtMs = capturedAtMs;
     _lidarStatus =
         '${switch (reading) {
-          LidarObstacle(:final distance) => '${distance.toStringAsFixed(2)} m',
+          LidarObstacle(:final distance, :final where, :final wall) => '${distance.toStringAsFixed(2)} m${wall ? ' tường' : ''}${where == null ? '' : ' (vật ${_sideCm(where.sideMin)}…${_sideCm(where.sideMax)} cm, cao ${_cm(where.heightMin)}…${_cm(where.heightMax)} cm, máy cao ${_cm(where.phoneHeight)} cm)'}',
           LidarClear() => 'thông ≤ ${LidarAnalysis.maxForward.toStringAsFixed(0)} m',
           LidarUnknown() => 'không đo được',
         }} · trống: ${sideClause(_sides.left, _sides.right) ?? '—'}'
@@ -860,28 +884,37 @@ class _CameraScreenState extends State<CameraScreen>
     );
     _updatePulse();
     _announceDepth(
-      _lidarWarning.update(reading),
+      _lidarWarning.update(reading, now),
       metres: distance,
       sides: _speakableSides(),
+      wall: reading is LidarObstacle && reading.wall,
     );
   }
 
-  ({SideState left, SideState right}) _speakableSides() => _useLidar
-      ? speakableSides(
-          _sides,
-          capturedAtMs: _sidesAtMs,
-          nowMs: _frameClock.elapsedMilliseconds,
-          trapped: _trapAnnounced || _blockage.trapped,
-        )
-      : _noSides;
+  static int _cm(double metres) => (metres * 100).round();
+
+  /// T = left of the corridor axis, P = right (diagnostics only).
+  static String _sideCm(double side) =>
+      '${side >= 0 ? 'T' : 'P'}${_cm(side.abs())}';
+
+  ({SideState left, SideState right}) _speakableSides() => speakableSides(
+    _sides,
+    capturedAtMs: _sidesAtMs,
+    nowMs: _frameClock.elapsedMilliseconds,
+    trapped: _trapAnnounced || _blockage.trapped,
+  );
 
   /// Speaks a class-agnostic depth warning unless the detector already names
-  /// the obstacle with equal or higher urgency. [metres] and [sides] are
-  /// known only with LiDAR.
+  /// the obstacle with equal or higher urgency. [metres] is known only with
+  /// LiDAR; [sides] come from LiDAR lanes or, without it, MiDaS + YOLO.
+  /// Metres in the last obstacle line sent to speech (null: none or a wall).
+  double? _spokenMetres;
+
   void _announceDepth(
     AlertLevel level, {
     double? metres,
     ({SideState left, SideState right}) sides = _noSides,
+    bool wall = false,
   }) {
     if (_trapAnnounced) return;
     final text = depthAlertText(
@@ -890,13 +923,24 @@ class _CameraScreenState extends State<CameraScreen>
       metres: metres,
       left: sides.left,
       right: sides.right,
+      wall: wall,
     );
-    if (text == null) return;
+    if (text == null) {
+      if (level == AlertLevel.info) _spokenMetres = null;
+      return;
+    }
     final isDanger = level == AlertLevel.danger;
     if (!isDanger && _aheadOpen()) return;
     final priority = isDanger ? SpeechPriority.danger : SpeechPriority.caution;
     const subject = 'depth:center';
+    // The spoken distance is wrong once the user is 0.5 m closer: say it anew
+    // instead of waiting out the cooldown.
+    final last = _spokenMetres;
+    if (!wall && metres != null && last != null && metres <= last - 0.5) {
+      _speech.dropSubject(subject);
+    }
     if (!_speech.canSay(priority, subject: subject)) return;
+    _spokenMetres = wall ? null : metres;
     _lastAlertAt = DateTime.now();
     if (isDanger) _lastDangerAt = _lastAlertAt;
     final log = _eventLogger(
@@ -913,6 +957,7 @@ class _CameraScreenState extends State<CameraScreen>
         log();
       },
     );
+    _blockage.watchAhead();
   }
 
   void _announceStep(StepKind kind, AlertLevel level) {
@@ -992,6 +1037,8 @@ class _CameraScreenState extends State<CameraScreen>
       targetTrackId:
           _guide.targetTrackId ??
           _guide.arrivedTrackId(tracks: tracks, now: now),
+      // A badly aimed phone's LiDAR cannot vouch that the way is clear.
+      lidar: _sightProblem == null ? _freshLidarScan() : null,
     );
     _blockage.onDetections(now, scene.columnLoad);
     _evaluateBlockage(now);
@@ -1058,7 +1105,8 @@ class _CameraScreenState extends State<CameraScreen>
     }
     if (isDanger) _lastDangerAt = now;
 
-    // LiDAR sides: only fresh, never during a trap, only for a centre object.
+    if (alert.pos == HPos.center) _blockage.watchAhead();
+    // Sides: only fresh, never during a trap, only for a centre object.
     final sides = _speakableSides();
     final text = withSideClause(
       alert.message,
@@ -1307,11 +1355,13 @@ class _CameraScreenState extends State<CameraScreen>
       _voice.isListening ||
       _speech.alertActive;
 
-  LidarReading? _freshLidarCenter() =>
+  LidarReading? _freshLidarCenter() => _freshLidarScan()?.center;
+
+  LidarScan? _freshLidarScan() =>
       _useLidar &&
           _frameClock.elapsedMilliseconds - _lidarCenterAtMs <=
               _lidarCenterMaxAgeMs
-      ? _lidarCenter
+      ? _lidarScan
       : null;
 
   /// Camera stopped or app left the screen: end guiding silently.
@@ -1493,9 +1543,29 @@ class _CameraScreenState extends State<CameraScreen>
   // UI
   // ---------------------------------------------------------------------------
 
+  /// The camera image fitted into the screen without cropping or stretching.
+  /// Detection, the overlay and the preview share this one rectangle, so the
+  /// black bars around it are never scanned or drawn on.
+  static Size _cameraView(Size screen, FeedHandle? handle) {
+    // The camera plugin only knows its preview size once initialised.
+    if (handle == null ||
+        !handle.isInitialized ||
+        screen.width <= 0 ||
+        screen.height <= 0) {
+      return screen;
+    }
+    final long = handle.aspectRatio;
+    // Width / height of the image as shown: the app turns it with the phone.
+    final ratio = screen.height >= screen.width ? 1 / long : long;
+    return screen.width / screen.height < ratio
+        ? Size(screen.width, screen.width / ratio)
+        : Size(screen.height * ratio, screen.height);
+  }
+
   @override
   Widget build(BuildContext context) {
-    final size = MediaQuery.sizeOf(context);
+    final handle = _handle;
+    final size = _cameraView(MediaQuery.sizeOf(context), handle);
     if (_screenWidth != 0 &&
         (size.width != _screenWidth || size.height != _screenHeight)) {
       // Vừa xoay màn hình: toạ độ cũ không còn đúng → theo dõi lại từ đầu
@@ -1503,7 +1573,6 @@ class _CameraScreenState extends State<CameraScreen>
     }
     _screenWidth = size.width;
     _screenHeight = size.height;
-    final handle = _handle;
     final cameraReady = handle != null && handle.isInitialized;
 
     // Loading / Error screen
@@ -1578,13 +1647,18 @@ class _CameraScreenState extends State<CameraScreen>
               onDoubleTap: _listenForCommand,
               onLongPress: _listenForCommand,
               // Chế độ Test: KHÔNG hiện camera thật để không ai nhầm khung giả lập là kết quả nhận diện
-              child: RepaintBoundary(
-                child: cameraReady && !_isMockTest
-                    ? RotatedBox(
-                        quarterTurns: _debugRotationOffset ~/ 90,
-                        child: _feed?.buildPreview(),
-                      )
-                    : const ColoredBox(color: Color(0xFF1A1A2E)),
+              child: Center(
+                child: SizedBox.fromSize(
+                  size: size,
+                  child: RepaintBoundary(
+                    child: cameraReady && !_isMockTest
+                        ? RotatedBox(
+                            quarterTurns: _debugRotationOffset ~/ 90,
+                            child: _feed?.buildPreview(),
+                          )
+                        : const ColoredBox(color: Color(0xFF1A1A2E)),
+                  ),
+                ),
               ),
             ),
           ),
@@ -1604,25 +1678,30 @@ class _CameraScreenState extends State<CameraScreen>
               ),
             ),
 
-          // Layer 2: Bounding boxes + free-space
+          // Layer 2: Bounding boxes + free-space, on the camera image only
           IgnorePointer(
-            child: RepaintBoundary(
-              child: ValueListenableBuilder<SceneAssessment>(
-                valueListenable: _sceneNotifier,
-                builder: (_, scene, _) {
-                  // Layout changes invalidate immediately, before the deferred
-                  // notifier update can clear boxes from the old orientation.
-                  final visibleScene = identical(scene, _scene)
-                      ? scene
-                      : SceneAssessment.empty;
-                  return CustomPaint(
-                    painter: BoundingBoxPainter(
-                      visibleScene,
-                      alertSubject: visibleScene.alert?.subject,
-                      alertLevel: visibleScene.alert?.level,
-                    ),
-                  );
-                },
+            child: Center(
+              child: SizedBox.fromSize(
+                size: size,
+                child: RepaintBoundary(
+                  child: ValueListenableBuilder<SceneAssessment>(
+                    valueListenable: _sceneNotifier,
+                    builder: (_, scene, _) {
+                      // Layout changes invalidate immediately, before the deferred
+                      // notifier update can clear boxes from the old orientation.
+                      final visibleScene = identical(scene, _scene)
+                          ? scene
+                          : SceneAssessment.empty;
+                      return CustomPaint(
+                        painter: BoundingBoxPainter(
+                          visibleScene,
+                          alertSubject: visibleScene.alert?.subject,
+                          alertLevel: visibleScene.alert?.level,
+                        ),
+                      );
+                    },
+                  ),
+                ),
               ),
             ),
           ),

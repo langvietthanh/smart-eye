@@ -4,6 +4,7 @@ import 'dart:ui';
 import '../models/scene_info.dart';
 import '../models/tracked_object.dart';
 import '../utils/label_catalog.dart';
+import 'lidar_analysis.dart';
 import 'visual_proximity.dart';
 
 /// Relative visual risk. Bounding boxes cannot measure metres or prove that an
@@ -19,18 +20,51 @@ class HazardEngine {
   /// [targetTrackId] is the object the user is being guided to: it is not
   /// warned about unless it is a real danger (ground hazard, vehicle, or a
   /// person/animal approaching). Objects and column load are unaffected.
+  /// [lidar]: a fresh LiDAR scan (iPhone Pro) that checks the warning level
+  /// in metres, see [lidarCapped].
   SceneAssessment assess(
     List<TrackedObject> tracks,
     Size frame, {
     int? targetTrackId,
+    LidarScan? lidar,
   }) {
     if (frame.width <= 0 || frame.height <= 0) return SceneAssessment.empty;
     final objects = tracks.map((track) => _describe(track, frame)).toList();
     return SceneAssessment(
       objects: objects,
       columnLoad: _columnLoad(objects, frame),
-      alert: _decide(objects, frame, targetTrackId),
+      alert: _decide(objects, frame, targetTrackId, lidar),
     );
+  }
+
+  /// Box size is not distance: a chair 2–3 m away can read "khá gần". With
+  /// LiDAR the level is capped by the nearest obstacle it measures on the
+  /// object's side or ahead: none within [LidarWarning.cautionExit] → no
+  /// warning, none within [LidarWarning.dangerExit] → at most caution.
+  /// Unchanged where LiDAR cannot vouch: no reading, ground hazards (below
+  /// its floor band), vehicles and anything approaching (it may close in).
+  static AlertLevel lidarCapped(
+    AlertLevel level,
+    ObjectInfo object,
+    LidarScan? lidar,
+  ) {
+    if (lidar == null ||
+        level == AlertLevel.info ||
+        object.approaching ||
+        object.category == ObjectCategory.groundHazard ||
+        object.category == ObjectCategory.vehicle) {
+      return level;
+    }
+    var nearest = double.infinity;
+    for (final reading in {lidar[object.pos], lidar.center}) {
+      if (reading is LidarUnknown) return level;
+      if (reading is LidarObstacle) nearest = min(nearest, reading.distance);
+    }
+    if (nearest > LidarWarning.cautionExit) return AlertLevel.info;
+    if (nearest > LidarWarning.dangerExit && level == AlertLevel.danger) {
+      return AlertLevel.caution;
+    }
+    return level;
   }
 
   ObjectInfo _describe(TrackedObject track, Size frame) {
@@ -117,6 +151,7 @@ class HazardEngine {
     List<ObjectInfo> objects,
     Size frame,
     int? targetTrackId,
+    LidarScan? lidar,
   ) {
     ({ObjectInfo object, AlertLevel level, bool inPath})? best;
     for (final object in objects) {
@@ -125,7 +160,7 @@ class HazardEngine {
       // warning from a box absent in the current observation.
       if (!object.isRelevant || object.track.misses != 0) continue;
       final inPath = VisualProximity.inPath(object.track.observedBox, frame);
-      final level = _levelOf(object, inPath);
+      final level = lidarCapped(_levelOf(object, inPath), object, lidar);
       if (level == AlertLevel.info) continue;
       if (best == null ||
           _rank(object, level, inPath) >

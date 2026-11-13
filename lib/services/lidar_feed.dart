@@ -41,6 +41,10 @@ class LidarHandle implements FeedHandle {
   DeviceOrientation get deviceOrientation => _orientation;
   @override
   bool get isInitialized => true;
+
+  /// ARKit's captured image is 1920 × 1440.
+  @override
+  double get aspectRatio => 4 / 3;
   @override
   int get frameRotation => (90 - deviceDegrees[_orientation]! + 360) % 360;
 }
@@ -390,19 +394,13 @@ class _LidarPreview extends StatelessWidget {
   const _LidarPreview({super.key, required this.handle});
   final LidarHandle handle;
 
+  // Fills the screen like CameraPreview: boxes and columns are drawn in
+  // screen-normalised coordinates, so a letterboxed image would not line up.
   @override
-  Widget build(BuildContext context) {
-    final turns = handle.frameRotation ~/ 90;
-    return Center(
-      child: AspectRatio(
-        aspectRatio: turns.isOdd ? 3 / 4 : 4 / 3,
-        child: RotatedBox(
-          quarterTurns: turns,
-          child: Texture(textureId: handle.textureId),
-        ),
-      ),
-    );
-  }
+  Widget build(BuildContext context) => RotatedBox(
+    quarterTurns: handle.frameRotation ~/ 90,
+    child: Texture(textureId: handle.textureId),
+  );
 }
 
 /// Runs [LidarAnalysis] in a background isolate; its floor estimate lives

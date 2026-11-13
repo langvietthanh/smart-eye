@@ -44,6 +44,10 @@ class DepthAnalysis {
   static const caution = 0.75;
   static const danger = 0.90;
 
+  /// Below this a column counts as open (well under [caution], so noise
+  /// around the warning threshold never reads as free). Needs field data.
+  static const clearBelow = 0.5;
+
   // Step detection (see [detectStep]), as fractions of the image height.
   // Simulated geometry (phone at 1.3 m, tilted 20° down, 60° vertical FOV,
   // 18 cm step) gives an offset of ~0.046 at 3 m, ~0.068 at 2 m and ~0.085

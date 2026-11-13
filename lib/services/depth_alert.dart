@@ -1,4 +1,5 @@
 import '../models/scene_info.dart';
+import 'depth_analysis.dart';
 
 /// Trả về câu cần đọc, hoặc null nếu không cần nói.
 /// [left]/[right] chỉ có khi dùng LiDAR; câu về hai bên được nối vào cuối.
@@ -8,12 +9,20 @@ String? depthAlertText({
   double? metres, // chỉ có khi dùng LiDAR
   SideState left = SideState.unknown,
   SideState right = SideState.unknown,
+  bool wall = false, // LiDAR thấy tường: nói "Tường phía trước", không đọc mét
 }) {
   if (depthLevel == AlertLevel.info) {
     return null;
   }
   if (detectorLevel != null && detectorLevel.index >= depthLevel.index) {
     return null;
+  }
+  if (wall) {
+    final head = depthLevel == AlertLevel.danger
+        ? _wallDangerHead
+        : 'Chậm lại. Tường phía trước.';
+    final both = left == SideState.blocked && right == SideState.blocked;
+    return _join(head, both ? wallTurn : sideClause(left, right));
   }
   final String head;
   if (depthLevel == AlertLevel.danger) {
@@ -29,22 +38,37 @@ String? depthAlertText({
 /// Hướng lách qua vật cản phía trước; null khi không chắc chắn điều gì.
 /// Làn trống chỉ rộng 40 cm nên lệnh là "đi chéo", không phải quay hẳn.
 String? sideClause(SideState left, SideState right) {
-  const c = SideState.clear, b = SideState.blocked;
+  const c = SideState.clear;
   // Hai bên trống: ưu tiên bên phải.
   if (right == c) return 'Đi chéo sang phải.';
   if (left == c) return 'Đi chéo sang trái.';
-  if (left == b && right == b) return bothSidesBlocked;
-  return null;
+  return null; // không nói "hai bên có vật cản": dễ sai, không giúp đi tiếp
+}
+
+/// Một bên khi không có LiDAR: MiDaS (độ gần tương đối, không phải mét) và
+/// tải cột YOLO. Chỉ "trống" khi cả hai cùng thấy trống; vật YOLO không có lớp
+/// (thùng, tường) thì chỉ MiDaS thấy, nên ngưỡng trống thấp hơn hẳn ngưỡng báo.
+SideState monoSide(double closeness, double columnLoad) {
+  if (columnLoad >= 1.0 || closeness >= DepthAnalysis.caution) {
+    return SideState.blocked;
+  }
+  return columnLoad == 0 && closeness < DepthAnalysis.clearBelow
+      ? SideState.clear
+      : SideState.unknown;
 }
 
 const _dangerHead = 'Dừng lại! Vật cản ngay trước mặt.';
 
-/// Ends every obstacle alert that already says what the trap line says.
-const bothSidesBlocked = 'Hai bên có vật cản.';
+const _wallDangerHead = 'Dừng lại! Tường phía trước.';
 
-/// The trap line is the same sentence as a danger depth alert with both sides
-/// blocked.
-const trapAlertText = '$_dangerHead $bothSidesBlocked';
+/// Ends a wall alert when neither side is open, and every trap line.
+const wallTurn = 'Quay lại hoặc xoay người tìm lối.';
+
+/// The trap line: front and both sides blocked.
+const trapAlertText = '$_dangerHead $wallTurn';
+
+/// The trap line in front of a wall: the danger wall alert, same sentence.
+const wallTrapText = '$_wallDangerHead $wallTurn';
 
 /// Nối câu hai bên vào cảnh báo của YOLO, chỉ khi vật nằm ở giữa: với vật
 /// bên trái/phải, câu "bên ... trống" dễ mâu thuẫn với chính cảnh báo.

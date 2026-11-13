@@ -59,6 +59,8 @@ class LidarObstacle extends LidarReading {
     this.distance, {
     this.left = SideState.unknown,
     this.right = SideState.unknown,
+    this.where,
+    this.wall = false,
   });
 
   /// Horizontal distance to the nearest substantial obstacle, metres.
@@ -67,6 +69,23 @@ class LidarObstacle extends LidarReading {
   /// The 40 cm lanes beside the centre corridor, around this obstacle
   /// (only set on the centre reading of [LidarAnalysis.analyzeScan]).
   final SideState left, right;
+
+  /// Centre reading only: a tall surface from near the floor to above the
+  /// phone, across the whole corridor core, with both lanes blocked.
+  final bool wall;
+
+  /// Diagnostics only (centre reading): the obstacle's front
+  /// [LidarAnalysis.frontDepth] of hits, sideways
+  /// (+ = left of the corridor axis) and above the floor, in metres, and the
+  /// phone's height above the estimated floor.
+  final ({
+    double sideMin,
+    double sideMax,
+    double heightMin,
+    double heightMax,
+    double phoneHeight,
+  })?
+  where;
 }
 
 /// Not enough trustworthy depth to say anything.
@@ -101,8 +120,20 @@ class LidarAnalysis {
   /// Half the corridor width: shoulders plus margin. A 0.8 m door fits.
   static const halfWidth = 0.35;
 
-  /// Outer edge of the side corridors, either side of the centre one.
-  static const sideOuter = 1.05;
+  /// Only hits this close to the axis make a centre obstacle: something
+  /// reaching just into the outer 10 cm (a table edge) is passed by. Such
+  /// hits still block the lanes (see [analyzeScan]) and the side corridors.
+  static const coreHalfWidth = 0.25;
+
+  /// Depth of the obstacle's front face used to describe it ([wallReach]).
+  static const frontDepth = 0.3;
+
+  /// A wall covers the core to at least this far each side of the axis.
+  static const wallReach = 0.2;
+
+  /// Outer edge of the side corridors, either side of the centre one: a body
+  /// width past the shoulder, so desks across a ~1 m aisle do not count.
+  static const sideOuter = 0.75;
 
   /// The centre corridor is split into strips this many across (10 cm each)
   /// to tell a wall the user walks along from one in the way.
@@ -216,6 +247,7 @@ class LidarAnalysis {
     final floor = _floor ?? defaultFloor;
     final low = floor + floorMargin;
     final left = <double>[], centre = <double>[], right = <double>[];
+    final centreAt = <int>[];
     final centreSide = <double>[];
     for (var i = 0; i < count; i++) {
       final forward = forwards[i];
@@ -227,8 +259,9 @@ class LidarAnalysis {
           height > headroom) {
         continue;
       }
-      if (side.abs() <= halfWidth) {
+      if (side.abs() <= coreHalfWidth) {
         centre.add(forward);
+        centreAt.add(i);
         centreSide.add(side);
       } else if (side > 0 && side <= sideOuter) {
         // up × forward in ARKit's right-handed camera frame points left.
@@ -249,6 +282,18 @@ class LidarAnalysis {
         for (var i = 0; i < count; i++) {
           final s = sign * sides[i];
           final forward = forwards[i];
+          final height = heights[i];
+          // An edge-grazer on the way there is in the path of a step aside;
+          // the obstacle's own flank (its last 20 cm) is not.
+          if (s > coreHalfWidth &&
+              s <= halfWidth &&
+              forward >= minForward &&
+              forward < d - 0.2 &&
+              height >= low &&
+              height <= headroom) {
+            obstacles++;
+            continue;
+          }
           // Anything seen on the way to the gap counts, not only beside the
           // obstacle; the floor is only checked where it is in view.
           if (s <= halfWidth ||
@@ -257,7 +302,6 @@ class LidarAnalysis {
               forward > end) {
             continue;
           }
-          final height = heights[i];
           if (height >= low && height <= headroom) {
             obstacles++;
           } else if (forward >= d && (height - floor).abs() <= laneFloorBand) {
@@ -282,8 +326,38 @@ class LidarAnalysis {
             : SideState.unknown;
       }
 
+      var sMin = double.infinity, sMax = -double.infinity;
+      var hMin = double.infinity, hMax = -double.infinity;
+      for (final i in centreAt) {
+        if (forwards[i] > center.distance + frontDepth) continue;
+        sMin = min(sMin, sides[i]);
+        sMax = max(sMax, sides[i]);
+        hMin = min(hMin, heights[i] - floor);
+        hMax = max(hMax, heights[i] - floor);
+      }
       // Positive `side` points left (see the corridor split above).
-      center = LidarObstacle(center.distance, left: lane(1), right: lane(-1));
+      final leftLane = lane(1), rightLane = lane(-1);
+      center = LidarObstacle(
+        center.distance,
+        left: leftLane,
+        right: rightLane,
+        // Heights here are still above the floor; [headroom] is above the
+        // phone, so the top check is relative to the phone again.
+        wall:
+            sMin <= -wallReach &&
+            sMax >= wallReach &&
+            hMin <= floorMargin + 0.3 &&
+            hMax + floor >= headroom - 0.2 &&
+            leftLane == SideState.blocked &&
+            rightLane == SideState.blocked,
+        where: (
+          sideMin: sMin,
+          sideMax: sMax,
+          heightMin: hMin,
+          heightMax: hMax,
+          phoneHeight: -floor,
+        ),
+      );
     }
     return LidarScan(_nearest(left, needed), center, _nearest(right, needed));
   }
@@ -372,12 +446,16 @@ class SideStability {
 
   final _left = _SideTrack(), _right = _SideTrack();
 
-  ({SideState left, SideState right}) update(LidarReading reading) {
-    final (l, r) = reading is LidarObstacle
-        ? (reading.left, reading.right)
-        : (SideState.unknown, SideState.unknown);
-    return (left: _left.update(l), right: _right.update(r));
-  }
+  ({SideState left, SideState right}) update(LidarReading reading) =>
+      reading is LidarObstacle
+      ? updateSides(reading.left, reading.right)
+      : updateSides(SideState.unknown, SideState.unknown);
+
+  /// Raw per-reading side states from any source (MiDaS without LiDAR).
+  ({SideState left, SideState right}) updateSides(
+    SideState left,
+    SideState right,
+  ) => (left: _left.update(left), right: _right.update(right));
 
   void reset() {
     _left.update(SideState.unknown);
@@ -409,19 +487,36 @@ class LidarWarning {
   static const dangerEnter = 1.0;
   static const dangerExit = 1.2;
 
+  /// From here out to [cautionExit], caution needs the obstacle getting
+  /// closer (the user walking towards it): standing still 1.5–2 m away is
+  /// not warned. The warning starts that far out only because the side
+  /// lanes ("Đi chéo sang…") are fully in view from ~1.5 m.
+  static const cautionAlways = 1.5;
+  static const approachMetres = 0.15;
+  static const approachWindow = Duration(seconds: 1);
+
   AlertLevel _raw = AlertLevel.info;
   int _streak = 0;
+  final _recent = <({DateTime at, double d})>[];
 
-  AlertLevel update(LidarReading reading) {
+  AlertLevel update(LidarReading reading, DateTime now) {
     // One unreadable frame neither raises nor clears the warning; a lasting
     // gap is announced by the sight monitor instead.
     if (reading is LidarUnknown) return AlertLevel.info;
     final d = reading is LidarObstacle ? reading.distance : double.infinity;
+    _recent.removeWhere((r) => now.difference(r.at) > approachWindow);
+    final approaching = _recent.any((r) => r.d - d >= approachMetres);
+    // Clear counts as the far end of the range: something stepping into
+    // the corridor is approaching.
+    _recent.add((at: now, d: min(d, LidarAnalysis.maxForward)));
     _raw = d < dangerEnter || (_raw == AlertLevel.danger && d <= dangerExit)
         ? AlertLevel.danger
         : d < cautionEnter || (_raw != AlertLevel.info && d <= cautionExit)
         ? AlertLevel.caution
         : AlertLevel.info;
+    if (_raw == AlertLevel.caution && d >= cautionAlways && !approaching) {
+      _raw = AlertLevel.info;
+    }
     _streak = _raw == AlertLevel.info ? 0 : _streak + 1;
     return _streak >= 2 ? _raw : AlertLevel.info;
   }
@@ -429,5 +524,6 @@ class LidarWarning {
   void reset() {
     _raw = AlertLevel.info;
     _streak = 0;
+    _recent.clear();
   }
 }

@@ -124,6 +124,62 @@ LidarObstacle obstacleOf(LidarReading r) {
 }
 
 void sideLaneTests() {
+  test('a wall ahead is told apart from a chair or a person', () {
+    final a = LidarAnalysis();
+    a.analyze(render());
+    expect(obstacleOf(a.analyze(render(boxes: [wall(1.5)]))).wall, isTrue);
+    expect(obstacleOf(a.analyze(render(boxes: [chair(1.5)]))).wall, isFalse);
+    // Shoulder-wide and tall, but not across the whole core.
+    final person = const Box(-0.2, 0, 1.5, 0.2, 1.8, 1.8);
+    expect(obstacleOf(a.analyze(render(boxes: [person]))).wall, isFalse);
+  });
+
+  test('a table edge only in the outer 10 cm is passed by', () {
+    // 28–60 cm right of the axis (world x is right), 75 cm tall, at 1.2 m.
+    final s = LidarAnalysis().analyzeScan(
+      render(boxes: [const Box(0.28, 0, 1.2, 0.6, 0.75, 1.8)]),
+    );
+    expect(s.center, isA<LidarClear>());
+    expect(distanceOf(s.right), closeTo(1.2, 0.1));
+  });
+
+  test('a 64 cm obstacle does not block its own lanes', () {
+    final r = obstacleOf(
+      LidarAnalysis().analyze(
+        render(boxes: [const Box(-0.32, 0, 1.8, 0.32, 0.9, 2.2)]),
+      ),
+    );
+    expect(r.left, SideState.clear);
+    expect(r.right, SideState.clear);
+  });
+
+  test('an edge grazer before the obstacle blocks that lane', () {
+    final r = obstacleOf(
+      LidarAnalysis().analyze(
+        render(boxes: [chair(1.8), const Box(-0.33, 0, 1.0, -0.27, 0.8, 1.1)]),
+      ),
+    );
+    expect(r.distance, closeTo(1.8, 0.1));
+    expect(r.left, SideState.blocked);
+    expect(r.right, SideState.clear);
+  });
+
+  test('diagnostics locate an obstacle at the left edge of the corridor', () {
+    final a = LidarAnalysis();
+    a.analyze(render());
+    // A knee-high box 15–35 cm left of the axis (world x is right).
+    final r = obstacleOf(
+      a.analyze(render(boxes: [const Box(-0.35, 0, 1.2, -0.15, 0.6, 1.5)])),
+    );
+    expect(r.distance, closeTo(1.2, 0.1));
+    final where = r.where!;
+    expect(where.sideMin, greaterThan(0.1));
+    expect(where.sideMax, lessThanOrEqualTo(LidarAnalysis.halfWidth));
+    expect(where.heightMin, greaterThanOrEqualTo(LidarAnalysis.floorMargin));
+    expect(where.heightMax, lessThan(0.65));
+    expect(where.phoneHeight, closeTo(1.3, 0.05));
+  });
+
   test('free floor beside a chair is clear on both sides', () {
     final r = obstacleOf(LidarAnalysis().analyze(render(boxes: [chair(1.8)])));
     expect(r.distance, closeTo(1.8, 0.1));
@@ -360,10 +416,16 @@ void main() {
 }
 
 void warningTests() {
+  // One LiDAR reading every 100 ms.
+  var clock = DateTime(2026);
   AlertLevel feed(LidarWarning w, List<double?> metres) {
     var level = AlertLevel.info;
     for (final m in metres) {
-      level = w.update(m == null ? const LidarClear() : LidarObstacle(m));
+      clock = clock.add(const Duration(milliseconds: 100));
+      level = w.update(
+        m == null ? const LidarClear() : LidarObstacle(m),
+        clock,
+      );
     }
     return level;
   }
@@ -377,7 +439,7 @@ void warningTests() {
 
   test('hysteresis holds levels until the exit distance', () {
     final w = LidarWarning();
-    expect(feed(w, [1.9, 1.9, 2.1, 2.15]), AlertLevel.caution);
+    expect(feed(w, [2.4, 1.9, 1.9, 2.1, 2.15]), AlertLevel.caution);
     expect(feed(w, [2.3]), AlertLevel.info);
     expect(feed(w, [0.9, 0.9, 1.1]), AlertLevel.danger);
     expect(feed(w, [1.3, 1.3]), AlertLevel.caution);
@@ -386,9 +448,36 @@ void warningTests() {
 
   test('a single unknown frame does not break the streak', () {
     final w = LidarWarning();
-    feed(w, [1.5]);
-    expect(w.update(const LidarUnknown()), AlertLevel.info);
-    expect(feed(w, [1.5]), AlertLevel.caution);
+    feed(w, [1.4]);
+    expect(w.update(const LidarUnknown(), clock), AlertLevel.info);
+    expect(feed(w, [1.4]), AlertLevel.caution);
+  });
+
+  test('standing still 1.5–2 m away is not warned', () {
+    final w = LidarWarning();
+    expect(feed(w, List.filled(30, 1.8)), AlertLevel.info);
+    expect(feed(w, List.filled(30, 1.5)), AlertLevel.info);
+  });
+
+  test('walking towards it warns from 2 m', () {
+    final w = LidarWarning();
+    expect(feed(w, [2.6, 2.4, 2.2, 2.0, 1.9, 1.8]), AlertLevel.caution);
+  });
+
+  test('stopping after the warning goes quiet within the window', () {
+    final w = LidarWarning();
+    expect(feed(w, [2.4, 2.2, 1.9, 1.8]), AlertLevel.caution);
+    expect(feed(w, List.filled(12, 1.8)), AlertLevel.info);
+  });
+
+  test('something stepping into the corridor is approaching', () {
+    final w = LidarWarning();
+    expect(feed(w, [null, 1.9, 1.9]), AlertLevel.caution);
+  });
+
+  test('under 1.5 m caution holds standing still', () {
+    final w = LidarWarning();
+    expect(feed(w, List.filled(30, 1.4)), AlertLevel.caution);
   });
 
   test('pulse proximity from metres', () {
@@ -438,6 +527,18 @@ void warningTests() {
         reason: 'wall at lateral $x m',
       );
     }
+  });
+
+  test('a seated student 32 cm off the walking line is not ahead', () {
+    // ~1 m classroom aisle: only hits within coreHalfWidth (±25 cm) are ahead.
+    final s = LidarAnalysis().analyzeScan(render(boxes: [sideWall(0.32)]));
+    expect(s.center, isA<LidarClear>());
+    expect(s.right, isA<LidarObstacle>());
+  });
+
+  test('desks 85 cm to the side do not block that side', () {
+    final s = LidarAnalysis().analyzeScan(render(boxes: [sideWall(-0.85)]));
+    expect(s.left, isA<LidarClear>());
   });
 
   test('a 1.2 m hallway blocks both sides but not the centre', () {

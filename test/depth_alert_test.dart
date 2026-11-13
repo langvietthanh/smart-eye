@@ -3,15 +3,18 @@ import 'package:smart_eye/models/scene_info.dart';
 import 'package:smart_eye/services/depth_alert.dart';
 
 void main() {
-  test('trap line is the danger alert with both sides blocked', () {
+  test('no alert says both sides are blocked; the trap line says turn', () {
     expect(
       depthAlertText(
         depthLevel: AlertLevel.danger,
         left: SideState.blocked,
         right: SideState.blocked,
       ),
-      trapAlertText,
+      'Dừng lại! Vật cản ngay trước mặt.',
     );
+    expect(trapAlertText, 'Dừng lại! Vật cản ngay trước mặt. $wallTurn');
+    // A narrow classroom aisle has desks on both sides: turning alone is no way out.
+    expect(wallTurn, 'Quay lại hoặc xoay người tìm lối.');
   });
 
   group('depthAlertText', () {
@@ -168,9 +171,9 @@ void main() {
       expect(sideClause(c, b), 'Đi chéo sang trái.');
       expect(sideClause(u, c), 'Đi chéo sang phải.');
     });
-    test('both clear goes right / both blocked', () {
+    test('both clear goes right / both blocked says nothing', () {
       expect(sideClause(c, c), 'Đi chéo sang phải.');
-      expect(sideClause(b, b), 'Hai bên có vật cản.');
+      expect(sideClause(b, b), isNull);
     });
     test('nothing certain says nothing', () {
       expect(sideClause(u, u), isNull);
@@ -275,6 +278,52 @@ void main() {
       expect(spokenMetres(2.0), '2');
       expect(spokenMetres(2.2), '2');
       expect(spokenMetres(2.3), '2,5');
+    });
+  });
+
+  group('monoSide', () {
+    test('clear only when MiDaS is far and YOLO is empty', () {
+      expect(monoSide(0.2, 0), SideState.clear);
+      expect(monoSide(0.2, 0.5), SideState.unknown);
+      expect(monoSide(0.6, 0), SideState.unknown);
+    });
+
+    test('blocked by MiDaS caution or a YOLO object', () {
+      expect(monoSide(0.8, 0), SideState.blocked);
+      expect(monoSide(0.1, 1), SideState.blocked);
+    });
+  });
+
+  group('wall', () {
+    test('says wall instead of metres', () {
+      expect(
+        depthAlertText(depthLevel: AlertLevel.caution, metres: 1.4, wall: true),
+        'Chậm lại. Tường phía trước.',
+      );
+    });
+
+    test('no way round: turn to find one, same as the wall trap line', () {
+      expect(
+        depthAlertText(
+          depthLevel: AlertLevel.danger,
+          left: SideState.blocked,
+          right: SideState.blocked,
+          wall: true,
+        ),
+        wallTrapText,
+      );
+      expect(wallTrapText, endsWith(wallTurn));
+    });
+
+    test('an open side is still named', () {
+      expect(
+        depthAlertText(
+          depthLevel: AlertLevel.caution,
+          right: SideState.clear,
+          wall: true,
+        ),
+        'Chậm lại. Tường phía trước. Đi chéo sang phải.',
+      );
     });
   });
 }
