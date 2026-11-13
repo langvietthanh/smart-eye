@@ -481,6 +481,45 @@ class _SideTrack {
   }
 }
 
+/// Latches the "facing a wall" verdict: at far distances (1–4 m) the LiDAR
+/// sees the floor and ceiling around the obstacle to classify it as a wall.
+/// Up close (under ~0.8 m), the ceiling and floor leave the frame so [wall]
+/// turns false even though the user is still walking straight into that wall.
+///
+/// The latch resets when the corridor clears, or when distance jumps away
+/// by more than 0.5 m (user turned away or looked at another obstacle).
+/// [LidarUnknown] preserves the latch (pressing against a wall reads unknown).
+class WallLatch {
+  bool _on = false;
+  double _at = double.infinity;
+
+  bool update(LidarReading centre) {
+    switch (centre) {
+      case LidarObstacle(:final wall, :final distance):
+        if (wall) {
+          _on = true;
+          _at = distance;
+        } else if (_on) {
+          if (distance > _at + 0.5) {
+            _on = false;
+          } else {
+            _at = min(_at, distance);
+          }
+        }
+      case LidarClear():
+        _on = false;
+      case LidarUnknown():
+        break;
+    }
+    return _on;
+  }
+
+  void reset() {
+    _on = false;
+    _at = double.infinity;
+  }
+}
+
 /// Metric warning levels with hysteresis, so standing near a threshold does
 /// not flip the alert every frame. As with MiDaS, two consecutive
 /// non-info readings (DepthWarning) are needed before warning.
@@ -489,6 +528,9 @@ class LidarWarning {
   static const cautionExit = 2.2;
   static const dangerEnter = 1.0;
   static const dangerExit = 1.2;
+
+  static const wallDangerEnter = 0.5;
+  static const wallDangerExit = 0.6;
 
   /// From here out to [cautionExit], caution needs the obstacle getting
   /// closer (the user walking towards it): standing still 1.5–2 m away is
@@ -502,23 +544,29 @@ class LidarWarning {
   int _streak = 0;
   final _recent = <({DateTime at, double d})>[];
 
-  AlertLevel update(LidarReading reading, DateTime now) {
+  AlertLevel update(LidarReading reading, DateTime now, {bool wall = false}) {
     // One unreadable frame neither raises nor clears the warning; a lasting
     // gap is announced by the sight monitor instead.
     if (reading is LidarUnknown) return AlertLevel.info;
     final d = reading is LidarObstacle ? reading.distance : double.infinity;
-    _recent.removeWhere((r) => now.difference(r.at) > approachWindow);
-    final approaching = _recent.any((r) => r.d - d >= approachMetres);
-    // Clear counts as the far end of the range: something stepping into
-    // the corridor is approaching.
-    _recent.add((at: now, d: min(d, LidarAnalysis.maxForward)));
-    _raw = d < dangerEnter || (_raw == AlertLevel.danger && d <= dangerExit)
-        ? AlertLevel.danger
-        : d < cautionEnter || (_raw != AlertLevel.info && d <= cautionExit)
-        ? AlertLevel.caution
-        : AlertLevel.info;
-    if (_raw == AlertLevel.caution && d >= cautionAlways && !approaching) {
-      _raw = AlertLevel.info;
+    if (wall) {
+      _raw = d < wallDangerEnter || (_raw == AlertLevel.danger && d <= wallDangerExit)
+          ? AlertLevel.danger
+          : AlertLevel.info;
+    } else {
+      _recent.removeWhere((r) => now.difference(r.at) > approachWindow);
+      final approaching = _recent.any((r) => r.d - d >= approachMetres);
+      // Clear counts as the far end of the range: something stepping into
+      // the corridor is approaching.
+      _recent.add((at: now, d: min(d, LidarAnalysis.maxForward)));
+      _raw = d < dangerEnter || (_raw == AlertLevel.danger && d <= dangerExit)
+          ? AlertLevel.danger
+          : d < cautionEnter || (_raw != AlertLevel.info && d <= cautionExit)
+          ? AlertLevel.caution
+          : AlertLevel.info;
+      if (_raw == AlertLevel.caution && d >= cautionAlways && !approaching) {
+        _raw = AlertLevel.info;
+      }
     }
     _streak = _raw == AlertLevel.info ? 0 : _streak + 1;
     return _streak >= 2 ? _raw : AlertLevel.info;
