@@ -250,4 +250,58 @@ void main() {
       expect(scene.alert?.message, isNot(contains('mét')));
     },
   );
+
+  group('far objects in the path', () {
+    SceneAssessment run(String labelEn, List<double> heights) {
+      final tracker = ObjectTracker();
+      final engine = HazardEngine();
+      var scene = SceneAssessment.empty;
+      for (var i = 0; i < heights.length; i++) {
+        scene = engine.assess(
+          tracker.update(
+            [
+              Recognition(
+                0,
+                labelEn,
+                0.9,
+                // Narrow, so occupancy follows the height as the user walks up.
+                Rect.fromLTWH(
+                  180,
+                  760 - 800 * heights[i],
+                  40,
+                  800 * heights[i],
+                ),
+                labelEn: labelEn,
+              ),
+            ],
+            _frame,
+            DateTime(2026).add(Duration(milliseconds: i * 150)),
+          ),
+          _frame,
+        );
+      }
+      return scene;
+    }
+
+    test('a far obstacle growing as the user walks up is not warned', () {
+      final scene = run('chair', [0.10, 0.13, 0.17]);
+      expect(scene.objects.single.distance, DistanceLevel.far);
+      expect(scene.objects.single.approaching, isTrue);
+      expect(scene.alert, isNull);
+    });
+
+    test('a far approaching vehicle is still a caution', () {
+      final scene = run('car', [0.10, 0.13, 0.17]);
+      expect(scene.objects.single.distance, DistanceLevel.far);
+      expect(scene.alert?.level, AlertLevel.caution);
+    });
+
+    test('far stairs wait until they are closer', () {
+      expect(run('stairs down', [0.12, 0.12, 0.12]).alert, isNull);
+      expect(
+        run('stairs down', [0.30, 0.30, 0.30]).alert?.level,
+        AlertLevel.danger,
+      );
+    });
+  });
 }

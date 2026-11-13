@@ -251,4 +251,49 @@ void main() {
       expect(p.trapped, isTrue);
     });
   });
+
+  group('ahead open (say "Đi thẳng.")', () {
+    /// Feeds inputs every 250 ms and returns the first time it settled.
+    int? openAt(List<double> load, int from, int to, {LidarScan? depth}) {
+      for (var ms = from; ms <= to; ms += 250) {
+        p.onDetections(at(ms), load);
+        if (depth != null) p.onDepth(at(ms), depth);
+        if (p.aheadOpenSettled(at(ms))) return ms;
+      }
+      return null;
+    }
+
+    test('YOLO centre free for a second', () {
+      expect(openAt(sides, 0, 750), isNull);
+      expect(openAt(sides, 1000, 1000), 1000);
+    });
+
+    test('a blocked centre restarts the second', () {
+      expect(openAt(sides, 0, 500), isNull);
+      expect(openAt(all, 750, 750), isNull);
+      expect(openAt(sides, 1000, 1750), isNull);
+      expect(openAt(sides, 2000, 2000), 2000);
+    });
+
+    test('with LiDAR the way ahead must measure clear or beyond 2.2 m', () {
+      expect(openAt(none, 0, 3000, depth: scan(null, 1.6, null)), isNull);
+      expect(openAt(none, 3250, 5000, depth: LidarScan.unknown), isNull);
+      expect(openAt(none, 5250, 6250, depth: scan(null, 2.3, null)), 6250);
+    });
+
+    test('no fresh input is never open', () {
+      p.onDetections(at(0), none);
+      expect(p.aheadOpenSettled(at(0)), isFalse);
+      expect(p.aheadOpenSettled(at(2500)), isFalse);
+    });
+
+    test('interrupt and reset restart the second', () {
+      expect(openAt(none, 0, 750), isNull);
+      p.interrupt();
+      expect(openAt(none, 1000, 1750), isNull);
+      p.reset();
+      expect(openAt(none, 2000, 2750), isNull);
+      expect(openAt(none, 3000, 3000), 3000);
+    });
+  });
 }

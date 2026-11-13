@@ -176,6 +176,16 @@ class _CameraScreenState extends State<CameraScreen>
   /// warnings stay silent only while this holds.
   bool _trapAnnounced = false;
 
+  /// An obstacle or trap warning was spoken and "Đi thẳng." is still owed.
+  bool _frontWarned = false;
+
+  /// "Đi thẳng." repeats this often while the way ahead stays open, and is
+  /// said again when it reopens, but never closer together than the min gap.
+  static const Duration _straightRepeat = Duration(seconds: 3);
+  static const Duration _straightMinGap = Duration(seconds: 3);
+  DateTime? _straightAt;
+  bool _straightOwed = false;
+
   // Voice-command navigation: the guide is silent while a danger line was
   // spoken in the last [_navQuietAfterDanger], during a trap or a sight
   // problem, while the microphone is listening, and while an alert is
@@ -436,6 +446,7 @@ class _CameraScreenState extends State<CameraScreen>
   void _resetBlockage() {
     _blockage.reset();
     _trapAnnounced = false;
+    _frontWarned = false;
   }
 
   /// Shared by the sight tick, each detection frame and each LiDAR scan:
@@ -444,12 +455,51 @@ class _CameraScreenState extends State<CameraScreen>
     final problem = _sightProblem;
     if (problem == null) {
       _onBlockage(_blockage.evaluate(now));
+      _maybeSayStraight(now);
     } else if (problem.isBlind) {
       _resetBlockage();
     } else {
       _blockage.interrupt();
     }
   }
+
+  /// "Đi thẳng." when the way ahead (centre column and LiDAR) has stayed open
+  /// for a second, then every [_straightRepeat] while it stays open. Not while
+  /// trapped, navigating (the guide gives its own directions) or speaking.
+  void _maybeSayStraight(DateTime now) {
+    if (!_blockage.aheadOpenSettled(now)) {
+      _straightOwed = true; // say it again as soon as the way reopens
+      return;
+    }
+    if (_blockage.trapped || _guide.isActive || _speech.isBusy) return;
+    final last = _straightAt;
+    final since = last == null ? null : now.difference(last);
+    final due =
+        since == null ||
+        since >= _straightRepeat ||
+        ((_frontWarned || _straightOwed) && since >= _straightMinGap);
+    if (!due) return;
+    // Guidance: any warning cuts in; filtered in quiet mode.
+    if (_speech.say(
+      'Đi thẳng.',
+      SpeechPriority.guidance,
+      subject: 'path:straight',
+    )) {
+      _straightAt = now;
+      _straightOwed = false;
+      _frontWarned = false;
+    }
+  }
+
+  /// A warning started: owe "Đi thẳng." only if the way ahead was not already
+  /// open (a warning about a side object needs no follow-up).
+  void _noteWarning() {
+    if (!_blockage.aheadOpenSettled(DateTime.now())) _frontWarned = true;
+  }
+
+  /// The way ahead has been measured open, so "Đi thẳng." holds: a caution
+  /// about the way ahead would contradict it (danger is always spoken).
+  bool _aheadOpen() => _blockage.aheadOpenSettled(DateTime.now());
 
   /// The banner already tells the user to turn (a wall with no way round,
   /// or a trap line), so the trap line would only repeat it.
@@ -470,14 +520,7 @@ class _CameraScreenState extends State<CameraScreen>
       _endTrap();
       // A queued obstacle line is stale once the way has been open 1 s.
       _speech.dropSubject('depth:center');
-      // While guiding, the guide owns the heading ("Lệch trái/phải").
-      _speech.say(
-        _guide.isActive
-            ? 'Phía trước thông thoáng.'
-            : 'Phía trước thông thoáng. Đi thẳng.',
-        SpeechPriority.caution,
-        subject: 'path:cleared',
-      );
+      _frontWarned = true; // _maybeSayStraight says "Đi thẳng."
       return;
     }
     if (event == PathEvent.opened) {
@@ -494,17 +537,12 @@ class _CameraScreenState extends State<CameraScreen>
       _trapAnnounced = true;
       return;
     }
+    // Said once per trap: in a long narrow spot repeats were only noise; the
+    // proximity pulse keeps running.
+    if (_trapAnnounced) return;
     if (!_speech.canSay(SpeechPriority.danger, subject: subject)) return;
     _lastAlertAt = DateTime.now();
     _lastDangerAt = _lastAlertAt;
-    if (_trapAnnounced) {
-      _speech.say(
-        'Vẫn bị chặn. Quay lại hoặc xoay người chậm.',
-        SpeechPriority.danger,
-        subject: subject,
-      );
-      return;
-    }
     final centre = _freshLidarCenter();
     final text = centre is LidarObstacle && centre.wall
         ? wallTrapText
@@ -892,6 +930,7 @@ class _CameraScreenState extends State<CameraScreen>
       return;
     }
     final isDanger = level == AlertLevel.danger;
+    if (!isDanger && _aheadOpen()) return;
     final priority = isDanger ? SpeechPriority.danger : SpeechPriority.caution;
     const subject = 'depth:center';
     // The spoken distance is wrong once the user is 0.5 m closer: say it anew
@@ -913,6 +952,7 @@ class _CameraScreenState extends State<CameraScreen>
       priority,
       subject: subject,
       onStart: () {
+        _noteWarning();
         if (isDanger) HapticFeedback.heavyImpact();
         log();
       },
@@ -1058,6 +1098,7 @@ class _CameraScreenState extends State<CameraScreen>
     _lastAlertAt = now;
     final isDanger = alert.level == AlertLevel.danger;
     if (_trapAnnounced && !isDanger) return;
+    if (!isDanger && alert.pos == HPos.center && _aheadOpen()) return;
     final priority = isDanger ? SpeechPriority.danger : SpeechPriority.caution;
     if (!_speech.canSay(priority, subject: alert.subject)) {
       return; // Đã báo / đang chờ đọc
@@ -1084,6 +1125,7 @@ class _CameraScreenState extends State<CameraScreen>
       priority,
       subject: alert.subject,
       onStart: () {
+        _noteWarning();
         if (isDanger) HapticFeedback.heavyImpact();
         log();
       },

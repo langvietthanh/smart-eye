@@ -135,6 +135,14 @@ class LidarAnalysis {
   /// width past the shoulder, so desks across a ~1 m aisle do not count.
   static const sideOuter = 0.75;
 
+  /// The centre corridor is split into strips this many across (10 cm each)
+  /// to tell a wall the user walks along from one in the way.
+  static const centreStrips = 7;
+
+  /// Distance jump between neighbouring strips that marks a surface within
+  /// about 20° of the walking direction.
+  static const grazingStep = 0.25;
+
   /// Lanes beside the centre corridor, used to say a side is free: a
   /// portrait LiDAR sees sideways only ~0.5 × the distance ahead, so a lane
   /// out to 0.75 m is fully in view from ~1.5 m.
@@ -240,6 +248,7 @@ class LidarAnalysis {
     final low = floor + floorMargin;
     final left = <double>[], centre = <double>[], right = <double>[];
     final centreAt = <int>[];
+    final centreSide = <double>[];
     for (var i = 0; i < count; i++) {
       final forward = forwards[i];
       final height = heights[i];
@@ -253,6 +262,7 @@ class LidarAnalysis {
       if (side.abs() <= coreHalfWidth) {
         centre.add(forward);
         centreAt.add(i);
+        centreSide.add(side);
       } else if (side > 0 && side <= sideOuter) {
         // up × forward in ARKit's right-handed camera frame points left.
         left.add(forward);
@@ -261,7 +271,7 @@ class LidarAnalysis {
       }
     }
     final needed = (minPoints / (step * step)).ceil();
-    var center = _nearest(centre, needed);
+    var center = _frontal(centre, centreSide, needed);
     if (center is LidarObstacle) {
       SideState lane(double sign) {
         final d = center is LidarObstacle ? center.distance : 0.0;
@@ -349,11 +359,48 @@ class LidarAnalysis {
         ),
       );
     }
-    return LidarScan(
-      _nearest(left, needed),
-      center,
-      _nearest(right, needed),
-    );
+    return LidarScan(_nearest(left, needed), center, _nearest(right, needed));
+  }
+
+  /// Nearest obstacle ahead, skipping a surface the user walks along rather
+  /// than into: a side wall seen at a slant (narrow aisle, phone held at an
+  /// angle) fills neighbouring 10 cm strips at steadily growing distances.
+  /// A pole, a chair or a wall facing the user does not.
+  LidarReading _frontal(List<double> forward, List<double> side, int needed) {
+    final strips = List.generate(centreStrips, (_) => <double>[]);
+    for (var i = 0; i < forward.length; i++) {
+      final s = ((side[i] + halfWidth) / (2 * halfWidth) * centreStrips)
+          .floor()
+          .clamp(0, centreStrips - 1);
+      strips[s].add(forward[i]);
+    }
+    final near = [
+      for (final hits in strips)
+        switch (_nearest(hits, needed)) {
+          LidarObstacle(:final distance) => distance,
+          _ => null,
+        },
+    ];
+    // Two steps in a row, both farther, together by more than 2 strips' worth
+    // (the first step can be short where the image edge cuts the wall).
+    bool slope(int s, int dir) {
+      final a = s + dir, b = s + 2 * dir;
+      if (b < 0 || b >= centreStrips) return false;
+      final d0 = near[s]!, d1 = near[a], d2 = near[b];
+      return d1 != null &&
+          d2 != null &&
+          d1 > d0 &&
+          d2 > d1 &&
+          d2 - d0 > 2 * grazingStep;
+    }
+
+    double? best;
+    for (var s = 0; s < centreStrips; s++) {
+      final d = near[s];
+      if (d == null || slope(s, 1) || slope(s, -1)) continue;
+      if (best == null || d < best) best = d;
+    }
+    return best == null ? const LidarClear() : LidarObstacle(best);
   }
 
   /// Distance of the [needed]-th nearest hit, or clear if there are fewer.

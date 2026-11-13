@@ -192,13 +192,19 @@ class HazardEngine {
             ? AlertLevel.info
             : AlertLevel.caution;
       }
+      // Far away there is time: warn once it reaches medium distance.
       return object.distance == DistanceLevel.far
-          ? AlertLevel.caution
+          ? AlertLevel.info
           : AlertLevel.danger;
     }
     if (inPath) {
       if (near || object.closingQuickly) return AlertLevel.danger;
-      if (medium || object.approaching) return AlertLevel.caution;
+      // A far object grows in the image just because the user walks up to
+      // it; only a vehicle is fast enough to warn about while still far.
+      if (medium ||
+          (object.approaching && object.category == ObjectCategory.vehicle)) {
+        return AlertLevel.caution;
+      }
     } else if (object.category == ObjectCategory.vehicle &&
         (near || object.approaching)) {
       return AlertLevel.caution;

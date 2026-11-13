@@ -29,6 +29,7 @@ class PathBlockage {
   DateTime? _since;
   bool _watching = false;
   DateTime? _clearSince;
+  DateTime? _openSince;
 
   bool get trapped => _trapped;
 
@@ -138,10 +139,26 @@ class PathBlockage {
     return PathEvent.cleared;
   }
 
+  /// The way ahead has been measured open (same rule as leaving a trap) for
+  /// [settle], from inputs that are still fresh.
+  bool aheadOpenSettled(DateTime now) {
+    final fresh =
+        _fresh(_loadAt, now, detectionMaxAge) ||
+        _fresh(_scanAt, now, depthMaxAge);
+    if (!fresh || !_open(now, HPos.center)) {
+      _openSince = null;
+    _clearSince = null;
+      return false;
+    }
+    _openSince ??= now;
+    return now.difference(_openSince!) >= settle;
+  }
+
   /// The view cannot be trusted right now: restart the settle timers without
   /// changing [trapped], so neither entry, exit nor clearing completes.
   void interrupt() {
     _since = null;
+    _openSince = null;
     _clearSince = null;
   }
 
@@ -157,5 +174,6 @@ class PathBlockage {
     _since = null;
     _watching = false;
     _clearSince = null;
+    _openSince = null;
   }
 }
