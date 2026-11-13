@@ -4,7 +4,7 @@ import 'package:smart_eye/services/depth_alert.dart';
 
 void main() {
   test('constants have exact text', () {
-    expect(trapAlertText, 'Xoay người tìm lối.');
+    expect(findWayText, 'Dừng lại! Xoay người tìm lối.');
     expect(turnOnText, 'Xoay tiếp.');
   });
 
@@ -23,13 +23,13 @@ void main() {
       );
     });
 
-    test('danger with right clear returns "Dừng lại! Đi chéo sang phải."', () {
+    test('danger with right clear returns "Dừng lại! Đi chéo phải."', () {
       expect(
         depthAlertText(
           depthLevel: AlertLevel.danger,
           right: SideState.clear,
         ),
-        'Dừng lại! Đi chéo sang phải.',
+        'Dừng lại! Đi chéo phải.',
       );
     });
 
@@ -123,11 +123,12 @@ void main() {
   group('sideClause', () {
     const c = SideState.clear, b = SideState.blocked, u = SideState.unknown;
     test('one side clear', () {
-      expect(sideClause(c, b), 'Đi chéo sang trái.');
-      expect(sideClause(u, c), 'Đi chéo sang phải.');
+      expect(sideClause(c, b), 'Đi chéo trái.');
+      expect(sideClause(b, c), 'Đi chéo phải.');
+      expect(sideClause(u, c), 'Đi chéo phải.');
     });
     test('both clear goes right / both blocked says nothing', () {
-      expect(sideClause(c, c), 'Đi chéo sang phải.');
+      expect(sideClause(c, c), 'Đi chéo phải.');
       expect(sideClause(b, b), isNull);
     });
     test('nothing certain says nothing', () {
@@ -144,7 +145,7 @@ void main() {
           left: SideState.blocked,
           right: SideState.clear,
         ),
-        'Chậm lại. Đi chéo sang phải.',
+        'Chậm lại. Đi chéo phải.',
       );
     });
 
@@ -168,7 +169,7 @@ void main() {
           left: SideState.clear,
           right: SideState.blocked,
         ),
-        'Dừng lại! Có ghế ngay phía trước. Đi chéo sang trái.',
+        'Dừng lại! Có ghế ngay phía trước. Đi chéo trái.',
       );
     });
 
@@ -193,28 +194,28 @@ void main() {
 
     test('fresh sides are spoken', () {
       expect(
-        speakableSides(sides, capturedAtMs: 1000, nowMs: 1500, trapped: false),
+        speakableSides(sides, capturedAtMs: 1000, nowMs: 1500, findingWay: false),
         sides,
       );
     });
 
     test('sides captured more than 500 ms ago are dropped', () {
       expect(
-        speakableSides(sides, capturedAtMs: 1000, nowMs: 1501, trapped: false),
+        speakableSides(sides, capturedAtMs: 1000, nowMs: 1501, findingWay: false),
         none,
       );
     });
 
-    test('sides are never spoken during a trap', () {
+    test('sides are never spoken during findingWay', () {
       expect(
-        speakableSides(sides, capturedAtMs: 1000, nowMs: 1000, trapped: true),
+        speakableSides(sides, capturedAtMs: 1000, nowMs: 1000, findingWay: true),
         none,
       );
     });
 
     test('no LiDAR reading yet means no sides', () {
       expect(
-        speakableSides(sides, capturedAtMs: -1, nowMs: 100, trapped: false),
+        speakableSides(sides, capturedAtMs: -1, nowMs: 100, findingWay: false),
         none,
       );
     });

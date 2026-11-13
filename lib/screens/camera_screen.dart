@@ -36,6 +36,7 @@ import '../services/speech_manager.dart';
 import '../services/turn_tracker.dart';
 import '../services/ui_settings.dart';
 import '../services/voice_command_service.dart';
+import '../services/walk_state.dart';
 import '../utils/image_utils.dart';
 import '../utils/label_catalog.dart';
 import 'history_screen.dart';
@@ -119,6 +120,7 @@ class _CameraScreenState extends State<CameraScreen>
   /// Free/blocked lanes beside the centre obstacle, smoothed; [_sidesAtMs]
   /// is when their depth frame arrived (see [speakableSides]).
   final SideStability _sideStability = SideStability();
+  final SideLatch _sideLatch = SideLatch();
   static const _noSides = (left: SideState.unknown, right: SideState.unknown);
   ({SideState left, SideState right}) _sides = _noSides;
   int _sidesAtMs = -1;
@@ -140,6 +142,7 @@ class _CameraScreenState extends State<CameraScreen>
   StreamSubscription<GyroscopeEvent>? _gyro;
   SightProblem? _sightProblem;
   final TurnTracker _turns = TurnTracker();
+  final WalkState _walk = WalkState();
   final ProximityPulse _pulse = ProximityPulse(
     onPulse: (strong) =>
         strong ? HapticFeedback.heavyImpact() : HapticFeedback.mediumImpact(),
@@ -175,10 +178,6 @@ class _CameraScreenState extends State<CameraScreen>
   DateTime _lastDescribeAt = DateTime.now();
   DateTime _lastAlertAt = DateTime.fromMillisecondsSinceEpoch(0);
   final PathBlockage _blockage = PathBlockage();
-
-  /// The trap line actually started for the current trap; caution and depth
-  /// warnings stay silent only while this holds.
-  bool _trapAnnounced = false;
 
   /// An obstacle or trap warning was spoken and "Đi thẳng." is still owed.
   bool _frontWarned = false;
@@ -455,7 +454,8 @@ class _CameraScreenState extends State<CameraScreen>
 
   void _resetBlockage() {
     _blockage.reset();
-    _trapAnnounced = false;
+    _walk.reset();
+    _sideLatch.reset();
     _frontWarned = false;
   }
 
@@ -464,7 +464,25 @@ class _CameraScreenState extends State<CameraScreen>
   void _evaluateBlockage(DateTime now) {
     final problem = _sightProblem;
     if (problem == null) {
-      _onBlockage(_blockage.evaluate(now, turning: _turns.turningAt(now)), now);
+      final cue = _walk.tick(
+        now,
+        aheadOpen: _blockage.openAhead(now, beyond: WalkState.exitBeyond),
+        turning: _turns.turningAt(now),
+        turnedDegrees: _turns.degrees,
+      );
+      if (cue == WalkCue.turnOn) {
+        _speech.say(turnOnText, SpeechPriority.danger, subject: 'path:turn');
+        _turns.reset();
+      } else if (cue == WalkCue.goStraight) {
+        _speech.dropSubject('path:turn');
+        _speech.say(
+          'Đi thẳng.',
+          SpeechPriority.guidance,
+          subject: 'path:straight',
+        );
+        _straightAt = now;
+      }
+      _onBlockage(_blockage.evaluate(now));
       _maybeSayStraight(now);
     } else if (problem.isBlind) {
       _resetBlockage();
@@ -475,13 +493,17 @@ class _CameraScreenState extends State<CameraScreen>
 
   /// "Đi thẳng." when the way ahead (centre column and LiDAR) has stayed open
   /// for a second, then every [_straightRepeat] while it stays open. Not while
-  /// trapped, navigating (the guide gives its own directions) or speaking.
+  /// finding a way, navigating (the guide gives its own directions) or speaking.
   void _maybeSayStraight(DateTime now) {
     if (!_blockage.aheadOpenSettled(now)) {
       _straightOwed = true; // say it again as soon as the way reopens
       return;
     }
-    if (_blockage.trapped || _guide.isActive || _speech.isBusy) return;
+    if (_walk.phase == WalkPhase.findWay ||
+        _guide.isActive ||
+        _speech.isBusy) {
+      return;
+    }
     final last = _straightAt;
     final since = last == null ? null : now.difference(last);
     final due =
@@ -511,78 +533,12 @@ class _CameraScreenState extends State<CameraScreen>
   /// about the way ahead would contradict it (danger is always spoken).
   bool _aheadOpen() => _blockage.aheadOpenSettled(DateTime.now());
 
-  /// Leaving a trap also clears its banner, so a quick re-trap is not mistaken
-  /// for a line that was just spoken.
-  void _endTrap() {
-    _trapAnnounced = false;
-    _speech.dropSubject('path:trapped');
-    _speech.dropSubject('path:turn');
-    _turns.reset();
-    final showing = _speech.showing.value?.text;
-    if (showing == trapAlertText || showing == turnOnText) {
-      _speech.showing.value = null;
-    }
-  }
-
-  void _onBlockage(PathEvent? event, [DateTime? now]) {
-    final at = now ?? DateTime.now();
-    const subject = 'path:trapped';
+  void _onBlockage(PathEvent? event) {
     if (event == PathEvent.cleared) {
-      final wasTrapped = _trapAnnounced;
-      _endTrap();
       // A queued obstacle line is stale once the way has been open 1 s.
       _speech.dropSubject('depth:center');
-      if (wasTrapped) {
-        _speech.say(
-          'Đi thẳng.',
-          SpeechPriority.guidance,
-          subject: 'path:straight',
-        );
-        _straightAt = at;
-        _straightOwed = false;
-        _frontWarned = false;
-      } else {
-        _frontWarned = true; // _maybeSayStraight says "Đi thẳng."
-      }
-      return;
+      _frontWarned = true; // _maybeSayStraight says "Đi thẳng."
     }
-    if (event == PathEvent.opened) {
-      // Facing a single obstacle with a side open: stop "turn slowly" and let
-      // the next obstacle alert speak at once, with its verified side clause.
-      _endTrap();
-      _speech.dropSubject('depth:center');
-      return;
-    }
-    if (!_blockage.trapped) return;
-    if (_trapAnnounced) {
-      if (_turns.degrees >= TurnTracker.stepDegrees) {
-        _speech.say(
-          turnOnText,
-          SpeechPriority.danger,
-          subject: 'path:turn',
-        );
-        _turns.reset();
-      }
-      return;
-    }
-    if (!_speech.canSay(SpeechPriority.danger, subject: subject)) return;
-    _lastAlertAt = at;
-    _lastDangerAt = _lastAlertAt;
-    final text = trapAlertText;
-    final log = _eventLogger(TripEventType.danger, text);
-    _speech.say(
-      text,
-      SpeechPriority.danger,
-      subject: subject,
-      onStart: () {
-        HapticFeedback.heavyImpact();
-        _turns.reset();
-        // Logged once per trap, by the first trap line that actually starts.
-        if (_trapAnnounced || !_blockage.trapped) return;
-        _trapAnnounced = true;
-        log();
-      },
-    );
   }
 
   void _syncDiagnostics() {
@@ -618,7 +574,7 @@ class _CameraScreenState extends State<CameraScreen>
           '${latency.meanMs.toStringAsFixed(0)} ms (p95 ${latency.p95Ms.toStringAsFixed(0)})\n'
           'Model ${nativeMs.toStringAsFixed(0)} ms · RSS $memory'
           '${_useLidar ? '\nLiDAR $_lidarReadings Hz · $_lidarStatus' : ''}'
-          '\nHướng: T${b[0] ? '✗' : '✓'} G${b[1] ? '✗' : '✓'} P${b[2] ? '✗' : '✓'}${_blockage.trapped ? ' · kẹt' : ''}';
+          '\nHướng: T${b[0] ? '✗' : '✓'} G${b[1] ? '✗' : '✓'} P${b[2] ? '✗' : '✓'}${_walk.phase == WalkPhase.findWay ? ' · tìm lối' : ''}';
       _lidarReadings = 0;
     });
   }
@@ -681,6 +637,8 @@ class _CameraScreenState extends State<CameraScreen>
     _lidarWarning.reset();
     _wallLatch.reset();
     _sideStability.reset();
+    _sideLatch.reset();
+    _walk.reset();
     _sides = _noSides;
     _pulse.stop();
   }
@@ -864,7 +822,7 @@ class _CameraScreenState extends State<CameraScreen>
             _lidarScan = scan;
             _lidarCenterAtMs = _frameClock.elapsedMilliseconds;
             _wall = _wallLatch.update(scan.center);
-            _blockage.onDepth(now, scan, wall: _wall);
+            _blockage.onDepth(now, scan);
             _evaluateBlockage(now);
             _onLidarReading(
               scan.center,
@@ -885,7 +843,7 @@ class _CameraScreenState extends State<CameraScreen>
     _lidarReadings++;
     _sight.onDepth(now, known: reading is! LidarUnknown);
     final distance = reading is LidarObstacle ? reading.distance : null;
-    _sides = _sideStability.update(reading);
+    _sides = _sideLatch.update(reading, _sideStability.update(reading));
     _sidesAtMs = capturedAtMs;
     _lidarStatus =
         '${switch (reading) {
@@ -900,6 +858,7 @@ class _CameraScreenState extends State<CameraScreen>
     if (problem != null && problem != SightProblem.noDepth) {
       // A badly aimed phone cannot vouch for either side.
       _sideStability.reset();
+      _sideLatch.reset();
       _sides = _noSides;
       return;
     }
@@ -924,7 +883,7 @@ class _CameraScreenState extends State<CameraScreen>
     _sides,
     capturedAtMs: _sidesAtMs,
     nowMs: _frameClock.elapsedMilliseconds,
-    trapped: _trapAnnounced || _blockage.trapped,
+    findingWay: _walk.phase == WalkPhase.findWay,
   );
 
   /// Speaks a class-agnostic depth warning unless the detector already names
@@ -934,7 +893,31 @@ class _CameraScreenState extends State<CameraScreen>
     AlertLevel level, {
     ({SideState left, SideState right}) sides = _noSides,
   }) {
-    if (_trapAnnounced) return;
+    if (_walk.phase == WalkPhase.findWay) return;
+    if (level == AlertLevel.danger &&
+        _walk.onDanger(
+          wall: _wall,
+          sideOpen: sideClause(sides.left, sides.right) != null,
+        )) {
+      const subject = 'path:findway';
+      if (_speech.canSay(SpeechPriority.danger, subject: subject)) {
+        _lastAlertAt = DateTime.now();
+        _lastDangerAt = _lastAlertAt;
+        final log = _eventLogger(TripEventType.danger, findWayText);
+        _speech.say(
+          findWayText,
+          SpeechPriority.danger,
+          subject: subject,
+          onStart: () {
+            _turns.reset();
+            HapticFeedback.heavyImpact();
+            log();
+          },
+        );
+        _blockage.watchAhead();
+      }
+      return;
+    }
     final text = depthAlertText(
       depthLevel: level,
       detectorLevel: _scene.alert?.level,
@@ -1101,9 +1084,9 @@ class _CameraScreenState extends State<CameraScreen>
     DateTime now,
     int rotation,
   ) {
+    if (_walk.phase == WalkPhase.findWay) return;
     _lastAlertAt = now;
     final isDanger = alert.level == AlertLevel.danger;
-    if (_trapAnnounced && !isDanger) return;
     if (!isDanger && alert.pos == HPos.center && _aheadOpen()) return;
     final priority = isDanger ? SpeechPriority.danger : SpeechPriority.caution;
     if (!_speech.canSay(priority, subject: alert.subject)) {
@@ -1313,6 +1296,8 @@ class _CameraScreenState extends State<CameraScreen>
     switch (CommandParser.parse(text, available)) {
       case NavigateTo(:final labelsEn, :final nameVi):
         // A direct reply to the user: forced like the other command replies.
+        _walk.reset();
+        _sideLatch.reset();
         _sayNavLine(_guide.start(labelsEn, nameVi, DateTime.now()).text);
         _eventLogger(TripEventType.navigation, 'Bắt đầu dẫn tới $nameVi')();
       case Describe():
@@ -1355,8 +1340,7 @@ class _CameraScreenState extends State<CameraScreen>
 
   bool _navQuiet(DateTime now) =>
       now.difference(_lastDangerAt) < _navQuietAfterDanger ||
-      _trapAnnounced ||
-      _blockage.trapped ||
+      _walk.phase == WalkPhase.findWay ||
       _sightProblem != null ||
       _voice.isListening ||
       _speech.alertActive;

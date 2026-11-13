@@ -26,8 +26,8 @@ String? depthAlertText({
 String? sideClause(SideState left, SideState right) {
   const c = SideState.clear;
   // Hai bên trống: ưu tiên bên phải.
-  if (right == c) return 'Đi chéo sang phải.';
-  if (left == c) return 'Đi chéo sang trái.';
+  if (right == c) return 'Đi chéo phải.';
+  if (left == c) return 'Đi chéo trái.';
   return null; // không nói "hai bên có vật cản": dễ sai, không giúp đi tiếp
 }
 
@@ -43,10 +43,10 @@ SideState monoSide(double closeness, double columnLoad) {
       : SideState.unknown;
 }
 
-/// The trap line: front and both sides blocked.
-const trapAlertText = 'Xoay người tìm lối.';
+/// The find-way prompt: obstacle ahead with no open way.
+const findWayText = 'Dừng lại! Xoay người tìm lối.';
 
-/// Spoken periodically while turning during a trap.
+/// Spoken periodically while turning during a trap / find-way phase.
 const turnOnText = 'Xoay tiếp.';
 
 /// Nối câu hai bên vào cảnh báo của YOLO, chỉ khi vật nằm ở giữa: với vật
@@ -61,15 +61,15 @@ String withSideClause(
 /// Side lanes older than this (from LiDAR capture) are never spoken.
 const int sideMaxAgeMs = 500;
 
-/// The side states that may be spoken now: none while trapped (the trap line
-/// already says every side is blocked), before any LiDAR reading, or once the
+/// The side states that may be spoken now: none while finding a way (the find-way
+/// line already tells the user to turn), before any LiDAR reading, or once the
 /// reading captured at [capturedAtMs] is older than [sideMaxAgeMs].
 ({SideState left, SideState right}) speakableSides(
   ({SideState left, SideState right}) sides, {
   required int capturedAtMs,
   required int nowMs,
-  required bool trapped,
-}) => !trapped && capturedAtMs >= 0 && nowMs - capturedAtMs <= sideMaxAgeMs
+  required bool findingWay,
+}) => !findingWay && capturedAtMs >= 0 && nowMs - capturedAtMs <= sideMaxAgeMs
     ? sides
     : (left: SideState.unknown, right: SideState.unknown);
 
