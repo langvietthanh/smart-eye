@@ -59,22 +59,22 @@ void main() {
   test('start nói đang tìm', () {
     final g2 = NavigationGuide();
     final cue = g2.start({'chair'}, 'ghế', at(0));
-    expect(cue.text, 'Đang tìm ghế. Xoay người chậm.');
+    expect(cue.text, 'Xoay máy chậm để tìm ghế.');
     expect(cue.force, false);
     expect(g2.state, NavState.searching);
     expect(g2.isActive, true);
     expect(g2.targetName, 'ghế');
   });
 
-  test('thấy đích → câu hướng giờ + khoảng cách', () {
-    expect(up(100, [chairAt(0.7)])!.text, 'Thấy ghế ở hướng 1 giờ, còn xa.');
+  test('thấy đích → câu hướng trái/phải/trước mặt', () {
+    expect(up(100, [chairAt(0.7)])!.text, 'Thấy ghế bên phải.');
     expect(g.state, NavState.guiding);
   });
 
-  test('hướng 11 giờ và phía trước', () {
+  test('bên trái và trước mặt', () {
     expect(
       up(100, [chairAt(0.3, level: DistanceLevel.medium)])!.text,
-      'Thấy ghế ở hướng 11 giờ, khá gần.',
+      'Thấy ghế bên trái.',
     );
     final g2 = NavigationGuide()..start({'chair'}, 'ghế', at(0));
     expect(
@@ -85,15 +85,12 @@ void main() {
             now: at(100),
           )!
           .text,
-      'Thấy ghế ở phía trước, rất gần.',
+      'Thấy ghế trước mặt.',
     );
   });
 
   test('distanceLevel null coi như far', () {
-    expect(
-      up(100, [chairAt(0.5, level: null)])!.text,
-      'Thấy ghế ở phía trước, còn xa.',
-    );
+    expect(up(100, [chairAt(0.5, level: null)])!.text, 'Thấy ghế trước mặt.');
   });
 
   test('chọn track gần nhất (box cao nhất) và khóa id', () {
@@ -128,20 +125,20 @@ void main() {
   test('nhắc lệch sau 0,5 s, lặp mỗi 3 s', () {
     expect(up(100, [chairAt(0.8)])!.text, startsWith('Thấy ghế'));
     expect(up(400, [chairAt(0.8)]), isNull);
-    expect(up(650, [chairAt(0.8)])!.text, 'Lệch phải.');
+    expect(up(650, [chairAt(0.8)])!.text, 'Rẽ phải.');
     expect(up(2000, [chairAt(0.8)]), isNull);
-    expect(up(3700, [chairAt(0.8)])!.text, 'Lệch phải.');
+    expect(up(3700, [chairAt(0.8)])!.text, 'Rẽ phải.');
   });
 
   test('lệch trái khi dx < 0', () {
     up(100, [chairAt(0.2)]);
-    expect(up(700, [chairAt(0.2)])!.text, 'Lệch trái.');
+    expect(up(700, [chairAt(0.2)])!.text, 'Rẽ trái.');
   });
 
   test('về thẳng nói một lần', () {
     up(100, [chairAt(0.8)]);
-    expect(up(700, [chairAt(0.8)])!.text, 'Lệch phải.');
-    expect(up(800, [chairAt(0.55)])!.text, 'Thẳng rồi.');
+    expect(up(700, [chairAt(0.8)])!.text, 'Rẽ phải.');
+    expect(up(800, [chairAt(0.55)])!.text, 'Đi thẳng.');
     expect(up(900, [chairAt(0.55)]), isNull);
   });
 
@@ -150,21 +147,7 @@ void main() {
     up(700, [chairAt(0.8)]);
     expect(up(800, [chairAt(0.65)]), isNull); // dx 0.15
     expect(up(900, [chairAt(0.65)]), isNull);
-    expect(up(1000, [chairAt(0.55)])!.text, 'Thẳng rồi.');
-  });
-
-  test('câu khoảng cách chỉ khi lại gần', () {
-    up(100, [chairAt(0.5, level: DistanceLevel.far)]);
-    expect(
-      up(200, [chairAt(0.5, level: DistanceLevel.medium)])!.text,
-      'Gần hơn rồi.',
-    );
-    expect(up(300, [chairAt(0.5, level: DistanceLevel.far)]), isNull);
-    expect(up(400, [chairAt(0.5, level: DistanceLevel.medium)]), isNull);
-    expect(
-      up(500, [chairAt(0.5, level: DistanceLevel.near)])!.text,
-      'Sắp tới.',
-    );
+    expect(up(1000, [chairAt(0.55)])!.text, 'Đi thẳng.');
   });
 
   test('tới nơi sau 2 lần near & |dx|<0,25', () {
@@ -177,10 +160,7 @@ void main() {
 
   test('tới nơi trả NavCue force + end, state idle', () {
     up(50, [chairAt(0.5, level: DistanceLevel.medium)]);
-    expect(
-      up(100, [chairAt(0.5, level: DistanceLevel.near)])!.text,
-      'Sắp tới.',
-    );
+    expect(up(100, [chairAt(0.5, level: DistanceLevel.near)]), isNull);
     final cue = up(200, [chairAt(0.5, level: DistanceLevel.near)])!;
     expect(cue.force, true);
     expect(cue.end, NavEnd.arrived);
@@ -218,17 +198,14 @@ void main() {
     expect(run(null)!.end, NavEnd.arrived);
   });
 
-  test('nhắc tìm mỗi 5 s; 15 s không thấy → notFound', () {
+  test('nhắc tìm mỗi 2 s; 15 s không thấy → notFound', () {
     // Frames every 100 ms: the clocks add at most 500 ms per update.
     final said = <int, String>{};
     for (var ms = 100; ms < 15000; ms += 100) {
       final c = up(ms, []);
       if (c != null) said[ms] = c.text;
     }
-    expect(said, {
-      5000: 'Đang tìm ghế. Xoay người chậm.',
-      10000: 'Đang tìm ghế. Xoay người chậm.',
-    });
+    expect(said, {for (var ms = 2000; ms < 15000; ms += 2000) ms: 'Đang tìm.'});
     final cue = up(15000, [])!;
     expect(cue.text, 'Không tìm thấy ghế. Đã dừng dẫn đường.');
     expect(cue.force, true);
@@ -245,16 +222,6 @@ void main() {
     expect(g.state, NavState.searching);
   });
 
-  test('ưu tiên một câu mỗi update: khoảng cách thắng lệch hướng', () {
-    up(100, [chairAt(0.8, level: DistanceLevel.far)]);
-    final cue = up(700, [chairAt(0.8, level: DistanceLevel.medium)])!;
-    expect(cue.text, 'Gần hơn rồi.');
-    expect(
-      up(800, [chairAt(0.8, level: DistanceLevel.medium)])!.text,
-      'Lệch phải.',
-    );
-  });
-
   test('không thấy đích khi guiding → không câu', () {
     up(100, [chairAt(0.5)]);
     expect(up(200, []), isNull);
@@ -263,26 +230,25 @@ void main() {
 
   test('đổi bên: cue ngược lại ngay khi đủ 0,5 s, không chờ 3 s', () {
     up(100, [chairAt(0.8)]);
-    expect(up(700, [chairAt(0.8)])!.text, 'Lệch phải.');
+    expect(up(700, [chairAt(0.8)])!.text, 'Rẽ phải.');
     expect(up(800, [chairAt(0.2)]), isNull);
     expect(up(1200, [chairAt(0.2)]), isNull);
-    expect(up(1300, [chairAt(0.2)])!.text, 'Lệch trái.');
+    expect(up(1300, [chairAt(0.2)])!.text, 'Rẽ trái.');
     expect(up(1400, [chairAt(0.2)]), isNull);
   });
 
   test('đổi bên qua vùng trễ vẫn nói ngay khi đủ 0,5 s', () {
     up(100, [chairAt(0.8)]);
-    expect(up(700, [chairAt(0.8)])!.text, 'Lệch phải.');
+    expect(up(700, [chairAt(0.8)])!.text, 'Rẽ phải.');
     expect(up(800, [chairAt(0.65)]), isNull);
     expect(up(900, [chairAt(0.2)]), isNull);
-    expect(up(1400, [chairAt(0.2)])!.text, 'Lệch trái.');
+    expect(up(1400, [chairAt(0.2)])!.text, 'Rẽ trái.');
   });
 
   test('near đầu tiên khi đã guiding chưa kết thúc phiên', () {
     up(100, [chairAt(0.5, level: DistanceLevel.far)]);
-    final cue = up(200, [chairAt(0.5, level: DistanceLevel.near)])!;
-    expect(cue.text, 'Sắp tới.');
-    expect(cue.end, isNull);
+    final cue = up(200, [chairAt(0.5, level: DistanceLevel.near)]);
+    expect(cue, isNull);
     expect(g.state, NavState.guiding);
   });
 
@@ -339,14 +305,14 @@ void main() {
     test('ra mép phải → nói hướng ngay, state lost', () {
       up(0, [track(1, 'chair', const Rect.fromLTRB(0.8, 0.4, 0.98, 0.6))]);
       final cue = up(200, [])!;
-      expect(cue.text, 'Ghế ở bên phải. Xoay phải chậm.');
+      expect(cue.text, 'Rẽ phải.');
       expect(cue.end, isNull);
       expect(g.state, NavState.lost);
     });
 
     test('ra mép trái', () {
       up(0, [track(1, 'chair', const Rect.fromLTRB(0.02, 0.4, 0.2, 0.6))]);
-      expect(up(200, [])!.text, 'Ghế ở bên trái. Xoay trái chậm.');
+      expect(up(200, [])!.text, 'Rẽ trái.');
       expect(g.state, NavState.lost);
     });
 
@@ -354,7 +320,7 @@ void main() {
       lockMid();
       expect(up(1000, []), isNull);
       expect(g.state, NavState.guiding);
-      expect(up(1600, [])!.text, 'Mất dấu ghế. Đứng yên, xoay người chậm.');
+      expect(up(1600, [])!.text, 'Mất dấu ghế. Xoay máy chậm.');
       expect(g.state, NavState.lost);
     });
 
@@ -411,21 +377,21 @@ void main() {
     test('lost → thấy lại cùng id', () {
       lockMid();
       up(1800, []);
-      expect(up(2000, [chairAt(0.5)])!.text, 'Thấy lại ghế, phía trước.');
+      expect(up(2000, [chairAt(0.5)])!.text, 'Thấy lại ghế trước mặt.');
       expect(g.state, NavState.guiding);
       expect(g.targetTrackId, 1);
     });
 
-    test('thấy lại hướng 1 giờ / 11 giờ', () {
+    test('thấy lại bên phải / bên trái', () {
       lockMid();
       up(1800, []);
-      expect(up(2000, [chairAt(0.8)])!.text, 'Thấy lại ghế, hướng 1 giờ.');
+      expect(up(2000, [chairAt(0.8)])!.text, 'Thấy lại ghế bên phải.');
       final g2 = NavigationGuide()..start({'chair'}, 'ghế', at(0));
       g2.update(tracks: [chairAt(0.5)], frame: f, now: at(100));
       g2.update(tracks: [], frame: f, now: at(1800));
       expect(
         g2.update(tracks: [chairAt(0.2)], frame: f, now: at(2000))!.text,
-        'Thấy lại ghế, hướng 11 giờ.',
+        'Thấy lại ghế bên trái.',
       );
     });
 
@@ -442,7 +408,7 @@ void main() {
           level: DistanceLevel.far,
         ),
       ])!;
-      expect(cue.text, 'Thấy lại ghế, phía trước.');
+      expect(cue.text, 'Thấy lại ghế trước mặt.');
       expect(g.targetTrackId, 6);
     });
 
@@ -475,7 +441,7 @@ void main() {
       up(1800, []);
       up(2000, [chairAt(0.8)]);
       expect(up(2300, [chairAt(0.8)]), isNull);
-      expect(up(2600, [chairAt(0.8)])!.text, 'Lệch phải.');
+      expect(up(2600, [chairAt(0.8)])!.text, 'Rẽ phải.');
     });
 
     test('quiet: không trả câu thường; câu chốt được giữ', () {
@@ -483,7 +449,7 @@ void main() {
       expect(g.state, NavState.guiding);
       expect(
         upq(200, [chairAt(0.5, level: DistanceLevel.medium)])!.text,
-        'Thấy ghế ở phía trước, khá gần.',
+        'Thấy ghế trước mặt.',
       );
       // Final cue held while quiet.
       final g2 = NavigationGuide()..start({'chair'}, 'ghế', at(0));
@@ -534,7 +500,7 @@ void main() {
         expect(upq(100, [chairAt(0.5)], quiet: true), isNull);
         expect(
           upq(200, [chairAt(0.8, level: DistanceLevel.medium)])!.text,
-          'Thấy ghế ở hướng 1 giờ, khá gần.',
+          'Thấy ghế bên phải.',
         );
         expect(upq(300, [chairAt(0.8, level: DistanceLevel.medium)]), isNull);
       },
@@ -545,7 +511,7 @@ void main() {
       up(150, [track(1, 'chair', const Rect.fromLTRB(0.8, 0.4, 0.98, 0.6))]);
       expect(upq(300, [], quiet: true), isNull);
       expect(g.state, NavState.lost);
-      expect(upq(400, [])!.text, 'Ghế ở bên phải. Xoay phải chậm.');
+      expect(upq(400, [])!.text, 'Rẽ phải.');
       expect(upq(500, []), isNull);
     });
 
@@ -555,7 +521,7 @@ void main() {
         expect(upq(100, [chairAt(0.5)], quiet: true), isNull);
         expect(upq(1800, [], quiet: true), isNull);
         expect(g.state, NavState.lost);
-        expect(upq(2000, [chairAt(0.5)])!.text, 'Thấy lại ghế, phía trước.');
+        expect(upq(2000, [chairAt(0.5)])!.text, 'Thấy lại ghế trước mặt.');
         expect(upq(2100, [chairAt(0.5)]), isNull);
       },
     );
@@ -564,7 +530,7 @@ void main() {
       lockMid();
       up(1800, []);
       expect(upq(2000, [chairAt(0.2)], quiet: true), isNull);
-      expect(upq(2100, [chairAt(0.2)])!.text, 'Thấy lại ghế, hướng 11 giờ.');
+      expect(upq(2100, [chairAt(0.2)])!.text, 'Thấy lại ghế bên trái.');
     });
 
     test('LiDAR chắn giữa lúc chờ không tính tới nơi: phân loại một lần', () {
@@ -574,35 +540,14 @@ void main() {
       expect(g.state, NavState.guiding);
       expect(
         up(1600, [], lidar: const LidarObstacle(0.8))!.text,
-        'Mất dấu ghế. Đứng yên, xoay người chậm.',
+        'Mất dấu ghế. Xoay máy chậm.',
       );
     });
 
     test('quiet: câu thường bị bỏ không đánh dấu đã nói, sau đó còn nói', () {
       up(100, [chairAt(0.8)]);
       expect(upq(700, [chairAt(0.8)], quiet: true), isNull);
-      expect(up(800, [chairAt(0.8)])!.text, 'Lệch phải.');
-      final g2 = NavigationGuide()..start({'chair'}, 'ghế', at(0));
-      g2.update(tracks: [chairAt(0.5)], frame: f, now: at(100));
-      expect(
-        g2.update(
-          tracks: [chairAt(0.5, level: DistanceLevel.medium)],
-          frame: f,
-          quiet: true,
-          now: at(200),
-        ),
-        isNull,
-      );
-      expect(
-        g2
-            .update(
-              tracks: [chairAt(0.5, level: DistanceLevel.medium)],
-              frame: f,
-              now: at(300),
-            )!
-            .text,
-        'Gần hơn rồi.',
-      );
+      expect(up(800, [chairAt(0.8)])!.text, 'Rẽ phải.');
     });
 
     test('quiet không dừng đồng hồ; sightLost dừng đồng hồ 15 s', () {
@@ -667,7 +612,7 @@ void main() {
         ),
       ]);
       final cue = up(200, [], lidar: const LidarObstacle(0.8))!;
-      expect(cue.text, 'Ghế ở bên phải. Xoay phải chậm.');
+      expect(cue.text, 'Rẽ phải.');
       expect(cue.end, isNull);
       expect(g.state, NavState.lost);
     });
@@ -692,7 +637,7 @@ void main() {
       expect(g.state, NavState.searching);
       expect(g.targetTrackId, isNull);
       expect(g.targetName, 'bàn');
-      expect(up(5300, [])!.text, 'Đang tìm bàn. Xoay người chậm.');
+      expect(up(2300, [])!.text, 'Đang tìm.');
     });
   });
   group('vừa tới nơi: loại trừ đích khỏi cảnh báo', () {

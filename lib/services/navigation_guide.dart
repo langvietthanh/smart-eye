@@ -15,12 +15,12 @@ class NavigationGuide {
   // Direction (normalised dx = centre.x - 0.5).
   static const double lateralEnter = 0.22;
   static const double backToStraight = 0.12;
-  static const double clockThreshold = 0.15;
+  static const double sideThreshold = 0.15;
   static const Duration holdLateral = Duration(milliseconds: 500);
   static const Duration lateralRepeat = Duration(seconds: 3);
 
   // Searching / loss timing.
-  static const Duration searchReminder = Duration(seconds: 5);
+  static const Duration searchReminder = Duration(seconds: 2);
   static const Duration midFrameLossWait = Duration(milliseconds: 1500);
   static const Duration searchTimeout = Duration(seconds: 15);
   static const Duration lostTimeout = Duration(seconds: 15);
@@ -71,7 +71,6 @@ class NavigationGuide {
   bool _lossClassified = false;
 
   // Guiding bookkeeping: only advanced when the matching cue is returned.
-  int _announcedLevel = 0;
   bool _lateralSpoken = false;
   DateTime? _lastLateralCue;
   int _lastSpokenSide = 0;
@@ -132,9 +131,7 @@ class NavigationGuide {
     _lastSeenAt = null;
     _resetGuiding();
     return NavCue(
-      retarget
-          ? 'Đổi sang tìm $_nameVi.'
-          : 'Đang tìm $_nameVi. Xoay người chậm.',
+      retarget ? 'Đổi sang tìm $_nameVi.' : 'Xoay máy chậm để tìm $_nameVi.',
     );
   }
 
@@ -214,8 +211,6 @@ class NavigationGuide {
       _trackId = target.id;
       _state = NavState.guiding;
       _resetGuiding();
-      final level = _levelOf(target);
-      _announcedLevel = _rank(level);
       _observe(target, frame, lidar, now);
       _remember(target, frame, now);
       return _announce(
@@ -230,10 +225,7 @@ class NavigationGuide {
       );
     }
     if (now.difference(_lastSearchCue!) >= searchReminder) {
-      return _emit(
-        'Đang tìm $_nameVi. Xoay người chậm.',
-        () => _lastSearchCue = now,
-      );
+      return _emit('Đang tìm.', () => _lastSearchCue = now);
     }
     return null;
   }
@@ -257,22 +249,12 @@ class NavigationGuide {
     }
 
     final dx = _norm(target, frame).center.dx - 0.5;
-    final level = _rank(_levelOf(target));
 
     // A dropped state-change cue goes first, rebuilt from the current view.
     final pending = _pendingStateCue;
     if (pending != null && !_quiet) {
-      _announcedLevel = level;
       _pendingStateCue = null;
       return NavCue(_statePhrase(pending, target, frame));
-    }
-
-    // Distance beats lateral cues.
-    if (level > _announcedLevel) {
-      return _emit(
-        level == _rank(DistanceLevel.near) ? 'Sắp tới.' : 'Gần hơn rồi.',
-        () => _announcedLevel = level,
-      );
     }
 
     if (_lateralSince != null &&
@@ -281,7 +263,7 @@ class NavigationGuide {
             _lateralSign != _lastSpokenSide ||
             now.difference(_lastLateralCue!) >= lateralRepeat)) {
       final sign = _lateralSign;
-      return _emit(dx < 0 ? 'Lệch trái.' : 'Lệch phải.', () {
+      return _emit(dx < 0 ? 'Rẽ trái.' : 'Rẽ phải.', () {
         _lastLateralCue = now;
         _lastSpokenSide = sign;
         _lateralSpoken = true;
@@ -289,7 +271,7 @@ class NavigationGuide {
     }
 
     if (_lateralSpoken && dx.abs() < backToStraight) {
-      return _emit('Thẳng rồi.', () {
+      return _emit('Đi thẳng.', () {
         _lateralSpoken = false;
         _lastLateralCue = null;
         _lastSpokenSide = 0;
@@ -321,10 +303,7 @@ class NavigationGuide {
     }
     if (now.difference(seen) >= midFrameLossWait) {
       _enterLost();
-      return _announce(
-        _StateCue.loss,
-        'Mất dấu $_nameVi. Đứng yên, xoay người chậm.',
-      );
+      return _announce(_StateCue.loss, 'Mất dấu $_nameVi. Xoay máy chậm.');
     }
     return null;
   }
@@ -352,12 +331,7 @@ class NavigationGuide {
     if (atLeft || atRight) {
       final left = atLeft && (!atRight || dx < 0);
       _enterLost();
-      return _announce(
-        _StateCue.loss,
-        left
-            ? '${_capitalized(_nameVi)} ở bên trái. Xoay trái chậm.'
-            : '${_capitalized(_nameVi)} ở bên phải. Xoay phải chậm.',
-      );
+      return _announce(_StateCue.loss, left ? 'Rẽ trái.' : 'Rẽ phải.');
     }
     return null;
   }
@@ -379,7 +353,6 @@ class NavigationGuide {
       _trackId = target.id;
       _state = NavState.guiding;
       _resetGuiding();
-      _announcedLevel = _rank(_levelOf(target));
       _observe(target, frame, lidar, now);
       _remember(target, frame, now);
       return _announce(
@@ -449,7 +422,6 @@ class NavigationGuide {
 
   void _resetGuiding() {
     _pendingStateCue = null;
-    _announcedLevel = 0;
     _lateralSpoken = false;
     _lastLateralCue = null;
     _lastSpokenSide = 0;
@@ -495,13 +467,6 @@ class NavigationGuide {
   DistanceLevel _levelOf(TrackedObject t) =>
       t.distanceLevel ?? DistanceLevel.far;
 
-  /// Closeness rank: far 0, medium 1, near 2 (enum order is near-first).
-  static int _rank(DistanceLevel l) => switch (l) {
-    DistanceLevel.far => 0,
-    DistanceLevel.medium => 1,
-    DistanceLevel.near => 2,
-  };
-
   /// Cue announcing a state change. Under quiet it is remembered (for entry
   /// and reacquire it is rebuilt from the current view when replayed).
   NavCue? _announce(_StateCue kind, String text) {
@@ -517,30 +482,19 @@ class NavigationGuide {
   String _statePhrase(_StateCue kind, TrackedObject target, Size frame) {
     final box = _norm(target, frame);
     return switch (kind) {
-      _StateCue.entry =>
-        'Thấy $_nameVi ${_entryPhrase(box, _levelOf(target))}.',
-      _StateCue.reacquire => 'Thấy lại $_nameVi, ${_direction(box)}.',
+      _StateCue.entry => 'Thấy $_nameVi ${_direction(box)}.',
+      _StateCue.reacquire => 'Thấy lại $_nameVi ${_direction(box)}.',
       _StateCue.loss => _pendingStateText ?? '',
     };
   }
 
   String _direction(Rect box) {
     final dx = box.center.dx - 0.5;
-    return dx < -clockThreshold
-        ? 'hướng 11 giờ'
-        : dx > clockThreshold
-        ? 'hướng 1 giờ'
-        : 'phía trước';
-  }
-
-  String _entryPhrase(Rect box, DistanceLevel level) {
-    final dir = 'ở ${_direction(box)}';
-    final dist = switch (level) {
-      DistanceLevel.far => 'còn xa',
-      DistanceLevel.medium => 'khá gần',
-      DistanceLevel.near => 'rất gần',
-    };
-    return '$dir, $dist';
+    return dx < -sideThreshold
+        ? 'bên trái'
+        : dx > sideThreshold
+        ? 'bên phải'
+        : 'trước mặt';
   }
 
   String _capitalized(String s) =>
