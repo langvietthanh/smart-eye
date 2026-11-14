@@ -728,7 +728,12 @@ class _CameraScreenState extends State<CameraScreen>
     _tracker.reset();
     _speech.retainAlerts();
     _scene = SceneAssessment.empty;
-    _clearProximity();
+    // Only what YOLO fed goes stale. LiDAR state (walk phase, wall, sides,
+    // warning level) has its own frames: wiping it here dropped find-way back
+    // to straight whenever a hot phone slowed the AI, and the wall left
+    // behind read as a plain obstacle ("Dừng lại!" while turning).
+    _boxProximity = null;
+    _updatePulse();
     _sceneNotifier.value = _scene;
   }
 
