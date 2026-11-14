@@ -390,10 +390,8 @@ class _CameraScreenState extends State<CameraScreen>
             onError: (Object e) => debugPrint('Không đọc được độ nghiêng: $e'),
             cancelOnError: true,
           );
-      _gyro =
-          gyroscopeEventStream(
-            samplingPeriod: SensorInterval.gameInterval,
-          ).listen(
+      _gyro = gyroscopeEventStream(samplingPeriod: SensorInterval.gameInterval)
+          .listen(
             (e) => _turns.onGyro(DateTime.now(), e.x, e.y, e.z),
             onError: (Object e) => debugPrint('Không đọc được con quay: $e'),
             cancelOnError: true,
@@ -471,8 +469,14 @@ class _CameraScreenState extends State<CameraScreen>
         turnedDegrees: _turns.degrees,
       );
       if (cue == WalkCue.turnOn) {
-        _speech.say(turnOnText, SpeechPriority.danger, subject: 'path:turn');
-        _turns.reset();
+        // Count the next 30° only once this prompt was really spoken.
+        if (_speech.sayNow(
+          turnOnText,
+          SpeechPriority.danger,
+          subject: 'path:turn',
+        )) {
+          _turns.reset();
+        }
       } else if (cue == WalkCue.goStraight) {
         _speech.dropSubject('path:turn');
         _speech.say(
@@ -499,9 +503,7 @@ class _CameraScreenState extends State<CameraScreen>
       _straightOwed = true; // say it again as soon as the way reopens
       return;
     }
-    if (_walk.phase == WalkPhase.findWay ||
-        _guide.isActive ||
-        _speech.isBusy) {
+    if (_walk.phase == WalkPhase.findWay || _guide.isActive || _speech.isBusy) {
       return;
     }
     final last = _straightAt;
@@ -899,23 +901,25 @@ class _CameraScreenState extends State<CameraScreen>
           wall: _wall,
           sideOpen: sideClause(sides.left, sides.right) != null,
         )) {
-      const subject = 'path:findway';
-      if (_speech.canSay(SpeechPriority.danger, subject: subject)) {
-        _lastAlertAt = DateTime.now();
-        _lastDangerAt = _lastAlertAt;
-        final log = _eventLogger(TripEventType.danger, findWayText);
-        _speech.say(
-          findWayText,
-          SpeechPriority.danger,
-          subject: subject,
-          onStart: () {
-            _turns.reset();
-            HapticFeedback.heavyImpact();
-            log();
-          },
-        );
-        _blockage.watchAhead();
+      final log = _eventLogger(TripEventType.danger, findWayText);
+      final spoken = _speech.sayNow(
+        findWayText,
+        SpeechPriority.danger,
+        subject: 'path:findway',
+        onStart: () {
+          _turns.reset();
+          HapticFeedback.heavyImpact();
+          log();
+        },
+      );
+      if (!spoken) {
+        // Never sit in find-way silently: that also mutes "Dừng lại!".
+        _walk.reset();
+        return;
       }
+      _lastAlertAt = DateTime.now();
+      _lastDangerAt = _lastAlertAt;
+      _blockage.watchAhead();
       return;
     }
     final text = depthAlertText(

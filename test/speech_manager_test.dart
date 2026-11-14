@@ -565,6 +565,32 @@ void main() {
     await manager.stopAll();
   });
 
+  testWidgets('sayNow repeats a state line inside its cooldown', (
+    tester,
+  ) async {
+    // "Xoay tiếp." / "Dừng lại! Xoay người tìm lối." mark a state change: a
+    // cooldown that silences them leaves the user turning with no guidance.
+    final tts = FakeTts();
+    final manager = managerFor(tester, tts);
+    expect(
+      manager.sayNow('Xoay tiếp.', SpeechPriority.danger, subject: 'path:turn'),
+      isTrue,
+    );
+    tts.finish();
+    await tester.pump();
+    expect(
+      manager.say('Xoay tiếp.', SpeechPriority.danger, subject: 'path:turn'),
+      isFalse,
+    );
+    expect(
+      manager.sayNow('Xoay tiếp.', SpeechPriority.danger, subject: 'path:turn'),
+      isTrue,
+    );
+    await tester.pump();
+    expect(tts.spoken, ['Xoay tiếp.', 'Xoay tiếp.']);
+    await manager.stopAll();
+  });
+
   testWidgets('dropSubject forgets that subject cooldown only', (tester) async {
     final tts = FakeTts();
     final manager = managerFor(tester, tts);

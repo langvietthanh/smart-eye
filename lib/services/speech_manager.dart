@@ -290,6 +290,19 @@ class SpeechManager {
 
   /// Bỏ hẳn chủ thể [subject]: ngắt câu đang nói của chủ thể đó, xoá các câu
   /// đang chờ và quên cooldown để lần sau được nói ngay.
+  /// Nói một câu báo đổi trạng thái ("Xoay tiếp.", "Dừng lại! Xoay người tìm lối."):
+  /// bỏ cooldown của chính [subject] để câu không bị nuốt. Trả về false nếu vẫn
+  /// không nói được; bên gọi khi đó không được đổi trạng thái.
+  bool sayNow(
+    String text,
+    SpeechPriority priority, {
+    required String subject,
+    VoidCallback? onStart,
+  }) {
+    dropSubject(subject);
+    return say(text, priority, subject: subject, onStart: onStart);
+  }
+
   void dropSubject(String subject) {
     _lastBySubject.remove(subject);
     _queue.removeWhere((request) {
