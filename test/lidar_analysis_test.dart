@@ -203,6 +203,40 @@ void sideLaneTests() {
     expect(r.left, SideState.blocked);
   });
 
+  test('gap widths are reported', () {
+    // 1 m aisle, bag 1.5 m ahead: ~35 cm each side, less what the bag hides.
+    final r = obstacleOf(
+      LidarAnalysis().analyze(
+        render(
+          boxes: [
+            sideWall(-0.5),
+            sideWall(0.5),
+            const Box(-0.15, 0, 1.5, 0.15, 0.4, 1.8),
+          ],
+        ),
+      ),
+    );
+    for (final g in [r.leftGap, r.rightGap]) {
+      expect(g, inInclusiveRange(0.2, 0.4));
+    }
+  });
+
+  test('no gap can be confirmed where the floor beside is out of view', () {
+    // Phone at 1.3 m tilted 15°: the floor 1 m ahead is below the image.
+    final r = obstacleOf(
+      LidarAnalysis().analyze(
+        render(boxes: [const Box(-0.15, 0, 1.0, 0.15, 0.4, 1.3)]),
+      ),
+    );
+    expect(r.leftGap, 0);
+    expect(r.left, SideState.unknown);
+  });
+
+  test('a free side reports a wide gap', () {
+    final r = obstacleOf(LidarAnalysis().analyze(render(boxes: [chair(1.8)])));
+    expect(r.rightGap, greaterThanOrEqualTo(0.45));
+  });
+
   test('a gap narrower than 45 cm is not clear', () {
     final r = obstacleOf(
       LidarAnalysis().analyze(

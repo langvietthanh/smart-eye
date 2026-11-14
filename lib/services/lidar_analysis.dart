@@ -61,6 +61,8 @@ class LidarObstacle extends LidarReading {
     this.right = SideState.unknown,
     this.where,
     this.wall = false,
+    this.leftGap = 0,
+    this.rightGap = 0,
   });
 
   /// Horizontal distance to the nearest substantial obstacle, metres.
@@ -73,6 +75,10 @@ class LidarObstacle extends LidarReading {
   /// Centre reading only: a tall surface from near the floor to above the
   /// phone, across the whole corridor core, with both lanes blocked.
   final bool wall;
+
+  /// Centre reading only: width in metres of the widest walkable gap found
+  /// on each side of the obstacle (0 when none).
+  final double leftGap, rightGap;
 
   /// Diagnostics only (centre reading): the obstacle's front
   /// [LidarAnalysis.frontDepth] of hits, sideways
@@ -337,7 +343,7 @@ class LidarAnalysis {
       }
 
       // Positive `side` points left (see the corridor split above).
-      SideState gapSide(bool left) {
+      ({double width, bool blocking}) gapOf(bool left) {
         var run = 0, best = 0;
         var blocking = false;
         for (var j = 0; j < strips; j++) {
@@ -351,8 +357,12 @@ class LidarAnalysis {
           }
           if (occupied(j) && c.abs() > coreHalfWidth) blocking = true;
         }
-        if (best * gapBin >= gapMin - 1e-9) return SideState.clear;
-        return blocking ? SideState.blocked : SideState.unknown;
+        return (width: best * gapBin, blocking: blocking);
+      }
+
+      SideState gapSide(({double width, bool blocking}) g) {
+        if (g.width >= gapMin - 1e-9) return SideState.clear;
+        return g.blocking ? SideState.blocked : SideState.unknown;
       }
 
       var sMin = double.infinity, sMax = -double.infinity;
@@ -365,11 +375,14 @@ class LidarAnalysis {
         hMax = max(hMax, heights[i] - floor);
       }
       // Positive `side` points left (see the corridor split above).
-      final leftLane = gapSide(true), rightLane = gapSide(false);
+      final leftGap = gapOf(true), rightGap = gapOf(false);
+      final leftLane = gapSide(leftGap), rightLane = gapSide(rightGap);
       center = LidarObstacle(
         center.distance,
         left: leftLane,
         right: rightLane,
+        leftGap: leftGap.width,
+        rightGap: rightGap.width,
         // Heights here are still above the floor; [headroom] is above the
         // phone, so the top check is relative to the phone again.
         wall:
