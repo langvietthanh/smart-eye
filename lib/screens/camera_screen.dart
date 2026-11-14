@@ -35,6 +35,7 @@ import '../services/sight_monitor.dart';
 import '../services/speech_manager.dart';
 import '../services/ui_settings.dart';
 import '../services/voice_command_service.dart';
+import '../services/wall_guide.dart';
 import '../utils/image_utils.dart';
 import '../utils/label_catalog.dart';
 import 'history_screen.dart';
@@ -171,6 +172,9 @@ class _CameraScreenState extends State<CameraScreen>
   DateTime _lastDescribeAt = DateTime.now();
   DateTime _lastAlertAt = DateTime.fromMillisecondsSinceEpoch(0);
   final PathBlockage _blockage = PathBlockage();
+
+  /// Third walking state (LiDAR): facing a wall, turn until the way opens.
+  final WallGuide _wall = WallGuide();
 
   /// The trap line actually started for the current trap; caution and depth
   /// warnings stay silent only while this holds.
@@ -451,13 +455,8 @@ class _CameraScreenState extends State<CameraScreen>
     }
   }
 
-  /// The banner is an obstacle alert that already says what the trap line
-  /// says (both sides blocked, or a wall with no way round).
-  bool get _showsBothSidesBlocked {
-    final text = _speech.showing.value?.text;
-    return text != null &&
-        (text.endsWith(bothSidesBlocked) || text.endsWith(wallTurn));
-  }
+  bool get _showsBothSidesBlocked =>
+      _speech.showing.value?.text.endsWith(bothSidesBlocked) ?? false;
 
   /// Leaving a trap also clears its banner, so a quick re-trap is not mistaken
   /// for a line that was just spoken.
@@ -468,6 +467,8 @@ class _CameraScreenState extends State<CameraScreen>
   }
 
   void _onBlockage(PathEvent? event) {
+    // Facing a wall, "turn to find a way" is already being said.
+    if (_wall.active) return;
     const subject = 'path:trapped';
     if (event == PathEvent.cleared) {
       _endTrap();
@@ -508,13 +509,9 @@ class _CameraScreenState extends State<CameraScreen>
       );
       return;
     }
-    final centre = _freshLidarCenter();
-    final text = centre is LidarObstacle && centre.wall
-        ? wallTrapText
-        : trapAlertText;
-    final log = _eventLogger(TripEventType.danger, text);
+    final log = _eventLogger(TripEventType.danger, trapAlertText);
     _speech.say(
-      text,
+      trapAlertText,
       SpeechPriority.danger,
       subject: subject,
       onStart: () {
@@ -560,7 +557,7 @@ class _CameraScreenState extends State<CameraScreen>
           '${latency.meanMs.toStringAsFixed(0)} ms (p95 ${latency.p95Ms.toStringAsFixed(0)})\n'
           'Model ${nativeMs.toStringAsFixed(0)} ms · RSS $memory'
           '${_useLidar ? '\nLiDAR $_lidarReadings Hz · $_lidarStatus' : ''}'
-          '\nHướng: T${b[0] ? '✗' : '✓'} G${b[1] ? '✗' : '✓'} P${b[2] ? '✗' : '✓'}${_blockage.trapped ? ' · kẹt' : ''}';
+          '\nHướng: T${b[0] ? '✗' : '✓'} G${b[1] ? '✗' : '✓'} P${b[2] ? '✗' : '✓'}${_blockage.trapped ? ' · kẹt' : ''}${_wall.active ? ' · gặp tường' : ''}';
       _lidarReadings = 0;
     });
   }
@@ -621,6 +618,7 @@ class _CameraScreenState extends State<CameraScreen>
     _depthWarning.reset();
     _stepWarning.reset();
     _lidarWarning.reset();
+    _wall.reset();
     _sideStability.reset();
     _sides = _noSides;
     _pulse.stop();
@@ -807,7 +805,7 @@ class _CameraScreenState extends State<CameraScreen>
             _blockage.onDepth(now, scan);
             _evaluateBlockage(now);
             _onLidarReading(
-              scan.center,
+              scan,
               thermal: frame.thermalState,
               capturedAtMs: startedAt,
             );
@@ -817,10 +815,11 @@ class _CameraScreenState extends State<CameraScreen>
   }
 
   void _onLidarReading(
-    LidarReading reading, {
+    LidarScan scan, {
     required int thermal,
     required int capturedAtMs,
   }) {
+    final reading = scan.center;
     final now = DateTime.now();
     _lidarReadings++;
     _sight.onDepth(now, known: reading is! LidarUnknown);
@@ -848,11 +847,53 @@ class _CameraScreenState extends State<CameraScreen>
       atMs: _frameClock.elapsedMilliseconds,
     );
     _updatePulse();
-    _announceDepth(
-      _lidarWarning.update(reading, now),
-      metres: distance,
-      sides: _speakableSides(),
-      wall: reading is LidarObstacle && reading.wall,
+    final level = _lidarWarning.update(reading, now);
+    // Walls belong to the wall state: turn, not step round.
+    if (!(reading is LidarObstacle && reading.wall)) {
+      _announceDepth(level, metres: distance, sides: _speakableSides());
+    }
+    _onWall(_wall.update(now, scan, warned: level != AlertLevel.info), now);
+  }
+
+  void _onWall(WallCue? cue, DateTime now) {
+    if (cue == null) return;
+    const subject = 'path:wall';
+    final entered = cue.event == WallEvent.entered;
+    switch (cue.event) {
+      case WallEvent.entered:
+        _speech.dropSubject('depth:center');
+        _endTrap();
+      case WallEvent.found:
+        // Free walking again: a trap or "thông thoáng" watch is stale.
+        _resetBlockage();
+        _endTrap();
+      case WallEvent.left:
+        // Something else close ahead: obstacle alerts take over.
+        _speech.dropSubject(subject);
+        return;
+      case WallEvent.remind:
+        break;
+    }
+    // A state change is said at once, past the previous wall line.
+    if (cue.event != WallEvent.remind) _speech.dropSubject(subject);
+    final priority = entered ? SpeechPriority.danger : SpeechPriority.caution;
+    if (!_speech.canSay(priority, subject: subject)) return;
+    final text = wallCueText(cue, guiding: _guide.isActive);
+    if (entered) {
+      _lastAlertAt = now;
+      _lastDangerAt = now;
+    }
+    final log = entered ? _eventLogger(TripEventType.danger, text) : null;
+    _speech.say(
+      text,
+      priority,
+      subject: subject,
+      onStart: entered
+          ? () {
+              HapticFeedback.heavyImpact();
+              log!();
+            }
+          : null,
     );
   }
 
@@ -876,7 +917,6 @@ class _CameraScreenState extends State<CameraScreen>
     AlertLevel level, {
     double? metres,
     ({SideState left, SideState right}) sides = _noSides,
-    bool wall = false,
   }) {
     if (_trapAnnounced) return;
     final text = depthAlertText(
@@ -885,7 +925,6 @@ class _CameraScreenState extends State<CameraScreen>
       metres: metres,
       left: sides.left,
       right: sides.right,
-      wall: wall,
     );
     if (text == null) return;
     final isDanger = level == AlertLevel.danger;
@@ -1299,6 +1338,7 @@ class _CameraScreenState extends State<CameraScreen>
       now.difference(_lastDangerAt) < _navQuietAfterDanger ||
       _trapAnnounced ||
       _blockage.trapped ||
+      _wall.active ||
       _sightProblem != null ||
       _voice.isListening ||
       _speech.alertActive;

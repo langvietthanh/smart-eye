@@ -9,20 +9,12 @@ String? depthAlertText({
   double? metres, // chỉ có khi dùng LiDAR
   SideState left = SideState.unknown,
   SideState right = SideState.unknown,
-  bool wall = false, // LiDAR thấy tường: nói "Tường phía trước", không đọc mét
 }) {
   if (depthLevel == AlertLevel.info) {
     return null;
   }
   if (detectorLevel != null && detectorLevel.index >= depthLevel.index) {
     return null;
-  }
-  if (wall) {
-    final head = depthLevel == AlertLevel.danger
-        ? _wallDangerHead
-        : 'Chậm lại. Tường phía trước.';
-    final both = left == SideState.blocked && right == SideState.blocked;
-    return _join(head, both ? wallTurn : sideClause(left, right));
   }
   final String head;
   if (depthLevel == AlertLevel.danger) {
@@ -66,15 +58,6 @@ const bothSidesBlocked = 'Hai bên có vật cản.';
 /// The trap line is the same sentence as a danger depth alert with both sides
 /// blocked.
 const trapAlertText = '$_dangerHead $bothSidesBlocked';
-
-const _wallDangerHead = 'Dừng lại! Tường phía trước.';
-
-/// Ends a wall alert when neither side is open; a wall blocks its own lanes,
-/// so "Hai bên có vật cản" would be wrong.
-const wallTurn = 'Xoay người tìm lối.';
-
-/// The trap line in front of a wall: the danger wall alert, same sentence.
-const wallTrapText = '$_wallDangerHead $wallTurn';
 
 /// Nối câu hai bên vào cảnh báo của YOLO, chỉ khi vật nằm ở giữa: với vật
 /// bên trái/phải, câu "bên ... trống" dễ mâu thuẫn với chính cảnh báo.

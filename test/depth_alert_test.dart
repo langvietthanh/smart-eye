@@ -290,37 +290,4 @@ void main() {
       expect(monoSide(0.1, 1), SideState.blocked);
     });
   });
-
-  group('wall', () {
-    test('says wall instead of metres', () {
-      expect(
-        depthAlertText(depthLevel: AlertLevel.caution, metres: 1.4, wall: true),
-        'Chậm lại. Tường phía trước.',
-      );
-    });
-
-    test('no way round: turn to find one, same as the wall trap line', () {
-      expect(
-        depthAlertText(
-          depthLevel: AlertLevel.danger,
-          left: SideState.blocked,
-          right: SideState.blocked,
-          wall: true,
-        ),
-        wallTrapText,
-      );
-      expect(wallTrapText, endsWith(wallTurn));
-    });
-
-    test('an open side is still named', () {
-      expect(
-        depthAlertText(
-          depthLevel: AlertLevel.caution,
-          right: SideState.clear,
-          wall: true,
-        ),
-        'Chậm lại. Tường phía trước. Đi chéo sang phải.',
-      );
-    });
-  });
 }
