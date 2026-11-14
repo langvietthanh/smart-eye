@@ -462,30 +462,15 @@ class _CameraScreenState extends State<CameraScreen>
   void _evaluateBlockage(DateTime now) {
     final problem = _sightProblem;
     if (problem == null) {
-      final cue = _walk.tick(
+      _handleWalkCue(
+        _walk.tick(
+          now,
+          aheadOpen: _blockage.openAhead(now, beyond: WalkState.exitBeyond),
+          turning: _turns.turningAt(now),
+          turnedDegrees: _turns.degrees,
+        ),
         now,
-        aheadOpen: _blockage.openAhead(now, beyond: WalkState.exitBeyond),
-        turning: _turns.turningAt(now),
-        turnedDegrees: _turns.degrees,
       );
-      if (cue == WalkCue.turnOn) {
-        // Count the next 30° only once this prompt was really spoken.
-        if (_speech.sayNow(
-          turnOnText,
-          SpeechPriority.danger,
-          subject: 'path:turn',
-        )) {
-          _turns.reset();
-        }
-      } else if (cue == WalkCue.goStraight) {
-        _speech.dropSubject('path:turn');
-        _speech.say(
-          'Đi thẳng.',
-          SpeechPriority.guidance,
-          subject: 'path:straight',
-        );
-        _straightAt = now;
-      }
       _onBlockage(_blockage.evaluate(now));
       _maybeSayStraight(now);
     } else if (problem.isBlind) {
@@ -495,6 +480,95 @@ class _CameraScreenState extends State<CameraScreen>
     }
   }
 
+  /// Speaks what a [WalkState] transition asks for. State lines ignore their
+  /// own cooldown ([SpeechManager.sayNow]); a find-way line that still cannot
+  /// be spoken drops back to going straight, so "Dừng lại!" is never muted.
+  void _handleWalkCue(WalkCue? cue, DateTime now) {
+    switch (cue) {
+      case null:
+        return;
+      case WalkCue.turnOn:
+        // Count the next 30° only once this prompt was really spoken.
+        if (_speech.sayNow(
+          turnOnText,
+          SpeechPriority.danger,
+          subject: 'path:turn',
+        )) {
+          _turns.reset();
+        }
+      case WalkCue.goStraight:
+        _speech.dropSubject('path:turn');
+        _speech.say(
+          'Đi thẳng.',
+          SpeechPriority.guidance,
+          subject: 'path:straight',
+        );
+        _straightAt = now;
+      case WalkCue.findWay:
+        _sayFindWay();
+      case WalkCue.stepRight:
+      case WalkCue.stepLeft:
+        _speech.sayNow(
+          cue == WalkCue.stepRight
+              ? 'Bước ngang sang phải.'
+              : 'Bước ngang sang trái.',
+          SpeechPriority.danger,
+          subject: 'path:step',
+        );
+    }
+  }
+
+  void _sayFindWay() {
+    final log = _eventLogger(TripEventType.danger, findWayText);
+    final spoken = _speech.sayNow(
+      findWayText,
+      SpeechPriority.danger,
+      subject: 'path:findway',
+      onStart: () {
+        _turns.reset();
+        HapticFeedback.heavyImpact();
+        log();
+      },
+    );
+    if (!spoken) {
+      // Never sit in find-way silently: that also mutes "Dừng lại!".
+      _walk.reset();
+      return;
+    }
+    _lastAlertAt = DateTime.now();
+    _lastDangerAt = _lastAlertAt;
+    _blockage.watchAhead();
+  }
+
+  /// Bypass step 2: "Dừng lại!" and start collecting frames. Like the
+  /// find-way line, it never sits silently in a bypass phase.
+  void _sayStop() {
+    final log = _eventLogger(TripEventType.danger, 'Dừng lại!');
+    final spoken = _speech.sayNow(
+      'Dừng lại!',
+      SpeechPriority.danger,
+      subject: 'path:stop',
+      onStart: () {
+        HapticFeedback.heavyImpact();
+        log();
+      },
+    );
+    if (!spoken) {
+      _walk.reset();
+      return;
+    }
+    _lastAlertAt = DateTime.now();
+    _lastDangerAt = _lastAlertAt;
+  }
+
+  String get _walkLabel => switch (_walk.phase) {
+    WalkPhase.straight => '',
+    WalkPhase.findWay => ' · tìm lối',
+    WalkPhase.collect => ' · vòng qua: gom khung',
+    WalkPhase.sidestep => ' · vòng qua: bước ngang',
+    WalkPhase.passing => ' · vòng qua: đi qua',
+  };
+
   /// "Đi thẳng." when the way ahead (centre column and LiDAR) has stayed open
   /// for a second, then every [_straightRepeat] while it stays open. Not while
   /// finding a way, navigating (the guide gives its own directions) or speaking.
@@ -503,7 +577,9 @@ class _CameraScreenState extends State<CameraScreen>
       _straightOwed = true; // say it again as soon as the way reopens
       return;
     }
-    if (_walk.phase == WalkPhase.findWay || _guide.isActive || _speech.isBusy) {
+    if (_walk.phase != WalkPhase.straight ||
+        _guide.isActive ||
+        _speech.isBusy) {
       return;
     }
     final last = _straightAt;
@@ -576,7 +652,7 @@ class _CameraScreenState extends State<CameraScreen>
           '${latency.meanMs.toStringAsFixed(0)} ms (p95 ${latency.p95Ms.toStringAsFixed(0)})\n'
           'Model ${nativeMs.toStringAsFixed(0)} ms · RSS $memory'
           '${_useLidar ? '\nLiDAR $_lidarReadings Hz · $_lidarStatus' : ''}'
-          '\nHướng: T${b[0] ? '✗' : '✓'} G${b[1] ? '✗' : '✓'} P${b[2] ? '✗' : '✓'}${_walk.phase == WalkPhase.findWay ? ' · tìm lối' : ''}';
+          '\nHướng: T${b[0] ? '✗' : '✓'} G${b[1] ? '✗' : '✓'} P${b[2] ? '✗' : '✓'}$_walkLabel';
       _lidarReadings = 0;
     });
   }
@@ -825,6 +901,9 @@ class _CameraScreenState extends State<CameraScreen>
             _lidarCenterAtMs = _frameClock.elapsedMilliseconds;
             _wall = _wallLatch.update(scan.center);
             _blockage.onDepth(now, scan);
+            if (_sightProblem == null) {
+              _handleWalkCue(_walk.onScan(now, scan), now);
+            }
             _evaluateBlockage(now);
             _onLidarReading(
               scan.center,
@@ -885,7 +964,7 @@ class _CameraScreenState extends State<CameraScreen>
     _sides,
     capturedAtMs: _sidesAtMs,
     nowMs: _frameClock.elapsedMilliseconds,
-    findingWay: _walk.phase == WalkPhase.findWay,
+    findingWay: _walk.phase != WalkPhase.straight,
   );
 
   /// Speaks a class-agnostic depth warning unless the detector already names
@@ -895,41 +974,37 @@ class _CameraScreenState extends State<CameraScreen>
     AlertLevel level, {
     ({SideState left, SideState right}) sides = _noSides,
   }) {
-    if (_walk.phase == WalkPhase.findWay) return;
-    if (level == AlertLevel.danger &&
-        _walk.onDanger(
-          wall: _wall,
-          sideOpen: sideClause(sides.left, sides.right) != null,
-        )) {
-      final log = _eventLogger(TripEventType.danger, findWayText);
-      final spoken = _speech.sayNow(
-        findWayText,
-        SpeechPriority.danger,
-        subject: 'path:findway',
-        onStart: () {
-          _turns.reset();
-          HapticFeedback.heavyImpact();
-          log();
-        },
-      );
-      if (!spoken) {
-        // Never sit in find-way silently: that also mutes "Dừng lại!".
-        _walk.reset();
-        return;
-      }
-      _lastAlertAt = DateTime.now();
-      _lastDangerAt = _lastAlertAt;
-      _blockage.watchAhead();
+    final isDanger = level == AlertLevel.danger;
+    // Away from going straight only a new danger while passing may speak.
+    if (_walk.phase != WalkPhase.straight &&
+        !(isDanger && _walk.phase == WalkPhase.passing)) {
       return;
     }
+    if (isDanger) {
+      switch (_walk.onDanger(
+        wall: _wall,
+        sideOpen: sideClause(sides.left, sides.right) != null,
+        canBypass: _useLidar,
+      )) {
+        case DangerAction.findWay:
+          _sayFindWay();
+          return;
+        case DangerAction.stop:
+          _sayStop();
+          return;
+        case DangerAction.none:
+          if (_walk.phase != WalkPhase.straight) return;
+      }
+    }
+    // With LiDAR the side is picked after stopping ("Bước ngang sang …").
+    final spokenSides = _useLidar ? _noSides : sides;
     final text = depthAlertText(
       depthLevel: level,
       detectorLevel: _scene.alert?.level,
-      left: sides.left,
-      right: sides.right,
+      left: spokenSides.left,
+      right: spokenSides.right,
     );
     if (text == null) return;
-    final isDanger = level == AlertLevel.danger;
     if (!isDanger && _aheadOpen()) return;
     final priority = isDanger ? SpeechPriority.danger : SpeechPriority.caution;
     const subject = 'depth:center';
@@ -1088,7 +1163,7 @@ class _CameraScreenState extends State<CameraScreen>
     DateTime now,
     int rotation,
   ) {
-    if (_walk.phase == WalkPhase.findWay) return;
+    if (_walk.phase != WalkPhase.straight) return;
     _lastAlertAt = now;
     final isDanger = alert.level == AlertLevel.danger;
     if (!isDanger && alert.pos == HPos.center && _aheadOpen()) return;
@@ -1344,7 +1419,7 @@ class _CameraScreenState extends State<CameraScreen>
 
   bool _navQuiet(DateTime now) =>
       now.difference(_lastDangerAt) < _navQuietAfterDanger ||
-      _walk.phase == WalkPhase.findWay ||
+      _walk.phase != WalkPhase.straight ||
       _sightProblem != null ||
       _voice.isListening ||
       _speech.alertActive;
