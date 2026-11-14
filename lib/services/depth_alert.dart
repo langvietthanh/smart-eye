@@ -5,11 +5,9 @@ import 'depth_analysis.dart';
 /// [left]/[right] chỉ có khi dùng LiDAR; câu về hai bên được nối vào cuối.
 String? depthAlertText({
   required AlertLevel depthLevel,
-  AlertLevel? detectorLevel, // mức cảnh báo YOLO hiện tại, null nếu không có
-  double? metres, // chỉ có khi dùng LiDAR
+  AlertLevel? detectorLevel,
   SideState left = SideState.unknown,
   SideState right = SideState.unknown,
-  bool wall = false, // LiDAR thấy tường: nói "Tường phía trước", không đọc mét
 }) {
   if (depthLevel == AlertLevel.info) {
     return null;
@@ -17,21 +15,9 @@ String? depthAlertText({
   if (detectorLevel != null && detectorLevel.index >= depthLevel.index) {
     return null;
   }
-  if (wall) {
-    final head = depthLevel == AlertLevel.danger
-        ? _wallDangerHead
-        : 'Chậm lại. Tường phía trước.';
-    final both = left == SideState.blocked && right == SideState.blocked;
-    return _join(head, both ? wallTurn : sideClause(left, right));
-  }
-  final String head;
-  if (depthLevel == AlertLevel.danger) {
-    head = _dangerHead;
-  } else if (metres != null) {
-    head = 'Chậm lại. Vật cản cách ${spokenMetres(metres)} mét.';
-  } else {
-    head = 'Chậm lại. Có vật phía trước.';
-  }
+  final String head = depthLevel == AlertLevel.danger
+      ? 'Dừng lại!'
+      : 'Chậm lại.';
   return _join(head, sideClause(left, right));
 }
 
@@ -40,8 +26,8 @@ String? depthAlertText({
 String? sideClause(SideState left, SideState right) {
   const c = SideState.clear;
   // Hai bên trống: ưu tiên bên phải.
-  if (right == c) return 'Đi chéo sang phải.';
-  if (left == c) return 'Đi chéo sang trái.';
+  if (right == c) return 'Đi chéo phải.';
+  if (left == c) return 'Đi chéo trái.';
   return null; // không nói "hai bên có vật cản": dễ sai, không giúp đi tiếp
 }
 
@@ -57,18 +43,11 @@ SideState monoSide(double closeness, double columnLoad) {
       : SideState.unknown;
 }
 
-const _dangerHead = 'Dừng lại! Vật cản ngay trước mặt.';
+/// The find-way prompt: obstacle ahead with no open way.
+const findWayText = 'Dừng lại! Xoay người tìm lối.';
 
-const _wallDangerHead = 'Dừng lại! Tường phía trước.';
-
-/// Ends a wall alert when neither side is open, and every trap line.
-const wallTurn = 'Quay lại hoặc xoay người tìm lối.';
-
-/// The trap line: front and both sides blocked.
-const trapAlertText = '$_dangerHead $wallTurn';
-
-/// The trap line in front of a wall: the danger wall alert, same sentence.
-const wallTrapText = '$_wallDangerHead $wallTurn';
+/// Spoken periodically while turning during a trap / find-way phase.
+const turnOnText = 'Xoay tiếp.';
 
 /// Nối câu hai bên vào cảnh báo của YOLO, chỉ khi vật nằm ở giữa: với vật
 /// bên trái/phải, câu "bên ... trống" dễ mâu thuẫn với chính cảnh báo.
@@ -82,15 +61,15 @@ String withSideClause(
 /// Side lanes older than this (from LiDAR capture) are never spoken.
 const int sideMaxAgeMs = 500;
 
-/// The side states that may be spoken now: none while trapped (the trap line
-/// already says every side is blocked), before any LiDAR reading, or once the
+/// The side states that may be spoken now: none while finding a way (the find-way
+/// line already tells the user to turn), before any LiDAR reading, or once the
 /// reading captured at [capturedAtMs] is older than [sideMaxAgeMs].
 ({SideState left, SideState right}) speakableSides(
   ({SideState left, SideState right}) sides, {
   required int capturedAtMs,
   required int nowMs,
-  required bool trapped,
-}) => !trapped && capturedAtMs >= 0 && nowMs - capturedAtMs <= sideMaxAgeMs
+  required bool findingWay,
+}) => !findingWay && capturedAtMs >= 0 && nowMs - capturedAtMs <= sideMaxAgeMs
     ? sides
     : (left: SideState.unknown, right: SideState.unknown);
 

@@ -529,6 +529,13 @@ void warningTests() {
     }
   });
 
+  test('a wall closer than minForward is unknown, never clear', () {
+    // Face against a wall: every hit is nearer than minForward. "Clear" here
+    // made the app say "Đi thẳng." into the wall.
+    final s = LidarAnalysis().analyzeScan(render(boxes: [wall(0.15)]));
+    expect(s.center, isA<LidarUnknown>());
+  });
+
   test('a seated student 32 cm off the walking line is not ahead', () {
     // ~1 m classroom aisle: only hits within coreHalfWidth (±25 cm) are ahead.
     final s = LidarAnalysis().analyzeScan(render(boxes: [sideWall(0.32)]));
@@ -609,5 +616,135 @@ void warningTests() {
     final f = render(tracking: false);
     final s = LidarAnalysis().analyzeScan(f);
     expect([s.left, s.center, s.right], everyElement(isA<LidarUnknown>()));
+  });
+
+  group('WallLatch', () {
+    test('a wall seen far stays a wall up close', () {
+      final latch = WallLatch();
+      expect(latch.update(const LidarObstacle(2.0, wall: true)), isTrue);
+      expect(latch.update(const LidarObstacle(0.8)), isTrue);
+    });
+
+    test('unknown keeps the latch', () {
+      final latch = WallLatch();
+      expect(latch.update(const LidarObstacle(2.0, wall: true)), isTrue);
+      expect(latch.update(const LidarUnknown()), isTrue);
+      expect(latch.update(const LidarObstacle(0.8)), isTrue);
+    });
+
+    test('clear releases', () {
+      final latch = WallLatch();
+      expect(latch.update(const LidarObstacle(2.0, wall: true)), isTrue);
+      expect(latch.update(const LidarClear()), isFalse);
+      expect(latch.update(const LidarObstacle(0.8)), isFalse);
+    });
+
+    test('a jump of more than 0.5 m releases', () {
+      final latch = WallLatch();
+      expect(latch.update(const LidarObstacle(0.5, wall: true)), isTrue);
+      expect(latch.update(const LidarObstacle(1.8)), isFalse);
+    });
+  });
+
+  group('LidarWarning wall threshold', () {
+    test(
+      'LidarWarning with wall: true warns only at 0.5 m with hysteresis to 0.6 m',
+      () {
+        final w = LidarWarning();
+        var t = DateTime(2026, 11, 13, 12, 0, 0);
+
+        AlertLevel step(double d, {bool wall = true}) {
+          t = t.add(const Duration(milliseconds: 100));
+          w.update(LidarObstacle(d), t, wall: wall);
+          t = t.add(const Duration(milliseconds: 100));
+          return w.update(LidarObstacle(d), t, wall: wall);
+        }
+
+        expect(step(1.4, wall: true), AlertLevel.info);
+        expect(step(0.7, wall: true), AlertLevel.info);
+        expect(step(0.45, wall: true), AlertLevel.danger);
+        expect(step(0.55, wall: true), AlertLevel.danger);
+        expect(step(0.65, wall: true), AlertLevel.info);
+      },
+    );
+
+    test('LidarWarning with wall: false at 0.9 m gives danger as before', () {
+      final w = LidarWarning();
+      var t = DateTime(2026, 11, 13, 12, 0, 0);
+
+      t = t.add(const Duration(milliseconds: 100));
+      w.update(const LidarObstacle(0.9), t, wall: false);
+      t = t.add(const Duration(milliseconds: 100));
+      final level = w.update(const LidarObstacle(0.9), t, wall: false);
+      expect(level, AlertLevel.danger);
+    });
+  });
+
+  group('SideLatch', () {
+    const unknown = SideState.unknown;
+    const clear = SideState.clear;
+    const blocked = SideState.blocked;
+
+    test('remembers a clear side when the lane leaves the view', () {
+      final latch = SideLatch();
+      expect(
+        latch.update(
+          const LidarObstacle(2.0),
+          (left: blocked, right: clear),
+        ),
+        (left: blocked, right: clear),
+      );
+      expect(
+        latch.update(
+          const LidarObstacle(1.0),
+          (left: unknown, right: unknown),
+        ),
+        (left: unknown, right: clear),
+      );
+    });
+
+    test('a blocked side forgets', () {
+      final latch = SideLatch();
+      latch.update(const LidarObstacle(2.0), (left: unknown, right: clear));
+      expect(
+        latch.update(const LidarObstacle(1.5), (left: unknown, right: blocked)),
+        (left: unknown, right: blocked),
+      );
+      expect(
+        latch.update(const LidarObstacle(1.0), (left: unknown, right: unknown)),
+        (left: unknown, right: unknown),
+      );
+    });
+
+    test('clear ahead forgets', () {
+      final latch = SideLatch();
+      latch.update(const LidarObstacle(2.0), (left: unknown, right: clear));
+      expect(
+        latch.update(const LidarClear(), (left: unknown, right: unknown)),
+        (left: unknown, right: unknown),
+      );
+      expect(
+        latch.update(const LidarObstacle(1.0), (left: unknown, right: unknown)),
+        (left: unknown, right: unknown),
+      );
+    });
+
+    test('another obstacle forgets', () {
+      final latch = SideLatch();
+      latch.update(const LidarObstacle(1.0), (left: unknown, right: clear));
+      expect(
+        latch.update(const LidarObstacle(1.8), (left: unknown, right: unknown)),
+        (left: unknown, right: unknown),
+      );
+    });
+
+    test('unknown keeps', () {
+      final latch = SideLatch();
+      latch.update(const LidarObstacle(1.0), (left: unknown, right: clear));
+      expect(
+        latch.update(const LidarUnknown(), (left: unknown, right: unknown)),
+        (left: unknown, right: clear),
+      );
+    });
   });
 }

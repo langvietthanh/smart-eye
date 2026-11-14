@@ -3,28 +3,53 @@ import 'package:smart_eye/models/scene_info.dart';
 import 'package:smart_eye/services/depth_alert.dart';
 
 void main() {
-  test('no alert says both sides are blocked; the trap line says turn', () {
-    expect(
-      depthAlertText(
-        depthLevel: AlertLevel.danger,
-        left: SideState.blocked,
-        right: SideState.blocked,
-      ),
-      'Dừng lại! Vật cản ngay trước mặt.',
-    );
-    expect(trapAlertText, 'Dừng lại! Vật cản ngay trước mặt. $wallTurn');
-    // A narrow classroom aisle has desks on both sides: turning alone is no way out.
-    expect(wallTurn, 'Quay lại hoặc xoay người tìm lối.');
+  test('constants have exact text', () {
+    expect(findWayText, 'Dừng lại! Xoay người tìm lối.');
+    expect(turnOnText, 'Xoay tiếp.');
   });
 
   group('depthAlertText', () {
+    test('danger returns "Dừng lại!"', () {
+      expect(
+        depthAlertText(depthLevel: AlertLevel.danger),
+        'Dừng lại!',
+      );
+    });
+
+    test('caution returns "Chậm lại."', () {
+      expect(
+        depthAlertText(depthLevel: AlertLevel.caution),
+        'Chậm lại.',
+      );
+    });
+
+    test('danger with right clear returns "Dừng lại! Đi chéo phải."', () {
+      expect(
+        depthAlertText(
+          depthLevel: AlertLevel.danger,
+          right: SideState.clear,
+        ),
+        'Dừng lại! Đi chéo phải.',
+      );
+    });
+
+    test('danger with both sides blocked returns "Dừng lại!"', () {
+      expect(
+        depthAlertText(
+          depthLevel: AlertLevel.danger,
+          left: SideState.blocked,
+          right: SideState.blocked,
+        ),
+        'Dừng lại!',
+      );
+    });
+
     test('depthLevel info returns null', () {
       expect(depthAlertText(depthLevel: AlertLevel.info), isNull);
       expect(
         depthAlertText(
           depthLevel: AlertLevel.info,
           detectorLevel: AlertLevel.caution,
-          metres: 1.4,
         ),
         isNull,
       );
@@ -45,31 +70,15 @@ void main() {
         ),
         isNull,
       );
-      expect(
-        depthAlertText(
-          depthLevel: AlertLevel.danger,
-          detectorLevel: AlertLevel.danger,
-          metres: 0.8,
-        ),
-        isNull,
-      );
     });
 
-    test('detectorLevel caution + depth danger returns "Dừng lại! Vật cản ngay trước mặt."', () {
+    test('detectorLevel caution + depth danger returns "Dừng lại!"', () {
       expect(
         depthAlertText(
           depthLevel: AlertLevel.danger,
           detectorLevel: AlertLevel.caution,
         ),
-        'Dừng lại! Vật cản ngay trước mặt.',
-      );
-      expect(
-        depthAlertText(
-          depthLevel: AlertLevel.danger,
-          detectorLevel: AlertLevel.caution,
-          metres: 0.9,
-        ),
-        'Dừng lại! Vật cản ngay trước mặt.',
+        'Dừng lại!',
       );
     });
 
@@ -78,15 +87,6 @@ void main() {
         depthAlertText(
           depthLevel: AlertLevel.caution,
           detectorLevel: AlertLevel.caution,
-          metres: 1.4,
-        ),
-        isNull,
-      );
-      expect(
-        depthAlertText(
-          depthLevel: AlertLevel.caution,
-          detectorLevel: AlertLevel.caution,
-          metres: null,
         ),
         isNull,
       );
@@ -97,70 +97,25 @@ void main() {
         depthAlertText(
           depthLevel: AlertLevel.caution,
           detectorLevel: AlertLevel.danger,
-          metres: 1.5,
         ),
         isNull,
       );
     });
-
-    test('không có YOLO + caution + metres 1.4 returns "Chậm lại. Vật cản cách 1,5 mét."', () {
-      expect(
-        depthAlertText(
-          depthLevel: AlertLevel.caution,
-          detectorLevel: null,
-          metres: 1.4,
-        ),
-        'Chậm lại. Vật cản cách 1,5 mét.',
-      );
-    });
-
-    test('không có YOLO + caution + metres 2.0 returns "Chậm lại. Vật cản cách 2 mét."', () {
-      expect(
-        depthAlertText(
-          depthLevel: AlertLevel.caution,
-          detectorLevel: null,
-          metres: 2.0,
-        ),
-        'Chậm lại. Vật cản cách 2 mét.',
-      );
-    });
-
-    test('không có YOLO + caution + metres null returns "Chậm lại. Có vật phía trước."', () {
-      expect(
-        depthAlertText(
-          depthLevel: AlertLevel.caution,
-          detectorLevel: null,
-          metres: null,
-        ),
-        'Chậm lại. Có vật phía trước.',
-      );
-    });
-
-    test(
-      'không có YOLO + danger returns "Dừng lại! Vật cản ngay trước mặt."',
-      () {
-        expect(
-          depthAlertText(depthLevel: AlertLevel.danger, detectorLevel: null),
-          'Dừng lại! Vật cản ngay trước mặt.',
-        );
-      },
-    );
 
     test('detectorLevel info does not suppress caution or danger', () {
       expect(
         depthAlertText(
           depthLevel: AlertLevel.caution,
           detectorLevel: AlertLevel.info,
-          metres: 1.8,
         ),
-        'Chậm lại. Vật cản cách 2 mét.',
+        'Chậm lại.',
       );
       expect(
         depthAlertText(
           depthLevel: AlertLevel.danger,
           detectorLevel: AlertLevel.info,
         ),
-        'Dừng lại! Vật cản ngay trước mặt.',
+        'Dừng lại!',
       );
     });
   });
@@ -168,11 +123,12 @@ void main() {
   group('sideClause', () {
     const c = SideState.clear, b = SideState.blocked, u = SideState.unknown;
     test('one side clear', () {
-      expect(sideClause(c, b), 'Đi chéo sang trái.');
-      expect(sideClause(u, c), 'Đi chéo sang phải.');
+      expect(sideClause(c, b), 'Đi chéo trái.');
+      expect(sideClause(b, c), 'Đi chéo phải.');
+      expect(sideClause(u, c), 'Đi chéo phải.');
     });
     test('both clear goes right / both blocked says nothing', () {
-      expect(sideClause(c, c), 'Đi chéo sang phải.');
+      expect(sideClause(c, c), 'Đi chéo phải.');
       expect(sideClause(b, b), isNull);
     });
     test('nothing certain says nothing', () {
@@ -182,15 +138,14 @@ void main() {
   });
 
   group('side clause on alerts', () {
-    test('LiDAR caution with a free right side', () {
+    test('caution with a free right side', () {
       expect(
         depthAlertText(
           depthLevel: AlertLevel.caution,
-          metres: 1.4,
           left: SideState.blocked,
           right: SideState.clear,
         ),
-        'Chậm lại. Vật cản cách 1,5 mét. Đi chéo sang phải.',
+        'Chậm lại. Đi chéo phải.',
       );
     });
 
@@ -199,7 +154,6 @@ void main() {
         depthAlertText(
           depthLevel: AlertLevel.caution,
           detectorLevel: AlertLevel.danger,
-          metres: 1.4,
           left: SideState.clear,
           right: SideState.clear,
         ),
@@ -215,7 +169,7 @@ void main() {
           left: SideState.clear,
           right: SideState.blocked,
         ),
-        'Dừng lại! Có ghế ngay phía trước. Đi chéo sang trái.',
+        'Dừng lại! Có ghế ngay phía trước. Đi chéo trái.',
       );
     });
 
@@ -240,28 +194,28 @@ void main() {
 
     test('fresh sides are spoken', () {
       expect(
-        speakableSides(sides, capturedAtMs: 1000, nowMs: 1500, trapped: false),
+        speakableSides(sides, capturedAtMs: 1000, nowMs: 1500, findingWay: false),
         sides,
       );
     });
 
     test('sides captured more than 500 ms ago are dropped', () {
       expect(
-        speakableSides(sides, capturedAtMs: 1000, nowMs: 1501, trapped: false),
+        speakableSides(sides, capturedAtMs: 1000, nowMs: 1501, findingWay: false),
         none,
       );
     });
 
-    test('sides are never spoken during a trap', () {
+    test('sides are never spoken during findingWay', () {
       expect(
-        speakableSides(sides, capturedAtMs: 1000, nowMs: 1000, trapped: true),
+        speakableSides(sides, capturedAtMs: 1000, nowMs: 1000, findingWay: true),
         none,
       );
     });
 
     test('no LiDAR reading yet means no sides', () {
       expect(
-        speakableSides(sides, capturedAtMs: -1, nowMs: 100, trapped: false),
+        speakableSides(sides, capturedAtMs: -1, nowMs: 100, findingWay: false),
         none,
       );
     });
@@ -291,39 +245,6 @@ void main() {
     test('blocked by MiDaS caution or a YOLO object', () {
       expect(monoSide(0.8, 0), SideState.blocked);
       expect(monoSide(0.1, 1), SideState.blocked);
-    });
-  });
-
-  group('wall', () {
-    test('says wall instead of metres', () {
-      expect(
-        depthAlertText(depthLevel: AlertLevel.caution, metres: 1.4, wall: true),
-        'Chậm lại. Tường phía trước.',
-      );
-    });
-
-    test('no way round: turn to find one, same as the wall trap line', () {
-      expect(
-        depthAlertText(
-          depthLevel: AlertLevel.danger,
-          left: SideState.blocked,
-          right: SideState.blocked,
-          wall: true,
-        ),
-        wallTrapText,
-      );
-      expect(wallTrapText, endsWith(wallTurn));
-    });
-
-    test('an open side is still named', () {
-      expect(
-        depthAlertText(
-          depthLevel: AlertLevel.caution,
-          right: SideState.clear,
-          wall: true,
-        ),
-        'Chậm lại. Tường phía trước. Đi chéo sang phải.',
-      );
     });
   });
 }

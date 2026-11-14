@@ -2,13 +2,10 @@ import '../models/scene_info.dart';
 import 'depth_analysis.dart';
 import 'lidar_analysis.dart';
 
-/// `cleared`: the way ahead is open (leaving a trap, or after a centre
-/// warning, see [PathBlockage.watchAhead]). `opened`: a side opened while the
-/// centre is still blocked (the user turned towards a single obstacle).
-enum PathEvent { trapped, cleared, opened }
+/// `cleared`: the way ahead is open after an obstacle warning (see [PathBlockage.watchAhead]).
+enum PathEvent { cleared }
 
-/// Decides when the user is boxed in (front, left and right all blocked) and
-/// when the way ahead opens again. Pure Dart; time is passed in explicitly.
+/// Monitors corridor occupancy and open path ahead. Pure Dart; time is passed in explicitly.
 class PathBlockage {
   static const blockedWithin = 1.5;
   static const exitClearBeyond = 2.2;
@@ -25,13 +22,9 @@ class PathBlockage {
   DepthReading? _mono;
   DateTime? _monoAt;
   bool _seenDepth = false;
-  bool _trapped = false;
-  DateTime? _since;
   bool _watching = false;
   DateTime? _clearSince;
   DateTime? _openSince;
-
-  bool get trapped => _trapped;
 
   void onDetections(DateTime at, List<double> columnLoad) {
     _load = columnLoad;
@@ -64,8 +57,7 @@ class PathBlockage {
 
   /// `[left, centre, right]` from inputs that are still fresh: a LiDAR
   /// obstacle within [blockedWithin] metres, or, where LiDAR has no reading,
-  /// a full YOLO column. YOLO's "near" is box size, not metres: a chair 2–3 m
-  /// away reads "khá gần", so it never overrules a LiDAR measurement.
+  /// a full YOLO column.
   List<bool> blocked(DateTime now) {
     final yolo = _fresh(_loadAt, now, detectionMaxAge);
     final lidar = _fresh(_scanAt, now, depthMaxAge);
@@ -78,57 +70,27 @@ class PathBlockage {
     });
   }
 
-  /// Exit needs one direction clearly open: with LiDAR, clear or an obstacle
-  /// beyond [exitClearBeyond] (matches `LidarWarning.cautionExit`).
-  bool _open(DateTime now, HPos pos) {
-    if (blocked(now)[pos.index]) return false;
+  /// Whether the corridor ahead is open: with LiDAR, clear or an obstacle
+  /// beyond [beyond]; without LiDAR, MiDaS sees no obstacle and YOLO centre is clear.
+  bool openAhead(DateTime now, {double beyond = exitClearBeyond}) {
+    if (blocked(now)[HPos.center.index]) return false;
     if (!_seenDepth) return true;
     if (_fresh(_scanAt, now, depthMaxAge)) {
-      return switch (_scan![pos]) {
+      return switch (_scan![HPos.center]) {
         LidarClear() => true,
-        LidarObstacle(:final distance) => distance > exitClearBeyond,
+        LidarObstacle(:final distance) => distance > beyond,
         LidarUnknown() => false,
       };
     }
     if (_fresh(_monoAt, now, monoMaxAge)) {
       final m = _mono!;
-      final closeness = switch (pos) {
-        HPos.left => m.left,
-        HPos.center => m.center,
-        HPos.right => m.right,
-      };
-      return closeness < DepthAnalysis.clearBelow;
+      return m.center < DepthAnalysis.clearBelow;
     }
     return false;
   }
 
   PathEvent? evaluate(DateTime now) {
-    final centreOpen = _trapped && _open(now, HPos.center);
-    final holds = _trapped
-        ? centreOpen || _open(now, HPos.left) || _open(now, HPos.right)
-        : blocked(now).every((b) => b);
-    if (!holds) {
-      _since = null;
-    } else {
-      _since ??= now;
-      if (now.difference(_since!) >= settle) {
-        _trapped = !_trapped;
-        _since = null;
-        _clearSince = null;
-        if (_trapped) {
-          _watching = true;
-          return PathEvent.trapped;
-        }
-        if (centreOpen) {
-          _watching = false;
-          return PathEvent.cleared;
-        }
-        return PathEvent.opened;
-      }
-    }
-    // Outside a trap, "open ahead" is never claimed from YOLO alone: it
-    // cannot see walls, doors or boxes it has no class for.
-    if (_trapped || !_watching || !_seenDepth || !_open(now, HPos.center)) {
+    if (!_watching || !_seenDepth || !openAhead(now)) {
       _clearSince = null;
       return null;
     }
@@ -139,25 +101,22 @@ class PathBlockage {
     return PathEvent.cleared;
   }
 
-  /// The way ahead has been measured open (same rule as leaving a trap) for
-  /// [settle], from inputs that are still fresh.
+  /// The way ahead has been measured open for [settle], from inputs that are still fresh.
   bool aheadOpenSettled(DateTime now) {
     final fresh =
         _fresh(_loadAt, now, detectionMaxAge) ||
         _fresh(_scanAt, now, depthMaxAge);
-    if (!fresh || !_open(now, HPos.center)) {
+    if (!fresh || !openAhead(now)) {
       _openSince = null;
-    _clearSince = null;
+      _clearSince = null;
       return false;
     }
     _openSince ??= now;
     return now.difference(_openSince!) >= settle;
   }
 
-  /// The view cannot be trusted right now: restart the settle timers without
-  /// changing [trapped], so neither entry, exit nor clearing completes.
+  /// Restarts the settle timers without changing seen depth.
   void interrupt() {
-    _since = null;
     _openSince = null;
     _clearSince = null;
   }
@@ -170,8 +129,6 @@ class PathBlockage {
     _mono = null;
     _monoAt = null;
     _seenDepth = false;
-    _trapped = false;
-    _since = null;
     _watching = false;
     _clearSince = null;
     _openSince = null;
