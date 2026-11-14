@@ -143,23 +143,32 @@ class LidarAnalysis {
   /// about 20° of the walking direction.
   static const grazingStep = 0.25;
 
-  /// Lanes beside the centre corridor, used to say a side is free: a
-  /// portrait LiDAR sees sideways only ~0.5 × the distance ahead, so a lane
-  /// out to 0.75 m is fully in view from ~1.5 m.
-  static const laneOuter = 0.75;
-  static const laneSplit = 0.55;
+  /// The way past an obstacle is checked from the user's feet to this far
+  /// beyond it (at least [laneMinDepth]), floor in [laneBin] stretches.
   static const lanePastObstacle = 1.0;
   static const laneMinDepth = 2.0;
   static const laneBin = 0.5;
-  static const laneFloorPoints = 10;
 
-  /// Sampled points that block a lane: far lower than the centre corridor's
-  /// threshold, since a wrong "free" is worse than a missed one.
-  static const laneObstaclePoints = 10;
-
-  /// Lane floor must be this flat: a 10–14 cm step is neither floor nor
-  /// obstacle, so its cells stay empty and the lane reads unknown.
+  /// Gap floor must be this flat: a 10–14 cm step is neither floor nor
+  /// obstacle, so its strips stay empty and the side reads unknown.
   static const laneFloorBand = 0.06;
+
+  /// Gap search reaches this far each side of the walking line.
+  static const gapOuter = 1.05;
+
+  /// Width of one strip of the gap search.
+  static const gapBin = 0.05;
+
+  /// Sampled points that make a strip occupied: low, since a wrong "free"
+  /// is worse than a missed one.
+  static const gapObstaclePoints = 3;
+
+  /// Floor points every stretch of a strip needs before it counts as seen.
+  static const gapFloorPoints = 2;
+
+  /// Narrowest gap a person squeezes through (shoulders); tune on the demo
+  /// walker.
+  static const gapMin = 0.45;
 
   /// Points this close to the floor are floor, not obstacles.
   static const floorMargin = 0.15;
@@ -274,59 +283,76 @@ class LidarAnalysis {
     var center = _frontal(centre, centreSide, needed);
     // Face against a wall every hit is nearer than minForward: that is not a
     // clear way ahead (it made the app say "Đi thẳng." into the wall).
-    if (center is LidarClear && tooClose >= needed) center = const LidarUnknown();
+    if (center is LidarClear && tooClose >= needed) {
+      center = const LidarUnknown();
+    }
     if (center is LidarObstacle) {
-      SideState lane(double sign) {
-        final d = center is LidarObstacle ? center.distance : 0.0;
-        final end = max(d + lanePastObstacle, laneMinDepth);
-        final bins = ((end - d) / laneBin).ceil();
-        final floorCounts = List<int>.filled(bins * 2, 0);
-        var obstacles = 0;
-        for (var i = 0; i < count; i++) {
-          final s = sign * sides[i];
-          final forward = forwards[i];
-          final height = heights[i];
-          // An edge-grazer on the way there is in the path of a step aside;
-          // the obstacle's own flank (its last 20 cm) is not.
-          if (s > coreHalfWidth &&
-              s <= halfWidth &&
-              forward >= minForward &&
-              forward < d - 0.2 &&
-              height >= low &&
-              height <= headroom) {
-            obstacles++;
-            continue;
-          }
-          // Anything seen on the way to the gap counts, not only beside the
-          // obstacle; the floor is only checked where it is in view.
-          if (s <= halfWidth ||
-              s > laneOuter ||
-              forward < minForward ||
-              forward > end) {
-            continue;
-          }
-          if (height >= low && height <= headroom) {
-            obstacles++;
-          } else if (forward >= d && (height - floor).abs() <= laneFloorBand) {
-            final bin = min(((forward - d) / laneBin).floor(), bins - 1);
-            floorCounts[bin * 2 + (s < laneSplit ? 0 : 1)]++;
-          }
+      // Gap search: 5 cm strips across |side| <= gapOuter. A strip is free
+      // when nothing stands in it on the way past the obstacle, its floor is
+      // seen right up to beyond the obstacle, and it is in view at the
+      // obstacle's distance. A side is clear when a run of free strips there
+      // is at least a body wide (gapMin): in a ~1 m aisle the gap between the
+      // obstacle and the desks is what the user can squeeze through.
+      final d = center.distance;
+      final end = max(d + lanePastObstacle, laneMinDepth);
+      final stretches = ((end - d) / laneBin).ceil();
+      final strips = (2 * gapOuter / gapBin).round();
+      final hits = List<int>.filled(strips, 0);
+      final floorSeen = List<int>.filled(strips * stretches, 0);
+      int stripOf(double s) =>
+          ((s + gapOuter) / gapBin).floor().clamp(0, strips - 1);
+      for (var i = 0; i < count; i++) {
+        final s = sides[i];
+        final forward = forwards[i];
+        if (s.abs() > gapOuter || forward < minForward || forward > end) {
+          continue;
         }
-        if (obstacles >= laneObstaclePoints) return SideState.blocked;
-        // Nearest outer corner of the lane, on the floor, in camera space.
-        final w = sign * laneOuter;
-        final cx3 = fx0 * d + sx * w + ux * floor;
-        final cy3 = fy0 * d + sy * w + uy * floor;
-        final cz3 = fz0 * d + sz * w + uz * floor;
-        if (cz3 >= 0) return SideState.unknown;
+        final height = heights[i];
+        if (height >= low && height <= headroom) {
+          hits[stripOf(s)]++;
+        } else if (forward >= d && (height - floor).abs() <= laneFloorBand) {
+          final k = min(((forward - d) / laneBin).floor(), stretches - 1);
+          floorSeen[stripOf(s) * stretches + k]++;
+        }
+      }
+      // Strip centre on the floor at the obstacle's distance, in view?
+      bool inView(double s) {
+        final cx3 = fx0 * d + sx * s + ux * floor;
+        final cy3 = fy0 * d + sy * s + uy * floor;
+        final cz3 = fz0 * d + sz * s + uz * floor;
+        if (cz3 >= 0) return false;
         final u = f.cx + f.fx * cx3 / -cz3;
         final v = f.cy - f.fy * cy3 / -cz3;
-        if (u < 0 || u >= f.width || v < 0 || v >= f.height) {
-          return SideState.unknown;
+        return u >= 0 && u < f.width && v >= 0 && v < f.height;
+      }
+
+      double centreOf(int j) => -gapOuter + (j + 0.5) * gapBin;
+      bool occupied(int j) => hits[j] >= gapObstaclePoints;
+      bool free(int j) {
+        if (occupied(j)) return false;
+        for (var k = 0; k < stretches; k++) {
+          if (floorSeen[j * stretches + k] < gapFloorPoints) return false;
         }
-        return floorCounts.every((c) => c >= laneFloorPoints)
-            ? SideState.clear
-            : SideState.unknown;
+        return inView(centreOf(j));
+      }
+
+      // Positive `side` points left (see the corridor split above).
+      SideState gapSide(bool left) {
+        var run = 0, best = 0;
+        var blocking = false;
+        for (var j = 0; j < strips; j++) {
+          final c = centreOf(j);
+          if (left ? c <= 0 : c >= 0) continue;
+          if (free(j)) {
+            run++;
+            best = max(best, run);
+          } else {
+            run = 0;
+          }
+          if (occupied(j) && c.abs() > coreHalfWidth) blocking = true;
+        }
+        if (best * gapBin >= gapMin - 1e-9) return SideState.clear;
+        return blocking ? SideState.blocked : SideState.unknown;
       }
 
       var sMin = double.infinity, sMax = -double.infinity;
@@ -339,7 +365,7 @@ class LidarAnalysis {
         hMax = max(hMax, heights[i] - floor);
       }
       // Positive `side` points left (see the corridor split above).
-      final leftLane = lane(1), rightLane = lane(-1);
+      final leftLane = gapSide(true), rightLane = gapSide(false);
       center = LidarObstacle(
         center.distance,
         left: leftLane,
@@ -525,8 +551,8 @@ class SideLatch {
     };
     final resolvedLeft =
         sides.left == SideState.unknown && _left == SideState.clear
-            ? SideState.clear
-            : sides.left;
+        ? SideState.clear
+        : sides.left;
 
     _right = switch (sides.right) {
       SideState.clear => SideState.clear,
@@ -535,8 +561,8 @@ class SideLatch {
     };
     final resolvedRight =
         sides.right == SideState.unknown && _right == SideState.clear
-            ? SideState.clear
-            : sides.right;
+        ? SideState.clear
+        : sides.right;
 
     return (left: resolvedLeft, right: resolvedRight);
   }
@@ -617,7 +643,9 @@ class LidarWarning {
     if (reading is LidarUnknown) return AlertLevel.info;
     final d = reading is LidarObstacle ? reading.distance : double.infinity;
     if (wall) {
-      _raw = d < wallDangerEnter || (_raw == AlertLevel.danger && d <= wallDangerExit)
+      _raw =
+          d < wallDangerEnter ||
+              (_raw == AlertLevel.danger && d <= wallDangerExit)
           ? AlertLevel.danger
           : AlertLevel.info;
     } else {
