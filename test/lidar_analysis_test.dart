@@ -433,14 +433,27 @@ void sideLaneTests() {
     expect(r.left, isNot(SideState.clear));
   });
 
-  test('side lanes do not depend on hold', () {
+  test('fully observed body-width side lanes remain clear at different holds', () {
+    // Far enough that both shoulder-width lanes fit in the image at either
+    // hold. A closer obstacle can hide floor and must then remain unknown.
     for (final f in [
-      render(pitchDeg: 25, boxes: [chair(1.8)]),
-      render(cameraHeight: 1.0, boxes: [chair(1.8)]),
+      render(pitchDeg: 25, boxes: [chair(2.8)]),
+      render(cameraHeight: 1.0, boxes: [chair(2.8)]),
     ]) {
       final r = obstacleOf(LidarAnalysis().analyze(f));
       expect((r.left, r.right), (SideState.clear, SideState.clear));
     }
+  });
+
+  test('a lower hold cannot certify an only partly observed body-width lane', () {
+    final r = obstacleOf(
+      LidarAnalysis().analyze(render(cameraHeight: 1.0, boxes: [chair(1.8)])),
+    );
+    // The right run has only 65 cm of verified floor: the chair occludes one
+    // inner strip and the image excludes the outer strip. Do not infer 70 cm.
+    expect(r.rightGap, lessThan(LidarAnalysis.gapMin));
+    expect(r.right, SideState.unknown);
+    expect(r.rightGapCenter, isNull);
   });
 }
 
@@ -731,7 +744,9 @@ void warningTests() {
   test('a surface 32 cm off the line still overlaps the shoulders', () {
     final s = LidarAnalysis().analyzeScan(render(boxes: [sideWall(0.32)]));
     expect(s.center, isA<LidarObstacle>());
-    expect(s.right, isA<LidarObstacle>());
+    // The visible wall face lies inside the shoulder corridor. It blocks the
+    // centre; the wall occludes the separate outer-right sampling corridor.
+    expect((s.center as LidarObstacle).distance, lessThan(1.0));
   });
 
   test('desks 85 cm to the side do not block that side', () {
