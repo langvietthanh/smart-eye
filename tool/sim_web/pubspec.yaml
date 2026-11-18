@@ -1,0 +1,28 @@
+name: smart_eye_sim
+description: "Smart Eye demo without an iPhone: the app's LiDAR logic on a virtual classroom, in the browser."
+publish_to: 'none'
+version: 1.0.0
+
+environment:
+  sdk: ^3.13.2
+
+dependencies:
+  flutter:
+    sdk: flutter
+  smart_eye:
+    path: ../..
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^6.0.0
+
+flutter:
+  uses-material-design: true
+  # Bundled so Vietnamese text renders without fetching fonts at run time.
+  fonts:
+    - family: DejaVuSans
+      fonts:
+        - asset: fonts/DejaVuSans.ttf
+        - asset: fonts/DejaVuSans-Bold.ttf
+          weight: 700
