@@ -157,6 +157,58 @@ void main() {
     expect(walk.phase, WalkPhase.straight);
   });
 
+  group('detector alerts enter obstacle flow', () {
+    test('YOLO danger transitions to find-way without LiDAR', () {
+      const alert = HazardAlert(
+        level: AlertLevel.danger,
+        message: 'Dừng lại! Có ghế ngay phía trước.',
+        guidance: Guidance.stop,
+        subject: 'track:1',
+        pos: HPos.center,
+        inPath: true,
+      );
+      expect(walk.onAlert(alert, canBypass: false), DangerAction.findWay);
+      expect(walk.phase, WalkPhase.findWay);
+    });
+
+    test('YOLO danger starts LiDAR bypass even when box load is narrow', () {
+      const alert = HazardAlert(
+        level: AlertLevel.danger,
+        message: 'Dừng lại! Có ghế ngay phía trước.',
+        guidance: Guidance.stop,
+        subject: 'track:1',
+        pos: HPos.center,
+      );
+      expect(walk.onAlert(alert, canBypass: true), DangerAction.stop);
+      expect(walk.phase, WalkPhase.collect);
+    });
+
+    test('side danger outside the walking corridor does not stop the user', () {
+      const alert = HazardAlert(
+        level: AlertLevel.danger,
+        message: 'Dừng lại! Có ghế bên trái.',
+        guidance: Guidance.stop,
+        subject: 'track:1',
+        pos: HPos.left,
+      );
+      expect(walk.onAlert(alert, canBypass: false), DangerAction.none);
+      expect(walk.phase, WalkPhase.straight);
+    });
+
+    test('side-centred box whose edge overlaps path still triggers find-way', () {
+      const alert = HazardAlert(
+        level: AlertLevel.danger,
+        message: 'Dừng lại! Có ghế ngay phía trước.',
+        guidance: Guidance.stop,
+        subject: 'track:1',
+        pos: HPos.left,
+        inPath: true,
+      );
+      expect(walk.onAlert(alert, canBypass: false), DangerAction.findWay);
+      expect(walk.phase, WalkPhase.findWay);
+    });
+  });
+
   group('verified bypass', () {
     DateTime at(int ms) => t0.add(Duration(milliseconds: ms));
     LidarPose pose(double x, double z) => LidarPose(x: x, z: z, headX: 1, headZ: 0);

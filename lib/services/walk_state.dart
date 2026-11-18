@@ -51,6 +51,20 @@ class WalkState {
   bool get _bypassing =>
       _phase != WalkPhase.straight && _phase != WalkPhase.findWay;
 
+  /// Detector warnings must enter the same avoidance flow as depth warnings;
+  /// speech cooldowns and an empty column-load estimate cannot suppress it.
+  DangerAction onAlert(
+    HazardAlert alert, {
+    required bool canBypass,
+    bool wall = false,
+  }) {
+    if (alert.level != AlertLevel.danger ||
+        (!alert.inPath && alert.pos != HPos.center)) {
+      return DangerAction.none;
+    }
+    return onDanger(wall: wall, sideOpen: false, canBypass: canBypass);
+  }
+
   DangerAction onDanger({
     required bool wall,
     required bool sideOpen,

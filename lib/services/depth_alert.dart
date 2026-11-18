@@ -44,7 +44,7 @@ SideState monoSide(double closeness, double columnLoad) {
 }
 
 /// The find-way prompt: obstacle ahead with no open way.
-const findWayText = 'Dừng lại! Xoay người tìm lối.';
+const findWayText = 'Dừng lại! Xoay người chậm để tìm lối khác.';
 
 /// Spoken periodically while turning during a trap / find-way phase.
 const turnOnText = 'Xoay tiếp.';

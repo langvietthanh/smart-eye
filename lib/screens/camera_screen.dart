@@ -201,6 +201,8 @@ class _CameraScreenState extends State<CameraScreen>
   int _lidarCenterAtMs = -1;
   ({WalkCue cue, int revision, WalkPhase phase})? _pendingWalkCue;
   int? _stoppedWalkRevision;
+  bool _findWayOwed = false;
+  bool _stopOwed = false;
   DateTime? _monoStepAt;
 
   /// A command is being listened for or dispatched; long presses are ignored.
@@ -456,6 +458,8 @@ class _CameraScreenState extends State<CameraScreen>
   void _resetBlockage() {
     _dropWalkMovement();
     _stoppedWalkRevision = null;
+    _findWayOwed = false;
+    _stopOwed = false;
     _blockage.reset();
     _walk.reset();
     _sideLatch.reset();
@@ -466,6 +470,18 @@ class _CameraScreenState extends State<CameraScreen>
   /// never evaluates while the latest sight check reports a problem.
   void _evaluateBlockage(DateTime now) {
     final problem = _sight.check(now);
+    if (problem == null &&
+        _walk.phase == WalkPhase.findWay &&
+        _findWayOwed &&
+        !_speech.isSubjectActive('path:findway')) {
+      _sayFindWay();
+    }
+    if (problem == null &&
+        _walk.phase == WalkPhase.collect &&
+        _stopOwed &&
+        !_speech.isSubjectActive('path:stop')) {
+      _sayStop();
+    }
     if (problem == null && !_groundHazardAhead) {
       _handleWalkCue(
         _walk.tick(
@@ -584,22 +600,27 @@ class _CameraScreenState extends State<CameraScreen>
 
   void _sayFindWay() {
     _dropWalkMovement();
+    _findWayOwed = true;
     final log = _eventLogger(TripEventType.danger, findWayText);
     final spoken = _speech.sayNow(
       findWayText,
       SpeechPriority.danger,
       subject: 'path:findway',
       onStart: () {
+        _findWayOwed = false;
         _turns.reset();
         HapticFeedback.heavyImpact();
         log();
       },
     );
     if (!spoken) {
-      // Never sit in find-way silently: that also mutes "Dừng lại!".
-      _walk.reset();
+      // Keep the find-way phase active until this safety prompt can be
+      // accepted. Resetting here would turn the same visual danger into a
+      // repeated ordinary "Dừng lại" alert.
+      _findWayOwed = true;
       return;
     }
+    _findWayOwed = false;
     _lastAlertAt = DateTime.now();
     _lastDangerAt = _lastAlertAt;
     _blockage.watchAhead();
@@ -609,6 +630,7 @@ class _CameraScreenState extends State<CameraScreen>
   /// find-way line, it never sits silently in a bypass phase.
   void _sayStop() {
     _dropWalkMovement();
+    _stopOwed = true;
     _stoppedWalkRevision = null;
     final revision = _walk.revision;
     final log = _eventLogger(TripEventType.danger, 'Dừng lại!');
@@ -617,15 +639,19 @@ class _CameraScreenState extends State<CameraScreen>
       SpeechPriority.danger,
       subject: 'path:stop',
       onStart: () {
+        _stopOwed = false;
         if (_walk.revision == revision) _stoppedWalkRevision = revision;
         HapticFeedback.heavyImpact();
         log();
       },
     );
     if (!spoken) {
-      _walk.reset();
+      // Keep collecting while speech is temporarily busy; the next accepted
+      // stop prompt still owns this avoidance phase.
+      _stopOwed = true;
       return;
     }
+    _stopOwed = false;
     _lastAlertAt = DateTime.now();
     _lastDangerAt = _lastAlertAt;
   }
@@ -723,13 +749,13 @@ class _CameraScreenState extends State<CameraScreen>
       } catch (_) {
         // RSS is platform-dependent; never present buffer sizes as process RAM.
       }
-      final b = _blockage.blocked(DateTime.now());
+      final b = _blockage.states(DateTime.now());
       _diagnostics.value =
           'AI ${fps.toStringAsFixed(1)} fps · nhận kết quả '
           '${latency.meanMs.toStringAsFixed(0)} ms (p95 ${latency.p95Ms.toStringAsFixed(0)})\n'
           'Model ${nativeMs.toStringAsFixed(0)} ms · RSS $memory'
-          '${_useLidar ? '\nLiDAR $_lidarReadings Hz · $_lidarStatus' : ''}'
-          '\nHướng: T${b[0] ? '✗' : '✓'} G${b[1] ? '✗' : '✓'} P${b[2] ? '✗' : '✓'}$_walkLabel';
+          '${_useLidar ? '\nLiDAR $_lidarReadings Hz · $_lidarStatus' : '\nCảm biến: YOLO + MiDaS'}'
+          '\nHướng: ${b.map((state) => switch (state) { SideState.blocked => '✗', SideState.clear => '✓', SideState.unknown => '?', }).join(' ')}$_walkLabel';
       _lidarReadings = 0;
     });
   }
@@ -1199,7 +1225,7 @@ class _CameraScreenState extends State<CameraScreen>
       // A badly aimed phone's LiDAR cannot vouch that the way is clear.
       lidar: _sightProblem == null ? _freshLidarScan() : null,
     );
-    _blockage.onDetections(now, scene.columnLoad);
+    _blockage.onDetections(now, scene.columnLoad, alert: scene.alert);
     _speech.retainAlerts(
       subject: scene.alert?.subject,
       text: scene.alert?.message,
@@ -1258,6 +1284,21 @@ class _CameraScreenState extends State<CameraScreen>
     if (_walk.phase != WalkPhase.straight && !groundHazard) return;
     _lastAlertAt = now;
     final isDanger = alert.level == AlertLevel.danger;
+    if (isDanger && !groundHazard && (alert.inPath || alert.pos == HPos.center)) {
+      final action = _walk.onAlert(alert, canBypass: _useLidar);
+      if (action != DangerAction.none) {
+        _dropWalkMovement();
+        // Replace the detector's generic danger line with the state-machine
+        // prompt so it cannot keep repeating "Dừng lại" in place.
+        _speech.dropSubject(alert.subject);
+        if (action == DangerAction.findWay) {
+          _sayFindWay();
+        } else {
+          _sayStop();
+        }
+        return;
+      }
+    }
     if (!groundHazard &&
         !isDanger &&
         alert.pos == HPos.center &&
@@ -1279,7 +1320,7 @@ class _CameraScreenState extends State<CameraScreen>
     }
     if (isDanger) _lastDangerAt = now;
 
-    if (alert.pos == HPos.center) _blockage.watchAhead();
+    if (alert.inPath || alert.pos == HPos.center) _blockage.watchAhead();
     // Only the metric bypass controller may authorize a lateral step.
     final text = alert.message;
     final jpeg = isDanger ? _captureMemory(image, rotation) : null;

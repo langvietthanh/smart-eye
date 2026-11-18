@@ -17,6 +17,7 @@ class PathBlockage {
 
   List<double>? _load;
   DateTime? _loadAt;
+  HazardAlert? _alert;
   LidarScan? _scan;
   DateTime? _scanAt;
   DepthReading? _mono;
@@ -26,9 +27,14 @@ class PathBlockage {
   DateTime? _clearSince;
   DateTime? _openSince;
 
-  void onDetections(DateTime at, List<double> columnLoad) {
+  void onDetections(
+    DateTime at,
+    List<double> columnLoad, {
+    HazardAlert? alert,
+  }) {
     _load = columnLoad;
     _loadAt = at;
+    _alert = alert;
   }
 
   void onDepth(DateTime at, LidarScan scan) {
@@ -53,28 +59,51 @@ class PathBlockage {
   }
 
   bool _fresh(DateTime? t, DateTime now, Duration maxAge) =>
-      t != null && now.difference(t) <= maxAge;
+      t != null && !now.isBefore(t) && now.difference(t) <= maxAge;
 
-  /// `[left, centre, right]` from inputs that are still fresh: a LiDAR
-  /// obstacle within [blockedWithin] metres, or, where LiDAR has no reading,
-  /// a full YOLO column.
-  List<bool> blocked(DateTime now) {
+  bool _dangerAhead(DateTime now) =>
+      _fresh(_loadAt, now, detectionMaxAge) &&
+      _alert?.level == AlertLevel.danger &&
+      (_alert?.inPath == true || _alert?.pos == HPos.center);
+
+  /// Diagnostic occupancy, not permission to step sideways. An empty YOLO
+  /// column alone is unknown; a centre danger remains blocked even when its
+  /// narrow box did not reach the column-load threshold or depth sees clear.
+  List<SideState> states(DateTime now) {
     final yolo = _fresh(_loadAt, now, detectionMaxAge);
     final lidar = _fresh(_scanAt, now, depthMaxAge);
+    final mono = _fresh(_monoAt, now, monoMaxAge);
+    final closeness = _mono == null
+        ? const [double.nan, double.nan, double.nan]
+        : [_mono!.left, _mono!.center, _mono!.right];
     return List.generate(3, (i) {
+      if (i == HPos.center.index && _dangerAhead(now)) {
+        return SideState.blocked;
+      }
       final r = lidar ? _scan![HPos.values[i]] : const LidarUnknown();
       if (r is! LidarUnknown) {
-        return r is LidarObstacle && r.distance <= blockedWithin;
+        return r is LidarObstacle && r.distance <= blockedWithin
+            ? SideState.blocked
+            : SideState.clear;
       }
-      return yolo && _load![i] >= 1.0;
+      if (yolo && _load![i] >= 1.0) return SideState.blocked;
+      if (yolo && mono && closeness[i].isFinite &&
+          closeness[i] < DepthAnalysis.clearBelow) {
+        return SideState.clear;
+      }
+      return SideState.unknown;
     });
   }
+
+  /// A false value may still mean unknown; use [states] for diagnostics.
+  List<bool> blocked(DateTime now) =>
+      states(now).map((state) => state == SideState.blocked).toList();
 
   /// Whether the corridor ahead is open: with LiDAR, clear or an obstacle
   /// beyond [beyond]; without LiDAR, MiDaS sees no obstacle and YOLO centre is clear.
   bool openAhead(DateTime now, {double beyond = exitClearBeyond}) {
     if (blocked(now)[HPos.center.index]) return false;
-    if (!_seenDepth) return true;
+    if (!_seenDepth) return false;
     if (_fresh(_scanAt, now, depthMaxAge)) {
       return switch (_scan![HPos.center]) {
         LidarClear() => true,
@@ -84,7 +113,8 @@ class PathBlockage {
     }
     if (_fresh(_monoAt, now, monoMaxAge)) {
       final m = _mono!;
-      return m.center < DepthAnalysis.clearBelow;
+      return _fresh(_loadAt, now, detectionMaxAge) &&
+          m.center.isFinite && m.center < DepthAnalysis.clearBelow;
     }
     return false;
   }
@@ -124,6 +154,7 @@ class PathBlockage {
   void reset() {
     _load = null;
     _loadAt = null;
+    _alert = null;
     _scan = null;
     _scanAt = null;
     _mono = null;

@@ -71,12 +71,17 @@ class HazardAlert {
   /// Vị trí của vật gây cảnh báo (null nếu không gắn với một vật)
   final HPos? pos;
 
+  /// Whether the detected box intersects the walking corridor. An object's
+  /// centre can be left/right while its edge still blocks the path ahead.
+  final bool inPath;
+
   const HazardAlert({
     required this.level,
     required this.message,
     required this.guidance,
     required this.subject,
     this.pos,
+    this.inPath = false,
   });
 }
 

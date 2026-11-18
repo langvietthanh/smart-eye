@@ -910,16 +910,21 @@ void main() {
       expect(manager.alertActive, isFalse);
       manager.say('Xe bên trái', SpeechPriority.caution, subject: 'track:1');
       expect(manager.alertActive, isTrue);
+      expect(manager.isSubjectActive('track:1'), isTrue);
+      expect(manager.isSubjectActive('path:findway'), isFalse);
       await tester.pump();
       expect(tts.spoken.last, 'Xe bên trái');
       expect(manager.alertActive, isTrue);
       tts.finish();
       await tester.pump();
       expect(manager.alertActive, isFalse);
+      expect(manager.isSubjectActive('track:1'), isFalse);
       manager.say('Dừng lại', SpeechPriority.danger, subject: 'track:2');
       expect(manager.alertActive, isTrue);
+      expect(manager.isSubjectActive('track:2'), isTrue);
       await manager.stopAll();
       expect(manager.alertActive, isFalse);
+      expect(manager.isSubjectActive('track:2'), isFalse);
     },
   );
 }

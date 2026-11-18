@@ -176,6 +176,7 @@ class HazardEngine {
           : Guidance.slowDown,
       subject: 'track:${best.object.track.id}',
       pos: best.object.pos,
+      inPath: best.inPath,
       message: _message(best.object, best.level, best.inPath),
     );
   }
@@ -229,11 +230,7 @@ class HazardEngine {
 
   String _message(ObjectInfo object, AlertLevel level, bool inPath) {
     final where = inPath
-        ? switch (object.pos) {
-            HPos.center => 'ngay phía trước',
-            HPos.left => 'bên trái',
-            HPos.right => 'bên phải',
-          }
+        ? 'ngay phía trước'
         : object.pos.vi;
     final canMove =
         object.category == ObjectCategory.vehicle ||

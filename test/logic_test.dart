@@ -524,8 +524,10 @@ void main() {
         rec('chair', 'ghế', 56, leftInPathBox),
       ]);
       expect(scene.alert?.level, AlertLevel.danger);
-      expect(scene.alert?.message, 'Dừng lại! Có ghế bên trái.');
       expect(scene.alert?.message, isNot(contains('lệch')));
+      expect(scene.alert?.inPath, isTrue);
+      expect(scene.alert?.pos, HPos.left);
+      expect(scene.alert?.message, 'Dừng lại! Có ghế ngay phía trước.');
     });
   });
 

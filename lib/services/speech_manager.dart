@@ -91,6 +91,9 @@ class SpeechManager {
   /// A caution or danger line is speaking or waiting to be spoken.
   bool get alertActive => _isAlert(_current) || _queue.any((r) => _isAlert(r));
 
+  bool isSubjectActive(String subject) =>
+      _current?.subject == subject || _queue.any((r) => r.subject == subject);
+
   static bool _isAlert(_Request? r) =>
       r != null && r.priority.index >= SpeechPriority.caution.index;
 
