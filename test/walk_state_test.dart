@@ -2,6 +2,7 @@ import 'dart:math';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:smart_eye/models/scene_info.dart';
+import 'package:smart_eye/services/depth_alert.dart';
 import 'package:smart_eye/services/lidar_analysis.dart';
 import 'package:smart_eye/services/walk_state.dart';
 
@@ -602,6 +603,76 @@ void main() {
       expect(
         w.tick(at(300), aheadOpen: true, turning: true, turnedDegrees: 0),
         WalkCue.goStraight,
+      );
+    });
+  });
+
+  group('a way on is a body wide', () {
+    DateTime at(int ms) => t0.add(Duration(milliseconds: ms));
+    LidarScan facing(double deg, double width) {
+      final r = deg * pi / 180;
+      return LidarScan(
+        const LidarClear(),
+        const LidarClear(),
+        const LidarClear(),
+        pose: LidarPose(x: 0, z: 0, headX: sin(r), headZ: -cos(r)),
+        aheadWidth: width,
+      );
+    }
+
+    WalkCue? tickOpen(int ms) =>
+        walk.tick(at(ms), aheadOpen: true, turning: true, turnedDegrees: 0);
+
+    test('55 cm between two rows of desks is not taken, 1 m is', () {
+      walk.onScan(at(0), facing(0, 0.3));
+      walk.onDanger(wall: true, sideOpen: false, canBypass: false);
+      walk.onScan(at(100), facing(60, 0.55));
+      tickOpen(100);
+      expect(tickOpen(400), isNull);
+      walk.onScan(at(500), facing(80, 1.0));
+      tickOpen(500);
+      expect(tickOpen(800), WalkCue.goStraight);
+    });
+  });
+
+  group('wall turn hint', () {
+    LidarScan sides(LidarReading l, LidarReading r) =>
+        LidarScan(l, const LidarObstacle(0.9, wall: true), r);
+
+    test('towards the clearly deeper side', () {
+      expect(
+        WalkState.turnHint(sides(const LidarClear(), const LidarObstacle(1))),
+        HPos.left,
+      );
+      expect(
+        WalkState.turnHint(
+          sides(const LidarObstacle(1), const LidarObstacle(1.6)),
+        ),
+        HPos.right,
+      );
+    });
+
+    test('none when alike or unreadable', () {
+      expect(
+        WalkState.turnHint(
+          sides(const LidarObstacle(1), const LidarObstacle(1.2)),
+        ),
+        isNull,
+      );
+      expect(
+        WalkState.turnHint(sides(const LidarUnknown(), const LidarClear())),
+        isNull,
+      );
+    });
+
+    test('spoken lines', () {
+      expect(
+        wallTurnText(HPos.right),
+        'Dừng lại! Tường phía trước. Quay sang phải.',
+      );
+      expect(
+        wallTurnText(null),
+        'Dừng lại! Tường phía trước. Xoay trái hoặc phải để tìm lối.',
       );
     });
   });

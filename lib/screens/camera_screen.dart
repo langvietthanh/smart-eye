@@ -545,10 +545,15 @@ class _CameraScreenState extends State<CameraScreen>
     }
   }
 
-  void _sayFindWay() {
-    final log = _eventLogger(TripEventType.danger, findWayText);
+  /// [wall]: say it is a wall, and which way to turn when LiDAR can tell.
+  void _sayFindWay({bool wall = false}) {
+    final scan = _lidarScan;
+    final text = wall && scan != null
+        ? wallTurnText(WalkState.turnHint(scan))
+        : findWayText;
+    final log = _eventLogger(TripEventType.danger, text);
     final spoken = _speech.sayNow(
-      findWayText,
+      text,
       SpeechPriority.danger,
       subject: 'path:findway',
       onStart: () {
@@ -1019,7 +1024,7 @@ class _CameraScreenState extends State<CameraScreen>
         canBypass: _useLidar,
       )) {
         case DangerAction.findWay:
-          _sayFindWay();
+          _sayFindWay(wall: _wall);
           return;
         case DangerAction.stop:
           _sayStop();

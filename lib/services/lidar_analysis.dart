@@ -125,9 +125,15 @@ class LidarScan {
     this.right, {
     this.cells = const [],
     this.pose,
+    this.aheadWidth,
   });
 
   final LidarReading left, center, right;
+
+  /// Free width through the walking line, out to [LidarAnalysis.aheadReach]
+  /// ahead, in metres (null when not measured): tells a way on from a gap
+  /// narrower than a body, which "nothing in the 50 cm core" does not.
+  final double? aheadWidth;
 
   LidarReading operator [](HPos pos) => switch (pos) {
     HPos.left => left,
@@ -221,6 +227,9 @@ class LidarAnalysis {
   static const cellSideReach = 1.2;
   static const cellSize = 0.1;
   static const cellMinPoints = 2;
+
+  /// How far ahead [LidarScan.aheadWidth] looks.
+  static const aheadReach = 1.5;
 
   /// Full-resolution points needed before something counts as an obstacle.
   static const minPoints = 150;
@@ -443,6 +452,8 @@ class LidarAnalysis {
     // are worked out by WalkState from the frame's pose).
     final cellHits = <int, int>{};
     const sideCells = 1000;
+    final aheadStrips = (2 * gapOuter / gapBin).round();
+    final aheadHits = List<int>.filled(aheadStrips, 0);
     for (var i = 0; i < count; i++) {
       final forward = forwards[i], side = sides[i], height = heights[i];
       if (forward < minForward ||
@@ -451,6 +462,9 @@ class LidarAnalysis {
           height < low ||
           height > headroom) {
         continue;
+      }
+      if (forward <= aheadReach && side.abs() < gapOuter) {
+        aheadHits[((side + gapOuter) / gapBin).floor()]++;
       }
       final key =
           (forward / cellSize).floor() * sideCells +
@@ -466,12 +480,28 @@ class LidarAnalysis {
         ..add((fi + 0.5) * cellSize)
         ..add((si + 0.5) * cellSize);
     });
+    // The run of empty strips through the walking line (both strips that
+    // touch it must be empty).
+    bool empty(int j) => aheadHits[j] < gapObstaclePoints;
+    final mid = aheadStrips ~/ 2;
+    var aheadWidth = 0.0;
+    if (empty(mid) && empty(mid - 1)) {
+      var lo = mid - 1, hi = mid;
+      while (lo > 0 && empty(lo - 1)) {
+        lo--;
+      }
+      while (hi < aheadStrips - 1 && empty(hi + 1)) {
+        hi++;
+      }
+      aheadWidth = (hi - lo + 1) * gapBin;
+    }
     return LidarScan(
       _nearest(left, needed),
       center,
       _nearest(right, needed),
       cells: cells,
       pose: f.pose,
+      aheadWidth: aheadWidth,
     );
   }
 

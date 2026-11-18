@@ -124,6 +124,8 @@ class WalkState {
   // Heading (ARKit) for the find-way search.
   LidarPose? _lastPose;
   DateTime? _lastPoseAt;
+  double? _aheadWidth;
+  DateTime? _aheadWidthAt;
   (double, double)? _searchHeading;
   double _firstSide = 0; // sign of the side tried first, 0 = not yet
 
@@ -171,6 +173,11 @@ class WalkState {
     if (pose != null) {
       _lastPose = pose;
       _lastPoseAt = now;
+    }
+    final width = scan.aheadWidth;
+    if (width != null) {
+      _aheadWidth = width;
+      _aheadWidthAt = now;
     }
     if (_phase == WalkPhase.straight) _noteApproach(now, scan.center);
     if (!_bypassing) return null;
@@ -299,7 +306,14 @@ class WalkState {
       }
     }
     final inSearch = turned == null || turned.abs() <= maxSearchTurn;
-    if (aheadOpen && inSearch) {
+    // A way on must be a body wide: the 55 cm between two rows of desks is
+    // "open" to the 50 cm core but not walkable (simulator, demo aisle).
+    final at = _aheadWidthAt;
+    final wide =
+        at == null ||
+        now.difference(at) > const Duration(seconds: 1) ||
+        _aheadWidth! >= sidestepGapMin - 1e-9;
+    if (aheadOpen && inSearch && wide) {
       _openSince ??= now;
       final requiredDuration = turning ? turningSettle : settle;
       if (now.difference(_openSince!) >= requiredDuration) {
@@ -382,6 +396,24 @@ class WalkState {
         break;
     }
   }
+
+  /// Facing a wall: the side whose corridor (beside the 50 cm core, out to
+  /// ~1 m) reaches at least [turnHintMargin] deeper; an angled wall recedes
+  /// that way. Null when LiDAR cannot tell.
+  static HPos? turnHint(LidarScan scan) {
+    double? depth(LidarReading r) => switch (r) {
+      LidarClear() => double.infinity,
+      LidarObstacle(:final distance) => distance,
+      LidarUnknown() => null,
+    };
+    final left = depth(scan.left), right = depth(scan.right);
+    if (left == null || right == null || left == right) return null;
+    if (left - right >= turnHintMargin) return HPos.left;
+    if (right - left >= turnHintMargin) return HPos.right;
+    return null;
+  }
+
+  static const turnHintMargin = 0.5;
 
   /// Signed degrees turned since find-way began (ARKit heading), or null
   /// without a recent pose.

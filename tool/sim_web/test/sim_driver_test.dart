@@ -122,6 +122,8 @@ void main() {
     expect(said.where((t) => t.startsWith('Bước ngang')), isEmpty);
     expect(said, contains(findWayTextForTest));
     expect(d.z, greaterThan(2.0));
+    // The 55 cm between two rows of desks is no way on any more.
+    expect(d.collisions, isEmpty);
   });
 
   testWidgets('chair in a wide corridor at 15°: stepped round, not turned', (
@@ -146,9 +148,11 @@ void main() {
     expect(d.collisions, isEmpty);
   });
 
-  testWidgets('wall at the end: told to stop and turn', (tester) async {
+  testWidgets('wall at the end: told it is a wall and to turn', (tester) async {
     final d = await run(tester, named('Tường cuối'), seconds: 20);
-    expect(d.heard.map((h) => h.text), contains(findWayTextForTest));
+    final said = d.heard.map((h) => h.text).toList();
+    expect(said.where((t) => t.contains('Tường phía trước')), isNotEmpty);
+    expect(d.collisions, isEmpty);
   });
 }
 

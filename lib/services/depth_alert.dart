@@ -52,6 +52,13 @@ const turnOnText = 'Xoay tiếp.';
 /// Turned far enough one way with no way found: try the other side.
 const turnBackText = 'Xoay ngược lại.';
 
+/// Facing a wall: stop and turn, towards [turn] when LiDAR can tell.
+String wallTurnText(HPos? turn) => switch (turn) {
+  HPos.left => 'Dừng lại! Tường phía trước. Quay sang trái.',
+  HPos.right => 'Dừng lại! Tường phía trước. Quay sang phải.',
+  _ => 'Dừng lại! Tường phía trước. Xoay trái hoặc phải để tìm lối.',
+};
+
 /// No way on towards the goal on either side.
 const blockedText = 'Phía trước bị chặn. Dò gậy tìm lối khác.';
 

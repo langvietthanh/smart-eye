@@ -129,6 +129,28 @@ LidarObstacle obstacleOf(LidarReading r) {
 }
 
 void sideLaneTests() {
+  test('free width ahead: a 1 m aisle, and 50 cm between desks', () {
+    final a = LidarAnalysis();
+    final aisle = a.analyzeScan(
+      render(
+        boxes: [
+          const Box(-1.0, 0, 0.3, -0.5, 0.8, 3),
+          const Box(0.5, 0, 0.3, 1.0, 0.8, 3),
+        ],
+      ),
+    );
+    expect(aisle.aheadWidth, closeTo(1.0, 0.1));
+    final squeeze = LidarAnalysis().analyzeScan(
+      render(
+        boxes: [
+          const Box(-1.0, 0, 0.3, -0.25, 0.8, 3),
+          const Box(0.25, 0, 0.3, 1.0, 0.8, 3),
+        ],
+      ),
+    );
+    expect(squeeze.aheadWidth, closeTo(0.5, 0.1));
+  });
+
   test('a wall ahead is told apart from a chair or a person', () {
     final a = LidarAnalysis();
     a.analyze(render());

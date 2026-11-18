@@ -227,6 +227,16 @@ class SimDriver {
       _stepLeftToGo = stepWidth;
       _stepBack = _passingHeard;
       _passingHeard = false;
+    } else if (text.contains('Tường phía trước')) {
+      // Turn the way the app says; "Xoay trái hoặc phải" leaves it open.
+      if (text.contains('Quay sang phải')) {
+        _turnSign = 1;
+      } else if (text.contains('Quay sang trái')) {
+        _turnSign = -1;
+      } else if (act != Act.turn) {
+        _turnSign = -_turnSign;
+      }
+      act = Act.turn;
     } else if (text.startsWith('Xoay ngược')) {
       _turnSign = -_turnSign;
       act = Act.turn;
@@ -321,9 +331,12 @@ class SimDriver {
     }
   }
 
-  void _sayFindWay() {
+  void _sayFindWay({bool wall = false}) {
+    final scan = lastScan;
     final spoken = speech.sayNow(
-      findWayText,
+      wall && scan != null
+          ? wallTurnText(WalkState.turnHint(scan))
+          : findWayText,
       SpeechPriority.danger,
       subject: 'path:findway',
       onStart: _turns.reset,
@@ -421,7 +434,7 @@ class SimDriver {
         canBypass: true,
       )) {
         case DangerAction.findWay:
-          _sayFindWay();
+          _sayFindWay(wall: _wall);
           return;
         case DangerAction.stop:
           _sayStop();
