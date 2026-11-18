@@ -20,6 +20,7 @@ class LidarDepthFrame {
     this.trackingAvailable = true,
     this.thermalState = 0,
     this.pose,
+    this.sampleAgeMs = 0,
   });
 
   final int width;
@@ -46,6 +47,9 @@ class LidarDepthFrame {
 
   /// Where ARKit puts the phone in the room, or null when not sent.
   final LidarPose? pose;
+
+  /// Capture-to-native-dispatch delay; Dart processing adds its own delay.
+  final int sampleAgeMs;
 }
 
 /// The phone's place in the room from ARKit, on the floor plane: position
@@ -60,6 +64,11 @@ class LidarPose {
   });
 
   final double x, z, headX, headZ;
+
+  bool get isValid =>
+      x.isFinite && z.isFinite && headX.isFinite && headZ.isFinite &&
+      headX * headX + headZ * headZ >= 0.04 &&
+      headX * headX + headZ * headZ <= 1.01;
 }
 
 sealed class LidarReading {
@@ -81,12 +90,14 @@ class LidarObstacle extends LidarReading {
     this.wall = false,
     this.leftGap = 0,
     this.rightGap = 0,
+    this.leftGapCenter,
+    this.rightGapCenter,
   });
 
   /// Horizontal distance to the nearest substantial obstacle, metres.
   final double distance;
 
-  /// The 40 cm lanes beside the centre corridor, around this obstacle
+  /// Verified body-width gaps beside the centre corridor, around this obstacle
   /// (only set on the centre reading of [LidarAnalysis.analyzeScan]).
   final SideState left, right;
 
@@ -97,6 +108,9 @@ class LidarObstacle extends LidarReading {
   /// Centre reading only: width in metres of the widest walkable gap found
   /// on each side of the obstacle (0 when none).
   final double leftGap, rightGap;
+
+  /// Centre of a verified gap, positive left and negative right.
+  final double? leftGapCenter, rightGapCenter;
 
   /// Diagnostics only (centre reading): the obstacle's front
   /// [LidarAnalysis.frontDepth] of hits, sideways
@@ -124,6 +138,7 @@ class LidarScan {
     this.center,
     this.right, {
     this.cells = const [],
+    this.freeCells = const [],
     this.pose,
   });
 
@@ -138,6 +153,10 @@ class LidarScan {
   /// Occupied [LidarAnalysis.cellSize] cells around the user, flattened as
   /// forward, side, forward, side… (phone coordinates, side > 0 = left).
   final List<double> cells;
+
+  /// Cells with observed level floor and no occupied return in that cell.
+  /// Absence from [cells] alone is never evidence that a cell is free.
+  final List<double> freeCells;
 
   /// The frame's ARKit pose, to place [cells] in the room.
   final LidarPose? pose;
@@ -157,10 +176,8 @@ class LidarAnalysis {
   /// Half the corridor width: shoulders plus margin. A 0.8 m door fits.
   static const halfWidth = 0.35;
 
-  /// Only hits this close to the axis make a centre obstacle: something
-  /// reaching just into the outer 10 cm (a table edge) is passed by. Such
-  /// hits still block the lanes (see [analyzeScan]) and the side corridors.
-  static const coreHalfWidth = 0.25;
+  /// The full shoulder corridor participates in collision warnings.
+  static const coreHalfWidth = halfWidth;
 
   /// Depth of the obstacle's front face used to describe it ([wallReach]).
   static const frontDepth = 0.3;
@@ -180,8 +197,9 @@ class LidarAnalysis {
   /// about 20° of the walking direction.
   static const grazingStep = 0.25;
 
-  /// The way past an obstacle is checked from the user's feet to this far
-  /// beyond it (at least [laneMinDepth]), floor in [laneBin] stretches.
+  /// The far lane is checked from the obstacle to this far beyond it (at
+  /// least [laneMinDepth]), floor in [laneBin] stretches. [LidarScan.freeCells]
+  /// separately describes observed floor for checking the lateral approach.
   static const lanePastObstacle = 1.0;
   static const laneMinDepth = 2.0;
   static const laneBin = 0.5;
@@ -196,16 +214,15 @@ class LidarAnalysis {
   /// Width of one strip of the gap search.
   static const gapBin = 0.05;
 
-  /// Sampled points that make a strip occupied: low, since a wrong "free"
-  /// is worse than a missed one.
-  static const gapObstaclePoints = 3;
+  /// A confident thin return vetoes clearance even if it is too small for a
+  /// frontal warning. Match the occupied-cell veto used for lateral motion.
+  static const gapObstaclePoints = 1;
 
   /// Floor points every stretch of a strip needs before it counts as seen.
   static const gapFloorPoints = 2;
 
-  /// Narrowest gap a person squeezes through (shoulders); tune on the demo
-  /// walker.
-  static const gapMin = 0.45;
+  /// Shoulder width plus clearance; narrower runs cannot authorize motion.
+  static const gapMin = 2 * halfWidth;
 
   /// Points this close to the floor are floor, not obstacles.
   static const floorMargin = 0.15;
@@ -220,7 +237,7 @@ class LidarAnalysis {
   static const cellReach = 3.0;
   static const cellSideReach = 1.2;
   static const cellSize = 0.1;
-  static const cellMinPoints = 2;
+  static const cellMinPoints = 1;
 
   /// Full-resolution points needed before something counts as an obstacle.
   static const minPoints = 150;
@@ -252,6 +269,12 @@ class LidarAnalysis {
     if (!f.trackingAvailable ||
         f.width < 8 ||
         f.height < 8 ||
+        !f.fx.isFinite || !f.fy.isFinite || f.fx <= 0 || f.fy <= 0 ||
+        !f.cx.isFinite || !f.cy.isFinite ||
+        f.cx < 0 || f.cx >= f.width || f.cy < 0 || f.cy >= f.height ||
+        !f.upX.isFinite || !f.upY.isFinite || !f.upZ.isFinite ||
+        f.sampleAgeMs < 0 || f.sampleAgeMs > 500 ||
+        (f.pose != null && !f.pose!.isValid) ||
         f.depth.length < n ||
         f.confidence.length < n) {
       return LidarScan.unknown;
@@ -284,7 +307,8 @@ class LidarAnalysis {
         sampled++;
         final i = v * f.width + u;
         final d = f.depth[i];
-        if (f.confidence[i] == 0 || !(d > 0) || !d.isFinite) continue;
+        if (f.confidence[i] < 1 || f.confidence[i] > 2 ||
+            !(d > 0) || !d.isFinite) continue;
         final px = (u - f.cx) / f.fx * d;
         final py = yRay * d;
         final pz = -d;
@@ -296,7 +320,7 @@ class LidarAnalysis {
     }
     if (count < sampled * minValidFraction) return LidarScan.unknown;
 
-    _updateFloor(heights, count);
+    final observedFloor = _updateFloor(heights, count);
     final floor = _floor ?? defaultFloor;
     final low = floor + floorMargin;
     final left = <double>[], centre = <double>[], right = <double>[];
@@ -339,7 +363,9 @@ class LidarAnalysis {
       // obstacle and the desks is what the user can squeeze through.
       final d = center.distance;
       final end = max(d + lanePastObstacle, laneMinDepth);
-      final stretches = ((end - d) / laneBin).ceil();
+      // Decimal distances such as 1.2 can otherwise create an extra, empty
+      // stretch from floating-point error (2.2 - 1.2 > 1.0 by a few ulps).
+      final stretches = ((end - d) / laneBin - 1e-9).ceil();
       final strips = (2 * gapOuter / gapBin).round();
       final hits = List<int>.filled(strips, 0);
       final floorSeen = List<int>.filled(strips * stretches, 0);
@@ -352,9 +378,13 @@ class LidarAnalysis {
           continue;
         }
         final height = heights[i];
-        if (height >= low && height <= headroom) {
+        if ((height >= (observedFloor ?? floor) + laneFloorBand &&
+                height <= headroom) ||
+            (observedFloor != null &&
+                height <= observedFloor - laneFloorBand)) {
           hits[stripOf(s)]++;
-        } else if (forward >= d && (height - floor).abs() <= laneFloorBand) {
+        } else if (observedFloor != null && forward >= d &&
+            (height - observedFloor).abs() < laneFloorBand) {
           final k = min(((forward - d) / laneBin).floor(), stretches - 1);
           floorSeen[stripOf(s) * stretches + k]++;
         }
@@ -380,25 +410,50 @@ class LidarAnalysis {
         return inView(centreOf(j));
       }
 
+      // Measure complete runs before assigning a side. A body-width gap may
+      // cross the centreline beside an off-centre obstacle; splitting it at
+      // zero would discard usable room on the other side of the axis.
+      final runs = <({double width, double center})>[];
+      var start = 0;
+      for (var j = 0; j <= strips; j++) {
+        if (j < strips && free(j)) continue;
+        if (j > start) {
+          final width = (j - start) * gapBin;
+          final lowEdge = -gapOuter + start * gapBin;
+          final highEdge = -gapOuter + j * gapBin;
+          // Choose the closest body centre to the original walking line,
+          // while leaving half a shoulder corridor on either side.
+          final lowCenter = lowEdge + halfWidth;
+          final highCenter = highEdge - halfWidth;
+          final center = width >= gapMin - 1e-9 && lowCenter <= highCenter
+              ? 0.0.clamp(lowCenter, highCenter).toDouble()
+              : (lowEdge + highEdge) / 2;
+          runs.add((width: width, center: center));
+        }
+        start = j + 1;
+      }
+
       // Positive `side` points left (see the corridor split above).
-      ({double width, bool blocking}) gapOf(bool left) {
-        var run = 0, best = 0;
+      ({double width, bool blocking, double? center}) gapOf(bool left) {
+        var best = 0.0;
+        double? bestCenter;
         var blocking = false;
+        for (final run in runs) {
+          if (left ? run.center <= 0 : run.center >= 0) continue;
+          if (run.width > best) {
+            best = run.width;
+            bestCenter = run.center;
+          }
+        }
         for (var j = 0; j < strips; j++) {
           final c = centreOf(j);
           if (left ? c <= 0 : c >= 0) continue;
-          if (free(j)) {
-            run++;
-            best = max(best, run);
-          } else {
-            run = 0;
-          }
           if (occupied(j) && c.abs() > coreHalfWidth) blocking = true;
         }
-        return (width: best * gapBin, blocking: blocking);
+        return (width: best, blocking: blocking, center: bestCenter);
       }
 
-      SideState gapSide(({double width, bool blocking}) g) {
+      SideState gapSide(({double width, bool blocking, double? center}) g) {
         if (g.width >= gapMin - 1e-9) return SideState.clear;
         return g.blocking ? SideState.blocked : SideState.unknown;
       }
@@ -421,6 +476,8 @@ class LidarAnalysis {
         right: rightLane,
         leftGap: leftGap.width,
         rightGap: rightGap.width,
+        leftGapCenter: leftLane == SideState.clear ? leftGap.center : null,
+        rightGapCenter: rightLane == SideState.clear ? rightGap.center : null,
         // Heights here are still above the floor; [headroom] is above the
         // phone, so the top check is relative to the phone again.
         wall:
@@ -442,13 +499,13 @@ class LidarAnalysis {
     // Obstacle cells around the user, for the bypass memory (room coords
     // are worked out by WalkState from the frame's pose).
     final cellHits = <int, int>{};
+    final floorHits = <int, int>{};
     const sideCells = 1000;
     for (var i = 0; i < count; i++) {
       final forward = forwards[i], side = sides[i], height = heights[i];
       if (forward < minForward ||
           forward > cellReach ||
           side.abs() > cellSideReach ||
-          height < low ||
           height > headroom) {
         continue;
       }
@@ -456,7 +513,15 @@ class LidarAnalysis {
           (forward / cellSize).floor() * sideCells +
           (side / cellSize).floor() +
           sideCells ~/ 2;
-      cellHits[key] = (cellHits[key] ?? 0) + 1;
+      // A single confident thin return vetoes an otherwise observed floor.
+      // No current floor estimate: keep obstacles, never manufacture free cells.
+      if (height >= (observedFloor ?? floor) + laneFloorBand ||
+          (observedFloor != null && height <= observedFloor - laneFloorBand)) {
+        cellHits[key] = (cellHits[key] ?? 0) + 1;
+      } else if (observedFloor != null &&
+          (height - observedFloor).abs() < laneFloorBand) {
+        floorHits[key] = (floorHits[key] ?? 0) + 1;
+      }
     }
     final cells = <double>[];
     cellHits.forEach((key, hits) {
@@ -466,11 +531,18 @@ class LidarAnalysis {
         ..add((fi + 0.5) * cellSize)
         ..add((si + 0.5) * cellSize);
     });
+    final freeCells = <double>[];
+    floorHits.forEach((key, hits) {
+      if (hits < gapFloorPoints || cellHits.containsKey(key)) return;
+      final fi = key ~/ sideCells, si = key % sideCells - sideCells ~/ 2;
+      freeCells..add((fi + 0.5) * cellSize)..add((si + 0.5) * cellSize);
+    });
     return LidarScan(
       _nearest(left, needed),
       center,
       _nearest(right, needed),
       cells: cells,
+      freeCells: freeCells,
       pose: f.pose,
     );
   }
@@ -523,7 +595,9 @@ class LidarAnalysis {
     return LidarObstacle(hits[needed - 1]);
   }
 
-  void _updateFloor(Float32List heights, int count) {
+  /// Returns only this frame's measured floor. The smoothed value is retained
+  /// for obstacle warnings, but an old estimate cannot certify new free cells.
+  double? _updateFloor(Float32List heights, int count) {
     final bins = ((floorHighest - floorLowest) / floorBin).round();
     final counts = List<int>.filled(bins, 0);
     final sums = List<double>.filled(bins, 0);
@@ -545,9 +619,10 @@ class LidarAnalysis {
       if (c > 0 && c >= needed) {
         final floor = s / c;
         _floor = _floor == null ? floor : _floor! * 0.8 + floor * 0.2;
-        return;
+        return floor;
       }
     }
+    return null;
   }
 }
 

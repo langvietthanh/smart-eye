@@ -522,17 +522,46 @@ void main() {
       SpeechPriority.danger,
       subject: 'path:trapped',
     );
+    manager.dropSubject('avoidance');
+    expect(manager.showing.value?.text, 'Đứng lại!');
+    expect(tts.stopCount, 0);
+
+    tts.stopGate = Completer<void>();
     manager.dropSubject('path:trapped');
+    expect(manager.showing.value, isNull);
     manager.say(
       'Đường đi thông thoáng.',
       SpeechPriority.caution,
       subject: 'path:cleared',
     );
+    tts.stopGate!.complete();
     await tester.pump();
 
     expect(await trapped, isFalse);
     expect(tts.stopCount, 1);
     expect(tts.spoken, ['Đứng lại!', 'Đường đi thông thoáng.']);
+    await manager.stopAll();
+  });
+
+  testWidgets('dropSubject clears only the matching completed banner', (
+    tester,
+  ) async {
+    final tts = FakeTts();
+    final manager = managerFor(tester, tts);
+    manager.say('Lệch trái', SpeechPriority.guidance, subject: 'avoidance');
+    tts.finish();
+    await tester.pump();
+    manager.dropSubject('track:1');
+    expect(manager.showing.value?.text, 'Lệch trái');
+    manager.dropSubject('avoidance');
+    expect(manager.showing.value, isNull);
+    expect(tts.stopCount, 0);
+
+    manager.say('Dừng lại', SpeechPriority.danger, subject: 'track:1');
+    manager.dropSubject('avoidance');
+    await tester.pump(const Duration(seconds: 3));
+    expect(manager.showing.value?.text, 'Dừng lại');
+    expect(tts.stopCount, 0);
     await manager.stopAll();
   });
 
@@ -643,6 +672,185 @@ void main() {
     expect(tts.stopCount, 1);
     expect(tts.spoken, ['Mô tả', 'Đi thẳng']);
     expect(manager.showing.value?.priority, SpeechPriority.guidance);
+    await manager.stopAll();
+  });
+
+  testWidgets('invalid guidance is rejected without interrupting speech', (
+    tester,
+  ) async {
+    final tts = FakeTts();
+    final manager = managerFor(tester, tts);
+    manager.say('Mô tả', SpeechPriority.description);
+    var started = false;
+    expect(
+      manager.say(
+        'Lệch trái',
+        SpeechPriority.guidance,
+        subject: 'avoidance',
+        isStillValid: () => false,
+        onStart: () => started = true,
+      ),
+      isFalse,
+    );
+    expect(
+      await manager.sayAndWait(
+        'Lệch phải',
+        SpeechPriority.guidance,
+        subject: 'avoidance',
+        isStillValid: () => false,
+      ),
+      isFalse,
+    );
+    expect(tts.spoken, ['Mô tả']);
+    expect(tts.stopCount, 0);
+    expect(started, isFalse);
+    expect(manager.cooldownEntryCount, 0);
+    await manager.stopAll();
+  });
+
+  testWidgets('validity is checked again after a delayed native stop', (
+    tester,
+  ) async {
+    final tts = FakeTts();
+    final manager = managerFor(tester, tts);
+    manager.say('Mô tả', SpeechPriority.description);
+    tts.stopGate = Completer<void>();
+    var valid = true;
+    var started = false;
+    expect(
+      manager.say(
+        'Dừng lại và quét trái',
+        SpeechPriority.caution,
+        subject: 'avoidance',
+        isStillValid: () => valid,
+        onStart: () => started = true,
+      ),
+      isTrue,
+    );
+    valid = false;
+    tts.stopGate!.complete();
+    await tester.pump();
+
+    expect(tts.spoken, ['Mô tả']);
+    expect(started, isFalse);
+    expect(manager.isBusy, isFalse);
+    expect(manager.cooldownEntryCount, 0);
+    expect(manager.canSay(SpeechPriority.caution, subject: 'avoidance'), isTrue);
+    await manager.stopAll();
+  });
+
+  testWidgets('invalid guidance waiting behind danger is dropped and resolved', (
+    tester,
+  ) async {
+    final tts = FakeTts();
+    final manager = managerFor(tester, tts);
+    manager.say('Dừng lại', SpeechPriority.danger);
+    var valid = true;
+    final queued = manager.sayAndWait(
+      'Lệch trái',
+      SpeechPriority.guidance,
+      subject: 'avoidance',
+      isStillValid: () => valid,
+    );
+    manager.say('Hãy đứng yên', SpeechPriority.guidance);
+    valid = false;
+    tts.finish();
+    await tester.pump();
+
+    expect(await queued, isFalse);
+    expect(tts.spoken, ['Dừng lại', 'Hãy đứng yên']);
+    expect(manager.cooldownEntryCount, 0);
+    await manager.stopAll();
+  });
+
+  testWidgets('validity check failures reject speech at enqueue and dispatch', (
+    tester,
+  ) async {
+    final tts = FakeTts();
+    final manager = managerFor(tester, tts);
+    bool missingSensor() => throw StateError('Sensor unavailable');
+    expect(
+      manager.say(
+        'Lệch trái',
+        SpeechPriority.guidance,
+        subject: 'avoidance',
+        isStillValid: missingSensor,
+      ),
+      isFalse,
+    );
+    expect(tts.spoken, isEmpty);
+
+    manager.say('Dừng lại', SpeechPriority.danger);
+    var sensorAvailable = true;
+    final queued = manager.sayAndWait(
+      'Lệch phải',
+      SpeechPriority.guidance,
+      subject: 'avoidance',
+      isStillValid: () => sensorAvailable ? true : missingSensor(),
+    );
+    sensorAvailable = false;
+    tts.finish();
+    await tester.pump();
+    expect(await queued, isFalse);
+    expect(tts.spoken, ['Dừng lại']);
+    expect(manager.cooldownEntryCount, 0);
+    await manager.stopAll();
+  });
+
+  testWidgets('sayNow rejects invalid replacement before cancelling speech', (
+    tester,
+  ) async {
+    final tts = FakeTts();
+    final manager = managerFor(tester, tts);
+    manager.say('Đứng yên', SpeechPriority.guidance, subject: 'avoidance');
+    expect(
+      manager.sayNow(
+        'Lệch trái',
+        SpeechPriority.guidance,
+        subject: 'avoidance',
+        isStillValid: () => false,
+      ),
+      isFalse,
+    );
+    expect(tts.spoken, ['Đứng yên']);
+    expect(manager.showing.value?.text, 'Đứng yên');
+    expect(tts.stopCount, 0);
+    await manager.stopAll();
+  });
+
+  testWidgets('sayNow rechecks replacement validity after stopping old direction', (
+    tester,
+  ) async {
+    final tts = FakeTts();
+    final manager = managerFor(tester, tts);
+    final old = manager.sayAndWait(
+      'Lệch trái',
+      SpeechPriority.guidance,
+      subject: 'avoidance',
+    );
+    tts.stopGate = Completer<void>();
+    var valid = true;
+    var started = false;
+    expect(
+      manager.sayNow(
+        'Lệch phải',
+        SpeechPriority.guidance,
+        subject: 'avoidance',
+        isStillValid: () => valid,
+        onStart: () => started = true,
+      ),
+      isTrue,
+    );
+    expect(manager.showing.value, isNull);
+    valid = false;
+    tts.stopGate!.complete();
+    await tester.pump();
+
+    expect(await old, isFalse);
+    expect(tts.spoken, ['Lệch trái']);
+    expect(started, isFalse);
+    expect(manager.showing.value, isNull);
+    expect(manager.cooldownEntryCount, 0);
     await manager.stopAll();
   });
 

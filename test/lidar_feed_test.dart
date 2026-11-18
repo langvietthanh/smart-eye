@@ -32,6 +32,7 @@ Map<String, Object> depthEvent(Uint8List depthBytes) => {
   'cy': 0.5,
   'up': [0.0, 1.0, 0.0],
   'tracking': true,
+  'sampleAgeMs': 0,
 };
 
 /// Futures from mocked channels only complete while the fake clock pumps.
@@ -71,11 +72,45 @@ void main() {
     expect(frame.upY, 1);
     expect(frame.fx, 3);
     expect(frame.trackingAvailable, isTrue);
+    expect(frame.sampleAgeMs, 0);
     expect(
       LidarFeed.depthFrame({
         ...depthEvent(unaligned),
         'up': [0, 1],
       }),
+      isNull,
+    );
+  });
+
+  test('depth requires an explicit capture age within the freshness budget', () {
+    final event = depthEvent(Float32List(8).buffer.asUint8List());
+    expect(LidarFeed.depthFrame({...event, 'sampleAgeMs': 237})!.sampleAgeMs, 237);
+    expect(LidarFeed.depthFrame({...event, 'sampleAgeMs': 500}), isNotNull);
+    for (final age in [-1, 501, 12.5, '0']) {
+      expect(LidarFeed.depthFrame({...event, 'sampleAgeMs': age}), isNull);
+    }
+    event.remove('sampleAgeMs');
+    expect(LidarFeed.depthFrame(event), isNull);
+  });
+
+  test('missing or limited tracking never authorizes room coordinates', () {
+    final event = depthEvent(Float32List(8).buffer.asUint8List());
+    for (final tracking in [false, 'limited', 1]) {
+      expect(
+        LidarFeed.depthFrame({...event, 'tracking': tracking})!.trackingAvailable,
+        isFalse,
+      );
+    }
+    event.remove('tracking');
+    expect(LidarFeed.depthFrame(event)!.trackingAvailable, isFalse);
+  });
+
+  test('a missing confidence map is never synthesized by the feed', () {
+    final event = depthEvent(Float32List(8).buffer.asUint8List());
+    event.remove('confidence');
+    expect(LidarFeed.depthFrame(event), isNull);
+    expect(
+      LidarFeed.depthFrame({...event, 'confidence': Uint8List(7)}),
       isNull,
     );
   });

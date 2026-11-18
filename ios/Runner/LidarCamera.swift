@@ -166,9 +166,14 @@ final class LidarCameraPlugin: NSObject, FlutterPlugin, FlutterStreamHandler,
     return nil
   }
 
-  private func send(_ event: [String: Any]) {
+  private func send(_ event: [String: Any], capturedAt: TimeInterval? = nil) {
     DispatchQueue.main.async {
       var event = event
+      if let capturedAt = capturedAt {
+        // ARFrame timestamps use the system uptime clock. Include copying
+        // and main-queue delay before Dart begins its own freshness budget.
+        event["sampleAgeMs"] = max(0, Int((ProcessInfo.processInfo.systemUptime - capturedAt) * 1000))
+      }
       if event["type"] as? String == "frame" {
         event["orientation"] = self.orientation
         event["thermal"] = ProcessInfo.processInfo.thermalState.rawValue
@@ -315,7 +320,8 @@ final class LidarCameraPlugin: NSObject, FlutterPlugin, FlutterStreamHandler,
     let width = CVPixelBufferGetWidth(depthMap)
     let height = CVPixelBufferGetHeight(depthMap)
     let depth = copyRows(depthMap, bytesPerPixel: 4, width: width, height: height)
-    var confidence = Data(repeating: 2, count: width * height)
+    // Missing confidence never grants permission to move.
+    var confidence = Data(repeating: 0, count: width * height)
     if let confidenceMap = scene.confidenceMap,
       CVPixelBufferGetWidth(confidenceMap) == width,
       CVPixelBufferGetHeight(confidenceMap) == height
@@ -330,8 +336,12 @@ final class LidarCameraPlugin: NSObject, FlutterPlugin, FlutterStreamHandler,
     // World up (0,1,0) in camera coordinates = second row of the rotation.
     let t = camera.transform
     let up = [Double(t.columns.0.y), Double(t.columns.1.y), Double(t.columns.2.y)]
-    var tracking = true
-    if case .notAvailable = camera.trackingState { tracking = false }
+    let tracking: Bool
+    if case .normal = camera.trackingState {
+      tracking = true
+    } else {
+      tracking = false
+    }
 
     send([
       "type": "depth",
@@ -350,7 +360,7 @@ final class LidarCameraPlugin: NSObject, FlutterPlugin, FlutterStreamHandler,
       "head": [Double(-t.columns.2.x), Double(-t.columns.2.z)],
       "tracking": tracking,
       "thermal": thermal.rawValue,
-    ])
+    ], capturedAt: frame.timestamp)
   }
 
   private func copyRows(_ buffer: CVPixelBuffer, bytesPerPixel: Int, width: Int, height: Int)

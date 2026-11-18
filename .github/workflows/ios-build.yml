@@ -7,7 +7,7 @@ name: iOS build (IPA chưa ký)
 on:
   workflow_dispatch:
   push:
-    branches: [main, 'feature/**', 'feat/**']
+    branches: [main, 'feature/**', 'feat/**', 'codex/verified-obstacle-bypass']
     paths-ignore: ['**.md', 'tool/**', 'training/**']
 
 # Push mới lên cùng nhánh → huỷ lần build cũ đang chờ/chạy, tránh dồn hàng đợi máy Mac
@@ -24,6 +24,8 @@ jobs:
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@v5
+        with:
+          lfs: true
 
       - uses: subosito/flutter-action@v2
         with:
@@ -42,7 +44,8 @@ jobs:
             ~/Library/Caches/CocoaPods
           key: pods-${{ runner.os }}-${{ hashFiles('pubspec.lock', 'ios/Podfile') }}
 
-      # Unit test chạy trên máy dev trước khi push; CI chỉ build để ra IPA nhanh hơn.
+      - name: Kiểm tra trước khi đóng gói
+        run: flutter test
 
       - name: Disable code signing requirement in Xcode
         run: |

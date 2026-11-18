@@ -157,296 +157,254 @@ void main() {
     expect(walk.phase, WalkPhase.straight);
   });
 
-  group('bypass', () {
-    LidarScan obstacle({
-      double leftGap = 0.1,
-      double rightGap = 0.1,
-      LidarReading left = const LidarClear(),
-      LidarReading right = const LidarClear(),
-    }) => LidarScan(
-      left,
-      LidarObstacle(1.0, leftGap: leftGap, rightGap: rightGap),
-      right,
-    );
+  group('verified bypass', () {
     DateTime at(int ms) => t0.add(Duration(milliseconds: ms));
-    void collect() =>
-        walk.onDanger(wall: false, sideOpen: false, canBypass: true);
-    WalkCue? feed(int n, LidarScan scan, {int from = 0}) {
-      WalkCue? last;
-      for (var i = 0; i < n; i++) {
-        last = walk.onScan(at(from + i * 100), scan);
+    LidarPose pose(double x, double z) => LidarPose(x: x, z: z, headX: 1, headZ: 0);
+
+    // Synthetic observed floor in room coordinates. Include the area already
+    // seen on approach beneath/behind the user, then transform into this scan.
+    List<double> floor(LidarPose p, {bool returnBlocked = false}) {
+      final cells = <double>[];
+      for (var a = -5; a <= 30; a++) {
+        for (var s = -14; s <= 14; s++) {
+          final x = a / 10 + 0.05, across = s / 10 + 0.05;
+          if (x >= 0.85 && x <= 1.45 && across.abs() <= 0.35) continue;
+          if (returnBlocked && x > 1.4 && across.abs() < 0.4) continue;
+          cells.addAll([x - p.x, across + p.z]);
+        }
       }
-      return last;
+      return cells;
     }
 
-    void stepRightThenPass() {
+    LidarScan scan({
+      double x = 0,
+      double z = 0,
+      LidarReading center = const LidarObstacle(
+        0.9, right: SideState.clear, rightGap: 0.75, rightGapCenter: -0.75,
+      ),
+      bool observedFloor = true,
+      bool returnBlocked = false,
+      List<double> occupied = const [],
+      bool tracking = true,
+      bool cameraViewOnly = false,
+    }) {
+      final p = pose(x, z);
+      final visibleFloor = <double>[];
+      if (observedFloor) {
+        final observed = floor(p, returnBlocked: returnBlocked);
+        for (var i = 0; i + 1 < observed.length; i += 2) {
+          if (cameraViewOnly && observed[i] < LidarAnalysis.minForward) continue;
+          visibleFloor.addAll([observed[i], observed[i + 1]]);
+        }
+      }
+      return LidarScan(
+        const LidarUnknown(), center, const LidarUnknown(),
+        pose: tracking ? p : null,
+        freeCells: visibleFloor,
+        cells: occupied,
+      );
+    }
+
+    void collect() => walk.onDanger(wall: false, sideOpen: false, canBypass: true);
+    WalkCue? feed(LidarScan s, {int from = 0, int count = 5}) {
+      WalkCue? cue;
+      for (var i = 0; i < count; i++) {
+        cue = walk.onScan(at(from + i * 100), s);
+      }
+      return cue;
+    }
+    void passing({bool left = false}) {
       collect();
-      feed(5, obstacle(rightGap: 0.3));
-      walk.onScan(
-        at(600),
-        const LidarScan(LidarClear(), LidarClear(), LidarClear()),
-      );
-      walk.onScan(
-        at(700),
-        const LidarScan(LidarClear(), LidarClear(), LidarClear()),
-      );
+      expect(feed(scan(center: left
+          ? const LidarObstacle(0.9, left: SideState.clear, leftGap: 0.75, leftGapCenter: 0.75)
+          : const LidarObstacle(0.9, right: SideState.clear, rightGap: 0.75, rightGapCenter: -0.75))),
+          left ? WalkCue.stepLeft : WalkCue.stepRight);
+      final z = left ? -0.75 : 0.75;
+      expect(walk.onScan(at(500), scan(z: z, center: const LidarClear())), isNull);
+      expect(walk.onScan(at(600), scan(z: z, center: const LidarClear())), WalkCue.goStraight);
       expect(walk.phase, WalkPhase.passing);
     }
 
-    test('a plain obstacle with LiDAR stops and collects', () {
-      expect(
-        walk.onDanger(wall: false, sideOpen: false, canBypass: true),
-        DangerAction.stop,
-      );
-      expect(walk.phase, WalkPhase.collect);
-    });
-
-    test('a wall still finds a way', () {
-      expect(
-        walk.onDanger(wall: true, sideOpen: true, canBypass: true),
-        DangerAction.findWay,
-      );
-    });
-
-    test('four of five frames with a right gap step right', () {
+    test('a 25cm gap never authorizes a step', () {
       collect();
-      expect(feed(1, obstacle(rightGap: 0.1)), isNull);
-      expect(feed(3, obstacle(rightGap: 0.3), from: 100), isNull);
-      expect(walk.onScan(at(400), obstacle(rightGap: 0.3)), WalkCue.stepRight);
+      expect(feed(scan(center: const LidarObstacle(0.9,
+          right: SideState.clear, rightGap: 0.25, rightGapCenter: -0.5))), WalkCue.findWay);
+    });
+
+    test('gap without verified side state is not enough', () {
+      collect();
+      expect(feed(scan(center: const LidarObstacle(0.9,
+          rightGap: 0.8, rightGapCenter: -0.75))), WalkCue.findWay);
+    });
+
+    test('wide gap without observed lateral floor cannot authorize motion', () {
+      collect();
+      expect(feed(scan(observedFloor: false)), WalkCue.findWay);
+    });
+
+    test('four of five measured body-width gaps authorize right', () {
+      collect();
+      expect(walk.onScan(at(0), scan(center: const LidarObstacle(0.9))), isNull);
+      expect(feed(scan(), from: 100, count: 4), WalkCue.stepRight);
       expect(walk.phase, WalkPhase.sidestep);
       expect(walk.stepSide, HPos.right);
     });
 
-    test('both sides prefer right', () {
+    test('scans before the stop starts cannot vote for a side', () {
       collect();
-      expect(feed(5, obstacle(leftGap: 0.3, rightGap: 0.3)), WalkCue.stepRight);
-    });
-
-    test('a left gap steps left', () {
-      collect();
-      expect(feed(5, obstacle(leftGap: 0.3)), WalkCue.stepLeft);
-      expect(walk.stepSide, HPos.left);
-    });
-
-    test('no gap finds a way', () {
-      collect();
-      expect(feed(5, obstacle()), WalkCue.findWay);
-      expect(walk.phase, WalkPhase.findWay);
-    });
-
-    test('unknown centre frames do not count', () {
-      collect();
-      feed(4, obstacle(rightGap: 0.3));
-      expect(feed(3, LidarScan.unknown, from: 400), isNull);
+      for (var i = 0; i < 5; i++) {
+        expect(walk.onScan(at(i * 100), scan(), stopped: false), isNull);
+      }
       expect(walk.phase, WalkPhase.collect);
-      expect(walk.onScan(at(800), obstacle(rightGap: 0.3)), WalkCue.stepRight);
+      expect(feed(scan(), from: 500), WalkCue.stepRight);
     });
 
-    test('the obstacle leaving while collecting goes straight', () {
+    test('latest gap must still be open after four earlier votes', () {
       collect();
-      feed(2, obstacle(rightGap: 0.3));
-      expect(
-        walk.onScan(
-          at(300),
-          const LidarScan(LidarClear(), LidarClear(), LidarClear()),
-        ),
-        WalkCue.goStraight,
-      );
-      expect(walk.phase, WalkPhase.straight);
+      feed(scan(), count: 4);
+      expect(walk.onScan(at(400), scan(center: const LidarObstacle(0.9,
+          right: SideState.blocked))), WalkCue.findWay);
     });
 
-    test('centre clear two frames ends the sidestep', () {
+    test('recent approach observations cover the near-camera blind area', () {
+      walk.onScan(at(0), scan(x: -0.6, cameraViewOnly: true,
+          center: const LidarObstacle(1.5, right: SideState.clear,
+              rightGap: 0.75, rightGapCenter: -0.75)));
       collect();
-      feed(5, obstacle(rightGap: 0.3));
-      const clear = LidarScan(LidarClear(), LidarClear(), LidarClear());
-      expect(walk.onScan(at(600), clear), isNull);
-      expect(walk.onScan(at(700), clear), WalkCue.goStraight);
-      expect(walk.phase, WalkPhase.passing);
+      expect(feed(scan(cameraViewOnly: true,
+          center: const LidarObstacle(0.9)), from: 100), WalkCue.stepRight);
     });
 
-    test('an obstacle still close ahead keeps the sidestep going', () {
+    test('expired floor behind the camera stops a slow sidestep', () {
+      walk.onScan(at(0), scan(x: -0.6, cameraViewOnly: true,
+          center: const LidarObstacle(1.5, right: SideState.clear,
+              rightGap: 0.75, rightGapCenter: -0.75)));
       collect();
-      feed(5, obstacle(rightGap: 0.3));
-      expect(feed(3, obstacle(rightGap: 0.3), from: 600), isNull);
+      feed(scan(cameraViewOnly: true, center: const LidarObstacle(0.9)), from: 100);
+      feed(scan(z: 0.4, cameraViewOnly: true,
+          center: const LidarClear()), from: 600, count: 25);
+      expect(walk.onScan(at(3100), scan(z: 0.4, cameraViewOnly: true,
+          center: const LidarClear())), WalkCue.findWay);
+    });
+
+    test('thin obstacle in lateral sweep vetoes an otherwise wide gap', () {
+      collect();
+      expect(feed(scan(occupied: [0.05, -0.45])), WalkCue.findWay);
+    });
+
+    test('no valid pose stops, instead of inferring room from disappearance', () {
+      collect();
+      expect(walk.onScan(at(0), scan(tracking: false)), WalkCue.findWay);
+    });
+
+    test('duplicate timestamps do not count towards five scans', () {
+      collect();
+      for (var i = 0; i < 10; i++) {
+        expect(walk.onScan(at(0), scan()), isNull);
+      }
+      expect(walk.phase, WalkPhase.collect);
+      expect(feed(scan(), from: 100, count: 4), WalkCue.stepRight);
+    });
+
+    test('clear center alone cannot finish a sidestep without displacement', () {
+      collect();
+      feed(scan());
+      feed(scan(center: const LidarClear()), from: 500, count: 2);
       expect(walk.phase, WalkPhase.sidestep);
     });
 
-    test('old side gone for a second steps back', () {
-      stepRightThenPass();
-      const seen = LidarScan(LidarObstacle(0.8), LidarClear(), LidarClear());
-      const gone = LidarScan(LidarClear(), LidarClear(), LidarClear());
-      expect(walk.onScan(at(1000), seen), isNull);
-      expect(walk.onScan(at(1100), gone), isNull);
-      expect(walk.onScan(at(1600), gone), isNull);
-      expect(walk.onScan(at(2100), gone), WalkCue.stepLeft);
+    test('complete right bypass confirms return before final forward cue', () {
+      passing();
+      // Increment position with frequent scans, as a walking user would.
+      expect(walk.onScan(at(700), scan(x: 0.6, z: 0.75, center: const LidarClear())), isNull);
+      expect(walk.onScan(at(800), scan(x: 1.2, z: 0.75, center: const LidarClear())), isNull);
+      expect(walk.onScan(at(900), scan(x: 1.8, z: 0.75, center: const LidarClear())), WalkCue.stepLeft);
+      expect(walk.phase, WalkPhase.returning);
+      expect(walk.onScan(at(1000), scan(x: 1.8, z: 0.3, center: const LidarClear())), isNull);
+      expect(walk.onScan(at(1100), scan(x: 1.8, z: 0.05, center: const LidarClear())), isNull);
+      expect(walk.onScan(at(1200), scan(x: 1.8, z: 0.05, center: const LidarClear())), WalkCue.goStraight);
       expect(walk.phase, WalkPhase.straight);
-      expect(walk.stepSide, isNull);
     });
 
-    test('old side seen again says go straight and restarts the second', () {
-      stepRightThenPass();
-      const seen = LidarScan(LidarObstacle(0.8), LidarClear(), LidarClear());
-      const gone = LidarScan(LidarClear(), LidarClear(), LidarClear());
-      walk.onScan(at(1000), gone);
-      expect(walk.onScan(at(1500), seen), WalkCue.goStraight);
-      expect(walk.onScan(at(1600), gone), isNull);
-      expect(walk.onScan(at(2500), gone), isNull);
-      expect(walk.onScan(at(2600), gone), WalkCue.stepLeft);
+    test('left bypass returns to the right', () {
+      passing(left: true);
+      walk.onScan(at(700), scan(x: 0.6, z: -0.75, center: const LidarClear()));
+      walk.onScan(at(800), scan(x: 1.2, z: -0.75, center: const LidarClear()));
+      expect(walk.onScan(at(900), scan(x: 1.8, z: -0.75, center: const LidarClear())), WalkCue.stepRight);
+      expect(walk.phase, WalkPhase.returning);
     });
 
-    group('with an ARKit pose', () {
-      // World heading +x; the user's right is world +z (left = up × forward).
-      LidarPose pose(double x, double z) =>
-          LidarPose(x: x, z: z, headX: 1, headZ: 0);
-      // Bag in the room: x 1.0–1.4 ahead, z -0.25–0.25 across.
-      const frontCells = [1.0, -0.2, 1.0, -0.1, 1.0, 0.0, 1.0, 0.1, 1.0, 0.2];
-      LidarScan scan(
-        LidarReading centre,
-        LidarPose p, [
-        List<double> c = const [],
-      ]) => LidarScan(
-        const LidarClear(),
-        centre,
-        const LidarClear(),
-        cells: c,
-        pose: p,
-      );
-
-      void stepRightWithPose() {
-        collect();
-        for (var i = 0; i < 5; i++) {
-          walk.onScan(
-            at(i * 100),
-            scan(
-              const LidarObstacle(1.0, rightGap: 0.3),
-              pose(0, 0),
-              frontCells,
-            ),
-          );
-        }
-        expect(walk.phase, WalkPhase.sidestep);
-        walk.onScan(at(600), scan(const LidarClear(), pose(0, 0.55)));
-        walk.onScan(at(700), scan(const LidarClear(), pose(0, 0.55)));
-        expect(walk.phase, WalkPhase.passing);
-      }
-
-      test('steps back only once past the far edge seen on the side face', () {
-        stepRightWithPose();
-        // From z 0.55 the bag's side face (z 0.25) is 0.3 m to the left.
-        const side = [0.4, 0.3, 0.5, 0.3, 0.6, 0.3, 0.7, 0.3, 0.8, 0.3];
-        expect(
-          walk.onScan(
-            at(1000),
-            scan(const LidarClear(), pose(0.6, 0.55), side),
-          ),
-          isNull,
-        );
-        expect(
-          walk.onScan(at(1500), scan(const LidarClear(), pose(1.0, 0.55))),
-          isNull,
-        );
-        // The old rule (side gone for a second) would step back here, beside the bag.
-        expect(
-          walk.onScan(at(2000), scan(const LidarClear(), pose(1.5, 0.55))),
-          isNull,
-        );
-        expect(
-          walk.onScan(at(2500), scan(const LidarClear(), pose(1.69, 0.55))),
-          isNull,
-        );
-        expect(
-          walk.onScan(at(3000), scan(const LidarClear(), pose(1.75, 0.55))),
-          WalkCue.stepLeft,
-        );
-        expect(walk.phase, WalkPhase.straight);
-      });
-
-      test('without the side face it assumes the obstacle is 0.6 m deep', () {
-        stepRightWithPose();
-        expect(
-          walk.onScan(at(1000), scan(const LidarClear(), pose(1.75, 0.55))),
-          isNull,
-        );
-        expect(
-          walk.onScan(at(1500), scan(const LidarClear(), pose(1.95, 0.55))),
-          WalkCue.stepLeft,
-        );
-      });
-
-      test('cells away from the obstacle do not move its far edge', () {
-        stepRightWithPose();
-        // A desk row 0.5 m further right (world z 1.05), reaching x 3.0.
-        const desk = [1.0, -0.5, 2.0, -0.5, 2.4, -0.5];
-        const side = [0.4, 0.3, 0.8, 0.3];
-        walk.onScan(
-          at(1000),
-          scan(const LidarClear(), pose(0.6, 0.55), [...side, ...desk]),
-        );
-        expect(
-          walk.onScan(at(1500), scan(const LidarClear(), pose(1.75, 0.55))),
-          WalkCue.stepLeft,
-        );
-      });
-
-      test('a frame without a pose decides nothing', () {
-        stepRightWithPose();
-        expect(
-          walk.onScan(
-            at(1000),
-            const LidarScan(LidarClear(), LidarClear(), LidarClear()),
-          ),
-          isNull,
-        );
-        expect(
-          walk.onScan(
-            at(2500),
-            const LidarScan(LidarClear(), LidarClear(), LidarClear()),
-          ),
-          isNull,
-        );
-        expect(walk.phase, WalkPhase.passing);
-      });
+    test('standing beside object never triggers return after a second', () {
+      passing();
+      feed(scan(z: 0.75, center: const LidarClear()), from: 700, count: 15);
+      expect(walk.phase, WalkPhase.passing);
     });
 
-    test('a new danger while passing collects again', () {
-      stepRightThenPass();
-      expect(
-        walk.onDanger(wall: false, sideOpen: false, canBypass: true),
-        DangerAction.stop,
-      );
+    test('return requires floor across original lane beyond the object', () {
+      passing();
+      walk.onScan(at(700), scan(x: 0.6, z: 0.75, center: const LidarClear()));
+      walk.onScan(at(800), scan(x: 1.2, z: 0.75, center: const LidarClear()));
+      expect(walk.onScan(at(900), scan(x: 1.8, z: 0.75,
+          center: const LidarClear(), occupied: [0.05, 0.75])), isNull);
+      expect(walk.phase, WalkPhase.passing);
+    });
+
+    test('observed far edge prevents returning alongside a long object', () {
+      passing();
+      const side = [0.4, 0.5, 0.8, 0.5];
+      walk.onScan(at(700), scan(x: 0.6, z: 0.75, center: const LidarClear(), occupied: side));
+      walk.onScan(at(800), scan(x: 1.2, z: 0.75, center: const LidarClear()));
+      expect(walk.onScan(at(900), scan(x: 1.8, z: 0.75, center: const LidarClear())), isNull);
+      expect(walk.onScan(at(1000), scan(x: 2.0, z: 0.75, center: const LidarClear())), WalkCue.stepLeft);
+    });
+
+    test('new front obstacle stops during passing', () {
+      passing();
+      expect(walk.onScan(at(700), scan(z: 0.75, center: const LidarObstacle(0.6))), WalkCue.stop);
       expect(walk.phase, WalkPhase.collect);
     });
 
-    test('danger while collecting or stepping is silent', () {
-      collect();
-      expect(
-        walk.onDanger(wall: false, sideOpen: false, canBypass: true),
-        DangerAction.none,
-      );
-      feed(5, obstacle(rightGap: 0.3));
-      expect(
-        walk.onDanger(wall: false, sideOpen: false, canBypass: true),
-        DangerAction.none,
-      );
+    test('unknown scan cannot authorize any continuation', () {
+      passing();
+      expect(walk.onScan(at(700), scan(z: 0.75, center: const LidarUnknown())), WalkCue.findWay);
     });
 
-    test('collect timeout finds a way', () {
+    test('a stale stream stops an in-progress bypass', () {
+      passing();
+      expect(walk.tick(at(1200), aheadOpen: true, turning: false, turnedDegrees: 0), WalkCue.findWay);
+    });
+
+    test('late clear scans cannot complete an expired sidestep', () {
+      collect();
+      feed(scan());
+      feed(scan(center: const LidarClear()), from: 500, count: 49);
+      expect(walk.onScan(at(5400), scan(z: 0.75,
+          center: const LidarClear())), WalkCue.findWay);
+    });
+
+    test('passing cannot wait indefinitely for an unverified return', () {
+      passing();
+      feed(scan(z: 0.75, center: const LidarClear()), from: 700, count: 199);
+      expect(walk.onScan(at(20600), scan(z: 0.75,
+          center: const LidarClear())), WalkCue.findWay);
+    });
+
+    test('room pose jump stops rather than pretending the object was passed', () {
+      passing();
+      expect(walk.onScan(at(700), scan(x: 2, z: 0.75, center: const LidarClear())), WalkCue.findWay);
+    });
+
+    test('phase revision changes on reset to invalidate queued motion', () {
+      passing();
+      final revision = walk.revision;
+      walk.reset();
+      expect(walk.revision, greaterThan(revision));
+    });
+
+    test('collect timeout stops and asks to find a way', () {
       collect();
       walk.tick(at(0), aheadOpen: false, turning: false, turnedDegrees: 0);
-      expect(
-        walk.tick(at(2100), aheadOpen: false, turning: false, turnedDegrees: 0),
-        WalkCue.findWay,
-      );
-      expect(walk.phase, WalkPhase.findWay);
-    });
-
-    test('sidestep timeout finds a way', () {
-      collect();
-      feed(5, obstacle(rightGap: 0.3));
-      expect(
-        walk.tick(at(5600), aheadOpen: false, turning: false, turnedDegrees: 0),
-        WalkCue.findWay,
-      );
+      expect(walk.tick(at(2100), aheadOpen: false, turning: false, turnedDegrees: 0), WalkCue.findWay);
     });
   });
 }

@@ -329,11 +329,14 @@ class LidarFeed extends ValueNotifier<FeedHandle?>
     final width = e['width'], height = e['height'];
     final depth = e['depth'], confidence = e['confidence'];
     final up = e['up'];
+    final sampleAgeMs = e['sampleAgeMs'];
     double? number(Object? v) => v is num ? v.toDouble() : null;
     final fx = number(e['fx']), fy = number(e['fy']);
     final cx = number(e['cx']), cy = number(e['cy']);
     if (width is! int ||
         height is! int ||
+        width <= 0 ||
+        height <= 0 ||
         depth is! Uint8List ||
         confidence is! Uint8List ||
         up is! List ||
@@ -342,6 +345,9 @@ class LidarFeed extends ValueNotifier<FeedHandle?>
         fy == null ||
         cx == null ||
         cy == null ||
+        sampleAgeMs is! int ||
+        sampleAgeMs < 0 ||
+        sampleAgeMs > 500 ||
         depth.lengthInBytes < width * height * 4 ||
         confidence.length < width * height) {
       return null;
@@ -367,9 +373,10 @@ class LidarFeed extends ValueNotifier<FeedHandle?>
       upX: ups[0]!,
       upY: ups[1]!,
       upZ: ups[2]!,
-      trackingAvailable: e['tracking'] != false,
+      trackingAvailable: e['tracking'] == true,
       thermalState: e['thermal'] is int ? e['thermal'] as int : 0,
       pose: _pose(e['pos'], e['head'], number),
+      sampleAgeMs: sampleAgeMs,
     );
   }
 

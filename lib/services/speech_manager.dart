@@ -15,6 +15,7 @@ class _Request {
   final SpeechPriority priority;
   final String? subject;
   final VoidCallback? onStart;
+  final bool Function()? isStillValid;
   final DateTime createdAt;
   final Completer<bool> result = Completer<bool>();
 
@@ -23,6 +24,7 @@ class _Request {
     this.priority,
     this.subject,
     this.onStart,
+    this.isStillValid,
     this.createdAt,
   );
 
@@ -67,6 +69,7 @@ class SpeechManager {
   final Map<String, ({SpeechPriority priority, DateTime time})> _lastBySubject =
       {};
   _Request? _current;
+  String? _shownSubject;
   DateTime _lastEnd = DateTime.fromMillisecondsSinceEpoch(0);
   Timer? _hideTimer;
   Timer? _quietTimer;
@@ -117,14 +120,18 @@ class SpeechManager {
   /// [force]: người dùng chủ động yêu cầu → nói kể cả khi đang yên lặng.
   /// [onStart]: gọi khi gửi câu tới TTS (VD để ghi lịch sử), không phải xác nhận
   /// loa đã phát âm; thời gian khởi động giọng nói phụ thuộc nền tảng.
+  /// [isStillValid]: kiểm tra đồng bộ lúc nhận và ngay trước khi gửi tới TTS.
+  /// Trả về false (hoặc ném lỗi) sẽ bỏ câu mà không tính cooldown/onStart.
+  /// Hàm này chỉ đọc trạng thái, không gọi lại SpeechManager.
   bool say(
     String text,
     SpeechPriority priority, {
     String? subject,
     bool force = false,
     VoidCallback? onStart,
+    bool Function()? isStillValid,
   }) {
-    return _enqueue(text, priority, subject, force, onStart) != null;
+    return _enqueue(text, priority, subject, force, onStart, isStillValid) != null;
   }
 
   /// Nói và chờ nói xong. Trả về true nếu câu được đọc trọn vẹn (không bị lọc/ngắt/bỏ).
@@ -133,8 +140,9 @@ class SpeechManager {
     SpeechPriority priority, {
     String? subject,
     bool force = false,
+    bool Function()? isStillValid,
   }) {
-    final req = _enqueue(text, priority, subject, force, null);
+    final req = _enqueue(text, priority, subject, force, null, isStillValid);
     return req?.result.future ?? Future.value(false);
   }
 
@@ -144,9 +152,11 @@ class SpeechManager {
     String? subject,
     bool force,
     VoidCallback? onStart,
+    bool Function()? isStillValid,
   ) {
+    if (!_valid(isStillValid)) return null;
     if (!canSay(priority, subject: subject, force: force)) return null;
-    final req = _Request(text, priority, subject, onStart, _now());
+    final req = _Request(text, priority, subject, onStart, isStillValid, _now());
 
     final current = _current;
     if (current != null &&
@@ -215,7 +225,7 @@ class SpeechManager {
     if (_stopping != null || _current != null || _queue.isEmpty) return;
     final now = _now();
 
-    _queue.where((r) => r.isStale(now)).toList().forEach((r) {
+    _queue.where((r) => r.isStale(now) || !_valid(r.isStillValid)).toList().forEach((r) {
       _queue.remove(r);
       _drop(r);
     });
@@ -241,6 +251,16 @@ class SpeechManager {
     _speak(next);
   }
 
+  bool _valid(bool Function()? check) {
+    try {
+      return check?.call() ?? true;
+    } catch (error) {
+      // Missing/invalid sensor state must not release a movement instruction.
+      debugPrint('Bỏ câu nói không kiểm tra được tính hợp lệ: $error');
+      return false;
+    }
+  }
+
   Future<void> _speak(_Request req) async {
     _current = req;
     final now = _now();
@@ -249,6 +269,7 @@ class SpeechManager {
       _lastBySubject[req.subject!] = (priority: req.priority, time: now);
     }
     _hideTimer?.cancel();
+    _shownSubject = req.subject;
     showing.value = (text: req.text, priority: req.priority);
     req.onStart?.call();
 
@@ -258,7 +279,10 @@ class SpeechManager {
     _lastEnd = _now();
     if (!req.result.isCompleted) req.result.complete(true);
     _hideTimer = Timer(_showAfterEnd, () {
-      if (_current == null) showing.value = null;
+      if (_current == null) {
+        _shownSubject = null;
+        showing.value = null;
+      }
     });
     _pump();
   }
@@ -288,8 +312,6 @@ class SpeechManager {
     _pump();
   }
 
-  /// Bỏ hẳn chủ thể [subject]: ngắt câu đang nói của chủ thể đó, xoá các câu
-  /// đang chờ và quên cooldown để lần sau được nói ngay.
   /// Nói một câu báo đổi trạng thái ("Xoay tiếp.", "Dừng lại! Xoay người tìm lối."):
   /// bỏ cooldown của chính [subject] để câu không bị nuốt. Trả về false nếu vẫn
   /// không nói được; bên gọi khi đó không được đổi trạng thái.
@@ -298,12 +320,28 @@ class SpeechManager {
     SpeechPriority priority, {
     required String subject,
     VoidCallback? onStart,
+    bool Function()? isStillValid,
   }) {
+    if (!_valid(isStillValid)) return false;
     dropSubject(subject);
-    return say(text, priority, subject: subject, onStart: onStart);
+    return say(
+      text,
+      priority,
+      subject: subject,
+      onStart: onStart,
+      isStillValid: isStillValid,
+    );
   }
 
+  /// Bỏ hẳn chủ thể [subject]: ngắt câu đang nói của chủ thể đó, xoá các câu
+  /// đang chờ, ẩn thông báo của chủ thể đó và quên cooldown để lần sau nói ngay.
   void dropSubject(String subject) {
+    if (_shownSubject == subject) {
+      _hideTimer?.cancel();
+      _hideTimer = null;
+      _shownSubject = null;
+      showing.value = null;
+    }
     _lastBySubject.remove(subject);
     _queue.removeWhere((request) {
       final matches = request.subject == subject;
@@ -331,6 +369,7 @@ class SpeechManager {
     _hideTimer?.cancel();
     _quietTimer?.cancel();
     _quietTimer = null;
+    _shownSubject = null;
     showing.value = null;
     await _stopSpeech();
   }

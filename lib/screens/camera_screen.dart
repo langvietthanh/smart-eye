@@ -117,13 +117,12 @@ class _CameraScreenState extends State<CameraScreen>
   final WallLatch _wallLatch = WallLatch();
   bool _wall = false;
 
-  /// Free/blocked lanes beside the centre obstacle, smoothed; [_sidesAtMs]
-  /// is when their depth frame arrived (see [speakableSides]).
+  /// Smoothed side observations for diagnostics. WalkState authorizes motion
+  /// from measured widths and room coordinates, independently of this latch.
   final SideStability _sideStability = SideStability();
   final SideLatch _sideLatch = SideLatch();
   static const _noSides = (left: SideState.unknown, right: SideState.unknown);
   ({SideState left, SideState right}) _sides = _noSides;
-  int _sidesAtMs = -1;
   String _lidarStatus = '';
   int _lidarReadings = 0;
   static const int _minDepthIntervalMs = 300;
@@ -200,6 +199,9 @@ class _CameraScreenState extends State<CameraScreen>
   DateTime _lastDangerAt = DateTime.fromMillisecondsSinceEpoch(0);
   LidarScan? _lidarScan;
   int _lidarCenterAtMs = -1;
+  ({WalkCue cue, int revision, WalkPhase phase})? _pendingWalkCue;
+  int? _stoppedWalkRevision;
+  DateTime? _monoStepAt;
 
   /// A command is being listened for or dispatched; long presses are ignored.
   bool _commandBusy = false;
@@ -420,6 +422,7 @@ class _CameraScreenState extends State<CameraScreen>
     final problem = _sight.check(now);
     final previous = _sightProblem;
     _sightProblem = problem;
+    if (problem != null) _dropWalkMovement();
     _evaluateBlockage(now);
     if (problem == null) {
       final recovery = sightRecoveryText(previous);
@@ -451,6 +454,8 @@ class _CameraScreenState extends State<CameraScreen>
   }
 
   void _resetBlockage() {
+    _dropWalkMovement();
+    _stoppedWalkRevision = null;
     _blockage.reset();
     _walk.reset();
     _sideLatch.reset();
@@ -460,8 +465,8 @@ class _CameraScreenState extends State<CameraScreen>
   /// Shared by the sight tick, each detection frame and each LiDAR scan:
   /// never evaluates while the latest sight check reports a problem.
   void _evaluateBlockage(DateTime now) {
-    final problem = _sightProblem;
-    if (problem == null) {
+    final problem = _sight.check(now);
+    if (problem == null && !_groundHazardAhead) {
       _handleWalkCue(
         _walk.tick(
           now,
@@ -471,18 +476,20 @@ class _CameraScreenState extends State<CameraScreen>
         ),
         now,
       );
+      _retryWalkCue();
       _onBlockage(_blockage.evaluate(now));
       _maybeSayStraight(now);
-    } else if (problem.isBlind) {
+    } else if (problem?.isBlind == true) {
       _resetBlockage();
     } else {
+      _dropWalkMovement();
       _blockage.interrupt();
     }
   }
 
   /// Speaks what a [WalkState] transition asks for. State lines ignore their
-  /// own cooldown ([SpeechManager.sayNow]); a find-way line that still cannot
-  /// be spoken drops back to going straight, so "Dừng lại!" is never muted.
+  /// own cooldown ([SpeechManager.sayNow]). Movement cues are retained until
+  /// they start, and invalidated when the phase or sensor evidence changes.
   void _handleWalkCue(WalkCue? cue, DateTime now) {
     switch (cue) {
       case null:
@@ -497,28 +504,86 @@ class _CameraScreenState extends State<CameraScreen>
           _turns.reset();
         }
       case WalkCue.goStraight:
-        _speech.dropSubject('path:turn');
-        _speech.say(
-          'Đi thẳng.',
-          SpeechPriority.guidance,
-          subject: 'path:straight',
-        );
-        _straightAt = now;
+        _queueWalkMovement(cue);
       case WalkCue.findWay:
         _sayFindWay();
+      case WalkCue.stop:
+        _sayStop();
       case WalkCue.stepRight:
       case WalkCue.stepLeft:
-        _speech.sayNow(
-          cue == WalkCue.stepRight
-              ? 'Bước ngang sang phải.'
-              : 'Bước ngang sang trái.',
-          SpeechPriority.danger,
-          subject: 'path:step',
-        );
+        _queueWalkMovement(cue);
     }
   }
 
+  void _dropWalkMovement({bool forget = true}) {
+    if (forget) _pendingWalkCue = null;
+    _speech.dropSubject('path:step');
+    _speech.dropSubject('path:straight');
+    _speech.dropSubject('nav');
+  }
+
+  void _queueWalkMovement(WalkCue cue) {
+    _dropWalkMovement();
+    _speech.dropSubject('path:turn');
+    _pendingWalkCue = (
+      cue: cue,
+      revision: _walk.revision,
+      phase: _walk.phase,
+    );
+    _retryWalkCue();
+  }
+
+  bool _walkMovementValid(int revision, WalkPhase phase) {
+    final scan = _freshLidarScan();
+    return !_disposed &&
+        _walk.revision == revision &&
+        _walk.phase == phase &&
+        _sight.check(DateTime.now()) == null &&
+        !_groundHazardAhead &&
+        (!_useLidar ||
+            (scan != null &&
+                scan.center is! LidarUnknown &&
+                (phase == WalkPhase.straight || scan.pose?.isValid == true))) &&
+        ((phase != WalkPhase.straight && phase != WalkPhase.passing) ||
+            _blockage.openAhead(DateTime.now(), beyond: WalkState.exitBeyond));
+  }
+
+  /// Keep a transition owed until TTS starts it. A rejected or superseded
+  /// queued cue can be retried while its phase and sensor evidence still hold.
+  void _retryWalkCue() {
+    final pending = _pendingWalkCue;
+    if (pending == null) return;
+    if (_walk.revision != pending.revision || _walk.phase != pending.phase) {
+      _dropWalkMovement();
+      return;
+    }
+    if (!_walkMovementValid(pending.revision, pending.phase)) {
+      _dropWalkMovement(forget: false);
+      return;
+    }
+    final straight = pending.cue == WalkCue.goStraight;
+    final priority = straight ? SpeechPriority.guidance : SpeechPriority.danger;
+    final subject = straight ? 'path:straight' : 'path:step';
+    if (!_speech.canSay(priority, subject: subject)) return;
+    _speech.sayNow(
+      straight
+          ? 'Đi thẳng.'
+          : pending.cue == WalkCue.stepRight
+          ? 'Bước ngang sang phải.'
+          : 'Bước ngang sang trái.',
+      priority,
+      subject: subject,
+      isStillValid: () =>
+          _walkMovementValid(pending.revision, pending.phase),
+      onStart: () {
+        if (_pendingWalkCue == pending) _pendingWalkCue = null;
+        if (straight) _straightAt = DateTime.now();
+      },
+    );
+  }
+
   void _sayFindWay() {
+    _dropWalkMovement();
     final log = _eventLogger(TripEventType.danger, findWayText);
     final spoken = _speech.sayNow(
       findWayText,
@@ -543,12 +608,16 @@ class _CameraScreenState extends State<CameraScreen>
   /// Bypass step 2: "Dừng lại!" and start collecting frames. Like the
   /// find-way line, it never sits silently in a bypass phase.
   void _sayStop() {
+    _dropWalkMovement();
+    _stoppedWalkRevision = null;
+    final revision = _walk.revision;
     final log = _eventLogger(TripEventType.danger, 'Dừng lại!');
     final spoken = _speech.sayNow(
       'Dừng lại!',
       SpeechPriority.danger,
       subject: 'path:stop',
       onStart: () {
+        if (_walk.revision == revision) _stoppedWalkRevision = revision;
         HapticFeedback.heavyImpact();
         log();
       },
@@ -567,6 +636,7 @@ class _CameraScreenState extends State<CameraScreen>
     WalkPhase.collect => ' · vòng qua: gom khung',
     WalkPhase.sidestep => ' · vòng qua: bước ngang',
     WalkPhase.passing => ' · vòng qua: đi qua',
+    WalkPhase.returning => ' · vòng qua: về đường cũ',
   };
 
   /// "Đi thẳng." when the way ahead (centre column and LiDAR) has stayed open
@@ -579,6 +649,7 @@ class _CameraScreenState extends State<CameraScreen>
     }
     if (_walk.phase != WalkPhase.straight ||
         _guide.isActive ||
+        _groundHazardAhead ||
         _speech.isBusy) {
       return;
     }
@@ -590,15 +661,21 @@ class _CameraScreenState extends State<CameraScreen>
         ((_frontWarned || _straightOwed) && since >= _straightMinGap);
     if (!due) return;
     // Guidance: any warning cuts in; filtered in quiet mode.
-    if (_speech.say(
+    _speech.say(
       'Đi thẳng.',
       SpeechPriority.guidance,
       subject: 'path:straight',
-    )) {
-      _straightAt = now;
-      _straightOwed = false;
-      _frontWarned = false;
-    }
+      isStillValid: () =>
+          _walk.phase == WalkPhase.straight &&
+          !_groundHazardAhead &&
+          _sight.check(DateTime.now()) == null &&
+          _blockage.aheadOpenSettled(DateTime.now()),
+      onStart: () {
+        _straightAt = DateTime.now();
+        _straightOwed = false;
+        _frontWarned = false;
+      },
+    );
   }
 
   /// A warning started: owe "Đi thẳng." only if the way ahead was not already
@@ -708,6 +785,10 @@ class _CameraScreenState extends State<CameraScreen>
   }
 
   void _clearProximity() {
+    _dropWalkMovement();
+    _monoStepAt = null;
+    _lidarScan = null;
+    _lidarCenterAtMs = -1;
     _boxProximity = null;
     _depthProximity = null;
     _depthWarning.reset();
@@ -863,9 +944,7 @@ class _CameraScreenState extends State<CameraScreen>
       monoSide(reading.left, load[0]),
       monoSide(reading.right, load[2]),
     );
-    _sidesAtMs = _frameClock.elapsedMilliseconds;
     _blockage.onMonoDepth(now, reading);
-    _evaluateBlockage(now);
     _depthProximity = (
       proximity: ProximityPulse.fromCloseness(reading.center),
       atMs: _frameClock.elapsedMilliseconds,
@@ -873,14 +952,15 @@ class _CameraScreenState extends State<CameraScreen>
     _updatePulse();
     final step = _stepWarning.update(reading.step);
     if (step != null) {
+      _monoStepAt = now;
+      _dropWalkMovement();
+      _blockage.interrupt();
       // A step's raised surface can also read as "closer"; announce the step.
       _announceStep(step.kind, step.level);
       return;
     }
-    _announceDepth(
-      _depthWarning.update(reading.center),
-      sides: _speakableSides(),
-    );
+    _announceDepth(_depthWarning.update(reading.center));
+    _evaluateBlockage(now);
   }
 
   /// LiDAR depth packets arrive ~10 Hz; analysis runs off the UI isolate and
@@ -890,6 +970,7 @@ class _CameraScreenState extends State<CameraScreen>
     final handle = _handle;
     final generation = _frameGeneration;
     final startedAt = _frameClock.elapsedMilliseconds;
+    final capturedAtMs = startedAt - frame.sampleAgeMs;
     unawaited(
       _lidarDepth
           .analyze(frame)
@@ -898,23 +979,38 @@ class _CameraScreenState extends State<CameraScreen>
                 !_wantsCamera ||
                 generation != _frameGeneration ||
                 handle != _handle ||
-                _frameClock.elapsedMilliseconds - startedAt > _maxFrameAgeMs) {
+                frame.sampleAgeMs < 0 ||
+                _frameClock.elapsedMilliseconds - capturedAtMs >
+                    _lidarCenterMaxAgeMs) {
               return;
             }
             final now = DateTime.now();
             _lidarScan = scan;
-            _lidarCenterAtMs = _frameClock.elapsedMilliseconds;
+            _lidarCenterAtMs = capturedAtMs;
             _wall = _wallLatch.update(scan.center);
-            _blockage.onDepth(now, scan);
-            if (_sightProblem == null) {
-              _handleWalkCue(_walk.onScan(now, scan), now);
-            }
-            _evaluateBlockage(now);
+            _blockage.onDepth(
+              _frameEpoch.add(Duration(milliseconds: capturedAtMs)),
+              scan,
+            );
+            // Update this scan's depth health and danger before it can release
+            // a movement cue. A new stop starts collecting on the next scan.
+            final revision = _walk.revision;
             _onLidarReading(
               scan.center,
               thermal: frame.thermalState,
-              capturedAtMs: startedAt,
+              capturedAtMs: capturedAtMs,
             );
+            _sightProblem = _sight.check(now);
+            if (_sightProblem == null &&
+                !_groundHazardAhead &&
+                _walk.revision == revision) {
+              _handleWalkCue(
+                _walk.onScan(now, scan,
+                    stopped: _stoppedWalkRevision == _walk.revision),
+                now,
+              );
+            }
+            _evaluateBlockage(now);
           })
           .catchError((Object e) => debugPrint('Lỗi xử lý LiDAR: $e')),
     );
@@ -927,10 +1023,12 @@ class _CameraScreenState extends State<CameraScreen>
   }) {
     final now = DateTime.now();
     _lidarReadings++;
-    _sight.onDepth(now, known: reading is! LidarUnknown);
+    _sight.onDepth(
+      _frameEpoch.add(Duration(milliseconds: capturedAtMs)),
+      known: reading is! LidarUnknown,
+    );
     final distance = reading is LidarObstacle ? reading.distance : null;
     _sides = _sideLatch.update(reading, _sideStability.update(reading));
-    _sidesAtMs = capturedAtMs;
     _lidarStatus =
         '${switch (reading) {
           LidarObstacle(:final distance, :final where, :final wall) => '${distance.toStringAsFixed(2)} m${wall ? ' tường' : ''}${where == null ? '' : ' (vật ${_sideCm(where.sideMin)}…${_sideCm(where.sideMax)} cm, cao ${_cm(where.heightMin)}…${_cm(where.heightMax)} cm, máy cao ${_cm(where.phoneHeight)} cm)'}',
@@ -941,7 +1039,9 @@ class _CameraScreenState extends State<CameraScreen>
     // Aiming and blind problems are announced by the sight monitor; a gap in
     // depth itself must not block the next reading from clearing it.
     final problem = _sight.check(now);
+    _sightProblem = problem;
     if (problem != null && problem != SightProblem.noDepth) {
+      _dropWalkMovement();
       // A badly aimed phone cannot vouch for either side.
       _sideStability.reset();
       _sideLatch.reset();
@@ -953,10 +1053,7 @@ class _CameraScreenState extends State<CameraScreen>
       atMs: _frameClock.elapsedMilliseconds,
     );
     _updatePulse();
-    _announceDepth(
-      _lidarWarning.update(reading, now, wall: _wall),
-      sides: _speakableSides(),
-    );
+    _announceDepth(_lidarWarning.update(reading, now, wall: _wall));
   }
 
   static int _cm(double metres) => (metres * 100).round();
@@ -965,30 +1062,23 @@ class _CameraScreenState extends State<CameraScreen>
   static String _sideCm(double side) =>
       '${side >= 0 ? 'T' : 'P'}${_cm(side.abs())}';
 
-  ({SideState left, SideState right}) _speakableSides() => speakableSides(
-    _sides,
-    capturedAtMs: _sidesAtMs,
-    nowMs: _frameClock.elapsedMilliseconds,
-    findingWay: _walk.phase != WalkPhase.straight,
-  );
-
   /// Speaks a class-agnostic depth warning unless the detector already names
-  /// the obstacle with equal or higher urgency. [sides] come from LiDAR lanes
-  /// or, without it, MiDaS + YOLO.
-  void _announceDepth(
-    AlertLevel level, {
-    ({SideState left, SideState right}) sides = _noSides,
-  }) {
+  /// the obstacle with equal or higher urgency. Lateral movement is authorized
+  /// separately by WalkState, using metric body-width clearance.
+  void _announceDepth(AlertLevel level) {
     final isDanger = level == AlertLevel.danger;
     // Away from going straight only a new danger while passing may speak.
     if (_walk.phase != WalkPhase.straight &&
-        !(isDanger && _walk.phase == WalkPhase.passing)) {
+        !(isDanger &&
+            (_walk.phase == WalkPhase.passing ||
+                _walk.phase == WalkPhase.returning))) {
       return;
     }
     if (isDanger) {
       switch (_walk.onDanger(
         wall: _wall,
-        sideOpen: sideClause(sides.left, sides.right) != null,
+        // Relative monocular depth cannot measure a body-width opening.
+        sideOpen: false,
         canBypass: _useLidar,
       )) {
         case DangerAction.findWay:
@@ -1001,13 +1091,9 @@ class _CameraScreenState extends State<CameraScreen>
           if (_walk.phase != WalkPhase.straight) return;
       }
     }
-    // With LiDAR the side is picked after stopping ("Bước ngang sang …").
-    final spokenSides = _useLidar ? _noSides : sides;
     final text = depthAlertText(
       depthLevel: level,
       detectorLevel: _scene.alert?.level,
-      left: spokenSides.left,
-      right: spokenSides.right,
     );
     if (text == null) return;
     if (!isDanger && _aheadOpen()) return;
@@ -1114,7 +1200,6 @@ class _CameraScreenState extends State<CameraScreen>
       lidar: _sightProblem == null ? _freshLidarScan() : null,
     );
     _blockage.onDetections(now, scene.columnLoad);
-    _evaluateBlockage(now);
     _speech.retainAlerts(
       subject: scene.alert?.subject,
       text: scene.alert?.message,
@@ -1135,6 +1220,7 @@ class _CameraScreenState extends State<CameraScreen>
     if (alert != null) {
       _handleAlert(alert, image, now, rotation);
     }
+    _evaluateBlockage(now);
 
     // Keep updating after the guide ends until a cue held during quiet is out.
     if (_guide.isActive || _guide.hasPendingCue) {
@@ -1168,10 +1254,25 @@ class _CameraScreenState extends State<CameraScreen>
     DateTime now,
     int rotation,
   ) {
-    if (_walk.phase != WalkPhase.straight) return;
+    final groundHazard = _isGroundHazardAlert(alert);
+    if (_walk.phase != WalkPhase.straight && !groundHazard) return;
     _lastAlertAt = now;
     final isDanger = alert.level == AlertLevel.danger;
-    if (!isDanger && alert.pos == HPos.center && _aheadOpen()) return;
+    if (!groundHazard &&
+        !isDanger &&
+        alert.pos == HPos.center &&
+        _aheadOpen()) return;
+    if (groundHazard && (isDanger || alert.pos == HPos.center)) {
+      _dropWalkMovement();
+      // A step/drop interrupts the bypass and its room memory. Depth-clear
+      // alone must not immediately resume walking over this ground hazard.
+      if (_walk.phase != WalkPhase.findWay) {
+        _walk.reset();
+        _walk.onDanger(wall: true, sideOpen: false, canBypass: false);
+      }
+    } else if (isDanger) {
+      _dropWalkMovement();
+    }
     final priority = isDanger ? SpeechPriority.danger : SpeechPriority.caution;
     if (!_speech.canSay(priority, subject: alert.subject)) {
       return; // Đã báo / đang chờ đọc
@@ -1179,14 +1280,8 @@ class _CameraScreenState extends State<CameraScreen>
     if (isDanger) _lastDangerAt = now;
 
     if (alert.pos == HPos.center) _blockage.watchAhead();
-    // Sides: only fresh, never during a trap, only for a centre object.
-    final sides = _speakableSides();
-    final text = withSideClause(
-      alert.message,
-      pos: alert.pos,
-      left: sides.left,
-      right: sides.right,
-    );
+    // Only the metric bypass controller may authorize a lateral step.
+    final text = alert.message;
     final jpeg = isDanger ? _captureMemory(image, rotation) : null;
     final log = _eventLogger(
       isDanger ? TripEventType.danger : TripEventType.caution,
@@ -1203,6 +1298,24 @@ class _CameraScreenState extends State<CameraScreen>
         log();
       },
     );
+  }
+
+  bool _isGroundHazardAlert(HazardAlert alert) => _scene.objects.any(
+    (object) =>
+        alert.subject == 'track:${object.track.id}' &&
+        object.category == ObjectCategory.groundHazard,
+  );
+
+  bool get _groundHazardAhead {
+    final monoStepAt = _monoStepAt;
+    if (monoStepAt != null &&
+        DateTime.now().difference(monoStepAt) <= PathBlockage.monoMaxAge) {
+      return true;
+    }
+    final alert = _scene.alert;
+    return alert != null &&
+        _isGroundHazardAlert(alert) &&
+        (alert.level == AlertLevel.danger || alert.pos == HPos.center);
   }
 
   void _describe(CameraImage? image, {required bool manual, int rotation = 0}) {
@@ -1380,6 +1493,7 @@ class _CameraScreenState extends State<CameraScreen>
     switch (CommandParser.parse(text, available)) {
       case NavigateTo(:final labelsEn, :final nameVi):
         // A direct reply to the user: forced like the other command replies.
+        _dropWalkMovement();
         _walk.reset();
         _sideLatch.reset();
         _sayNavLine(_guide.start(labelsEn, nameVi, DateTime.now()).text);
@@ -1433,6 +1547,7 @@ class _CameraScreenState extends State<CameraScreen>
 
   LidarScan? _freshLidarScan() =>
       _useLidar &&
+          _lidarCenterAtMs >= 0 &&
           _frameClock.elapsedMilliseconds - _lidarCenterAtMs <=
               _lidarCenterMaxAgeMs
       ? _lidarScan

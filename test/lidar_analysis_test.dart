@@ -49,6 +49,8 @@ LidarDepthFrame render({
   List<(double, double, double, double)> holes = const [],
   double yawDeg = 0, // positive turns the phone towards +x
   double cameraX = 0,
+  int sampleAgeMs = 0,
+  LidarPose? pose,
 }) {
   final p = pitchDeg * pi / 180, r = rollDeg * pi / 180;
   final y = yawDeg * pi / 180;
@@ -107,6 +109,8 @@ LidarDepthFrame render({
     upY: up[1],
     upZ: -look[1],
     trackingAvailable: tracking,
+    sampleAgeMs: sampleAgeMs,
+    pose: pose,
   );
 }
 
@@ -128,6 +132,25 @@ LidarObstacle obstacleOf(LidarReading r) {
   return r as LidarObstacle;
 }
 
+/// Place one confident return in the default portrait, 15-degree fixture.
+/// The one-pixel fixture catches hazards too thin for a frontal warning.
+void putReturn(
+  LidarDepthFrame frame, {
+  required double forward,
+  required double side,
+  required double height,
+}) {
+  final pitch = 15 * pi / 180;
+  final x = forward * sin(pitch) + height * cos(pitch);
+  final depth = forward * cos(pitch) - height * sin(pitch);
+  final u = ((frame.cx + frame.fx * x / depth) / 2).round() * 2;
+  final v = ((frame.cy - frame.fy * side / depth) / 2).round() * 2;
+  expect(u, inInclusiveRange(0, frame.width - 1));
+  expect(v, inInclusiveRange(0, frame.height - 1));
+  frame.depth[v * frame.width + u] = depth;
+  frame.confidence[v * frame.width + u] = 2;
+}
+
 void sideLaneTests() {
   test('a wall ahead is told apart from a chair or a person', () {
     final a = LidarAnalysis();
@@ -139,35 +162,36 @@ void sideLaneTests() {
     expect(obstacleOf(a.analyze(render(boxes: [person]))).wall, isFalse);
   });
 
-  test('a table edge only in the outer 10 cm is passed by', () {
+  test('a table edge inside the shoulder corridor is an obstacle', () {
     // 28–60 cm right of the axis (world x is right), 75 cm tall, at 1.2 m.
     final s = LidarAnalysis().analyzeScan(
       render(boxes: [const Box(0.28, 0, 1.2, 0.6, 0.75, 1.8)]),
     );
-    expect(s.center, isA<LidarClear>());
+    expect(distanceOf(s.center), closeTo(1.2, 0.1));
     expect(distanceOf(s.right), closeTo(1.2, 0.1));
   });
 
-  test('a 64 cm obstacle does not block its own lanes', () {
+  test('remaining 65 cm gaps do not authorize a body-width passage', () {
     final r = obstacleOf(
       LidarAnalysis().analyze(
         render(boxes: [const Box(-0.32, 0, 1.8, 0.32, 0.9, 2.2)]),
       ),
     );
-    expect(r.left, SideState.clear);
-    expect(r.right, SideState.clear);
+    expect(r.left, isNot(SideState.clear));
+    expect(r.right, isNot(SideState.clear));
+    expect(r.leftGapCenter, isNull);
+    expect(r.rightGapCenter, isNull);
   });
 
-  test('an edge grazer before the obstacle blocks that lane', () {
-    // It also hides the floor behind it, so no gap there can be confirmed.
+  test('an edge grazer is warned before the obstacle farther ahead', () {
+    // The complete shoulder corridor must participate in frontal warnings.
     final r = obstacleOf(
       LidarAnalysis().analyze(
         render(boxes: [chair(1.8), const Box(-0.33, 0, 1.0, -0.27, 0.8, 1.1)]),
       ),
     );
-    expect(r.distance, closeTo(1.8, 0.1));
-    expect(r.left, SideState.blocked);
-    expect(r.right, SideState.clear);
+    expect(r.distance, closeTo(1.0, 0.1));
+    expect(r.left, isNot(SideState.clear));
   });
 
   test('obstacle cells are reported in phone coordinates', () {
@@ -191,6 +215,47 @@ void sideLaneTests() {
     );
   });
 
+  test('free cells require currently observed floor and exclude occupied cells', () {
+    final a = LidarAnalysis();
+    final scan = a.analyzeScan(render(boxes: [chair(1.8)]));
+    expect(scan.freeCells, isNotEmpty);
+    expect(scan.freeCells.length.isEven, isTrue);
+    final occupied = <(double, double)>{
+      for (var i = 0; i < scan.cells.length; i += 2)
+        (scan.cells[i], scan.cells[i + 1]),
+    };
+    for (var i = 0; i < scan.freeCells.length; i += 2) {
+      expect(
+        occupied.contains((scan.freeCells[i], scan.freeCells[i + 1])),
+        isFalse,
+      );
+    }
+    // Keeping the old floor height for distance warnings cannot manufacture
+    // free cells after the floor disappears behind a close wall.
+    final hidden = a.analyzeScan(render(pitchDeg: 0, boxes: [wall(0.4)]));
+    expect(a.floorHeight, isNotNull);
+    expect(hidden.freeCells, isEmpty);
+  });
+
+  test('a single confident thin return vetoes an otherwise wide gap', () {
+    final frame = render(boxes: [chair(1.8)]);
+    expect(obstacleOf(LidarAnalysis().analyze(frame)).right, SideState.clear);
+    putReturn(frame, forward: 2, side: -0.65, height: -0.5);
+    final scan = LidarAnalysis().analyzeScan(frame);
+    final center = obstacleOf(scan.center);
+    expect(center.right, SideState.blocked);
+    expect(center.rightGap, lessThan(LidarAnalysis.gapMin));
+    expect(center.rightGapCenter, isNull);
+  });
+
+  test('a drop in the observed lane never authorizes motion', () {
+    final frame = render(boxes: [chair(1.8)]);
+    putReturn(frame, forward: 2, side: -0.65, height: -1.55);
+    final center = obstacleOf(LidarAnalysis().analyze(frame));
+    expect(center.right, SideState.blocked);
+    expect(center.rightGapCenter, isNull);
+  });
+
   test('a 35 cm gap in a 1 m aisle is too narrow', () {
     final r = obstacleOf(
       LidarAnalysis().analyze(
@@ -207,14 +272,15 @@ void sideLaneTests() {
     expect(r.right, SideState.blocked);
   });
 
-  test('a gap beside an off-centre bag in a 1.2 m aisle is clear', () {
+  test('a body-width gap crossing the centreline remains usable', () {
     final r = obstacleOf(
       LidarAnalysis().analyze(
         render(
+          pitchDeg: 25,
           boxes: [
             sideWall(-0.6),
             sideWall(0.6),
-            const Box(-0.6, 0, 1.2, -0.15, 0.4, 1.5),
+            const Box(-0.6, 0, 1.2, -0.25, 0.4, 1.5),
           ],
         ),
       ),
@@ -222,6 +288,10 @@ void sideLaneTests() {
     expect(r.distance, closeTo(1.2, 0.1));
     expect(r.right, SideState.clear);
     expect(r.left, SideState.blocked);
+    expect(r.rightGap, greaterThanOrEqualTo(LidarAnalysis.gapMin - 1e-9));
+    expect(r.rightGapCenter, lessThan(0));
+    // The body centre stays right, but its left shoulder crosses the axis.
+    expect(r.rightGapCenter! + LidarAnalysis.halfWidth, greaterThan(0));
   });
 
   test('gap widths are reported', () {
@@ -255,10 +325,12 @@ void sideLaneTests() {
 
   test('a free side reports a wide gap', () {
     final r = obstacleOf(LidarAnalysis().analyze(render(boxes: [chair(1.8)])));
-    expect(r.rightGap, greaterThanOrEqualTo(0.45));
+    expect(r.rightGap, greaterThanOrEqualTo(LidarAnalysis.gapMin - 1e-9));
+    expect(r.rightGapCenter, lessThan(0));
+    expect(r.leftGapCenter, greaterThan(0));
   });
 
-  test('a gap narrower than 45 cm is not clear', () {
+  test('a gap narrower than the shoulder corridor is not clear', () {
     final r = obstacleOf(
       LidarAnalysis().analyze(
         render(boxes: [chair(1.8), const Box(0.6, 0, 1.6, 1.2, 1.0, 2.6)]),
@@ -508,6 +580,25 @@ void main() {
     );
   });
 
+  test('stale depth and an invalid room pose never authorize movement', () {
+    for (final frame in [
+      render(boxes: [chair(1.8)], sampleAgeMs: 501),
+      render(boxes: [chair(1.8)], sampleAgeMs: -1),
+      render(
+        boxes: [chair(1.8)],
+        pose: const LidarPose(x: 0, z: 0, headX: 0, headZ: 0),
+      ),
+      render(
+        boxes: [chair(1.8)],
+        pose: const LidarPose(x: double.nan, z: 0, headX: 1, headZ: 0),
+      ),
+    ]) {
+      final scan = LidarAnalysis().analyzeScan(frame);
+      expect(scan.center, isA<LidarUnknown>());
+      expect(scan.freeCells, isEmpty);
+    }
+  });
+
   test('floor estimate survives a wall hiding the floor', () {
     final a = LidarAnalysis();
     a.analyze(render(cameraHeight: 1.0));
@@ -637,10 +728,9 @@ void warningTests() {
     expect(s.center, isA<LidarUnknown>());
   });
 
-  test('a seated student 32 cm off the walking line is not ahead', () {
-    // ~1 m classroom aisle: only hits within coreHalfWidth (±25 cm) are ahead.
+  test('a surface 32 cm off the line still overlaps the shoulders', () {
     final s = LidarAnalysis().analyzeScan(render(boxes: [sideWall(0.32)]));
-    expect(s.center, isA<LidarClear>());
+    expect(s.center, isA<LidarObstacle>());
     expect(s.right, isA<LidarObstacle>());
   });
 
