@@ -310,6 +310,20 @@ class LidarFeed extends ValueNotifier<FeedHandle?>
     );
   }
 
+  /// ARKit position and horizontal heading, when the packet carries both.
+  static LidarPose? _pose(
+    Object? pos,
+    Object? head,
+    double? Function(Object?) number,
+  ) {
+    if (pos is! List || head is! List || pos.length != 2 || head.length != 2) {
+      return null;
+    }
+    final v = [...pos, ...head].map(number).toList();
+    if (v.contains(null)) return null;
+    return LidarPose(x: v[0]!, z: v[1]!, headX: v[2]!, headZ: v[3]!);
+  }
+
   @visibleForTesting
   static LidarDepthFrame? depthFrame(Map<dynamic, dynamic> e) {
     final width = e['width'], height = e['height'];
@@ -355,6 +369,7 @@ class LidarFeed extends ValueNotifier<FeedHandle?>
       upZ: ups[2]!,
       trackingAvailable: e['tracking'] != false,
       thermalState: e['thermal'] is int ? e['thermal'] as int : 0,
+      pose: _pose(e['pos'], e['head'], number),
     );
   }
 

@@ -1,10 +1,24 @@
-enum WalkPhase { straight, findWay }
+import 'dart:math';
 
-enum WalkCue { turnOn, goStraight }
+import '../models/scene_info.dart';
+import 'lidar_analysis.dart';
 
-/// State machine for free-walking mode with two phases:
-/// - [WalkPhase.straight]: walking forward, receiving standard obstacle alerts.
-/// - [WalkPhase.findWay]: blocked ahead, turning in place to locate an open corridor.
+enum WalkPhase { straight, findWay, collect, sidestep, passing }
+
+enum WalkCue { turnOn, goStraight, findWay, stepRight, stepLeft }
+
+/// What the caller says when a depth danger is about to be spoken.
+/// stop: "Dừng lại!"; findWay: findWayText; none: the usual danger line
+/// while going straight, silence while an obstacle is being bypassed.
+enum DangerAction { none, stop, findWay }
+
+/// State machine for free-walking mode:
+/// - [WalkPhase.straight]: walking forward, receiving standard alerts.
+/// - [WalkPhase.findWay]: blocked (or a wall), turning in place.
+/// - Bypass (LiDAR only): [WalkPhase.collect] the frames after "Dừng lại!",
+///   [WalkPhase.sidestep] to the side with a gap, [WalkPhase.passing] the
+///   obstacle until it has been out of sight on the old side for a moment,
+///   then step back.
 ///
 /// Pure Dart class with no platform or speech dependencies.
 class WalkState {
@@ -13,39 +27,176 @@ class WalkState {
   static const turningSettle = Duration(milliseconds: 300);
   static const settle = Duration(seconds: 1);
 
+  /// LiDAR frames with the obstacle ahead used to pick the side.
+  static const collectFrames = 5;
+
+  /// Frames that must show the gap on the chosen side.
+  static const collectAgree = 4;
+
+  /// Narrowest gap beside the obstacle to step into (owner: 20–30 cm).
+  static const sidestepGapMin = 0.25;
+
+  /// Frames with the way ahead open that end the sidestep.
+  static const centreClearFrames = 2;
+
+  /// Without an ARKit pose: old side out of sight this long before stepping
+  /// back (a time estimate of walking past the obstacle).
+  static const passDelay = Duration(seconds: 1);
+
+  /// With a pose: depth assumed until the obstacle's side face is seen
+  /// (LiDAR never sees its far edge from the front).
+  static const memoryDepth = 0.6;
+
+  /// Step back once this far past the obstacle's far edge.
+  static const passMargin = 0.3;
+
+  /// Room cells join the remembered obstacle only within this much of it
+  /// across, and up to [memoryReach] beyond its far edge, so a desk row
+  /// alongside does not stretch it.
+  static const memoryAcross = 0.15;
+  static const memoryReach = 0.6;
+
+  static const collectTimeout = Duration(seconds: 2);
+  static const sidestepTimeout = Duration(seconds: 5);
+
   WalkPhase _phase = WalkPhase.straight;
   DateTime? _openSince;
+  DateTime? _phaseSince;
+  HPos? _stepSide;
+  int _frames = 0, _leftVotes = 0, _rightVotes = 0;
+  int _clearFrames = 0;
+  DateTime? _goneSince;
+
+  // Room memory of the obstacle being bypassed, in a path frame fixed when
+  // it was first seen: along = metres ahead of that spot, across = left.
+  LidarPose? _origin;
+  double _hx = 0, _hz = 0;
+  double? _near, _far;
+  double _acrossMin = 0, _acrossMax = 0;
 
   WalkPhase get phase => _phase;
 
-  /// A depth danger is about to be spoken. Returns true when this enters
-  /// [WalkPhase.findWay]: the caller then speaks findWayText instead of the
-  /// regular danger alert line.
-  bool onDanger({required bool wall, required bool sideOpen}) {
-    if (_phase == WalkPhase.findWay) return false;
-    if (wall || !sideOpen) {
-      _phase = WalkPhase.findWay;
-      _openSince = null;
-      return true;
+  /// The side stepped to while bypassing, else null.
+  HPos? get stepSide => _stepSide;
+
+  bool get _bypassing =>
+      _phase == WalkPhase.collect ||
+      _phase == WalkPhase.sidestep ||
+      _phase == WalkPhase.passing;
+
+  /// A depth danger is about to be spoken. [canBypass]: LiDAR present.
+  DangerAction onDanger({
+    required bool wall,
+    required bool sideOpen,
+    required bool canBypass,
+  }) {
+    if (_phase == WalkPhase.findWay ||
+        _phase == WalkPhase.collect ||
+        _phase == WalkPhase.sidestep) {
+      return DangerAction.none;
     }
-    return false;
+    if (wall) {
+      _enter(WalkPhase.findWay);
+      return DangerAction.findWay;
+    }
+    if (canBypass) {
+      _enter(WalkPhase.collect);
+      return DangerAction.stop;
+    }
+    if (_phase == WalkPhase.passing) {
+      // Without LiDAR there is no bypass to resume: treat as a new start.
+      _enter(WalkPhase.straight);
+    }
+    if (sideOpen) return DangerAction.none;
+    _enter(WalkPhase.findWay);
+    return DangerAction.findWay;
   }
 
-  /// Evaluates state transitions. Only acts when in [WalkPhase.findWay].
+  /// Each LiDAR scan. Drives collect / sidestep / passing.
+  WalkCue? onScan(DateTime now, LidarScan scan) {
+    if (!_bypassing) return null;
+    _phaseSince ??= now;
+    switch (_phase) {
+      case WalkPhase.collect:
+        final centre = scan.center;
+        if (centre is LidarClear) {
+          _enter(WalkPhase.straight);
+          return WalkCue.goStraight;
+        }
+        if (centre is! LidarObstacle) return null;
+        _remember(scan, seed: centre.distance);
+        _frames++;
+        if (centre.leftGap >= sidestepGapMin - 1e-9) _leftVotes++;
+        if (centre.rightGap >= sidestepGapMin - 1e-9) _rightVotes++;
+        if (_frames < collectFrames) return null;
+        if (_rightVotes >= collectAgree) return _step(HPos.right, now);
+        if (_leftVotes >= collectAgree) return _step(HPos.left, now);
+        _enter(WalkPhase.findWay);
+        return WalkCue.findWay;
+      case WalkPhase.sidestep:
+        _remember(scan);
+        final centre = scan.center;
+        final open =
+            centre is LidarClear ||
+            (centre is LidarObstacle && centre.distance > exitBeyond);
+        _clearFrames = open ? _clearFrames + 1 : 0;
+        if (_clearFrames < centreClearFrames) return null;
+        _enter(WalkPhase.passing, now);
+        return WalkCue.goStraight;
+      case WalkPhase.passing:
+        final oldSide = _stepSide == HPos.right ? HPos.left : HPos.right;
+        if (_origin != null) {
+          // ARKit knows where the user is: step back only once past the
+          // remembered far edge. No pose this frame: decide nothing.
+          final pose = scan.pose;
+          if (pose == null) return null;
+          _remember(scan);
+          final far = max(_far!, _near! + memoryDepth * (_sideSeen ? 0 : 1));
+          if (_along(pose.x, pose.z) < far + passMargin) return null;
+          _enter(WalkPhase.straight);
+          return oldSide == HPos.left ? WalkCue.stepLeft : WalkCue.stepRight;
+        }
+        if (scan[oldSide] is LidarObstacle) {
+          final wasGone = _goneSince != null;
+          _goneSince = null;
+          return wasGone ? WalkCue.goStraight : null;
+        }
+        _goneSince ??= now;
+        if (now.difference(_goneSince!) < passDelay) return null;
+        _enter(WalkPhase.straight);
+        return oldSide == HPos.left ? WalkCue.stepLeft : WalkCue.stepRight;
+      case WalkPhase.straight:
+      case WalkPhase.findWay:
+        return null;
+    }
+  }
+
+  /// Timers and find-way. Only acts in [WalkPhase.findWay] and while
+  /// collecting or stepping aside (timeouts).
   WalkCue? tick(
     DateTime now, {
     required bool aheadOpen,
     required bool turning,
     required double turnedDegrees,
   }) {
+    if (_phase == WalkPhase.collect || _phase == WalkPhase.sidestep) {
+      _phaseSince ??= now;
+      final limit = _phase == WalkPhase.collect
+          ? collectTimeout
+          : sidestepTimeout;
+      if (now.difference(_phaseSince!) >= limit) {
+        _enter(WalkPhase.findWay);
+        return WalkCue.findWay;
+      }
+      return null;
+    }
     if (_phase != WalkPhase.findWay) return null;
 
     if (aheadOpen) {
       _openSince ??= now;
       final requiredDuration = turning ? turningSettle : settle;
       if (now.difference(_openSince!) >= requiredDuration) {
-        _phase = WalkPhase.straight;
-        _openSince = null;
+        _enter(WalkPhase.straight);
         return WalkCue.goStraight;
       }
     } else {
@@ -60,9 +211,87 @@ class WalkState {
   }
 
   /// Resets back to [WalkPhase.straight] silently.
-  void reset() {
-    _phase = WalkPhase.straight;
+  void reset() => _enter(WalkPhase.straight);
+
+  WalkCue _step(HPos side, DateTime now) {
+    _enter(WalkPhase.sidestep, now);
+    _stepSide = side;
+    return side == HPos.right ? WalkCue.stepRight : WalkCue.stepLeft;
+  }
+
+  void _enter(WalkPhase phase, [DateTime? now]) {
+    _phase = phase;
+    _phaseSince = now;
     _openSince = null;
+    _frames = 0;
+    _leftVotes = 0;
+    _rightVotes = 0;
+    _clearFrames = 0;
+    _goneSince = null;
+    if (phase == WalkPhase.straight ||
+        phase == WalkPhase.findWay ||
+        phase == WalkPhase.collect) {
+      _stepSide = null;
+      _origin = null;
+      _near = _far = null;
+    }
+  }
+
+  /// The side face has been seen when cells reach past the front.
+  bool get _sideSeen => _far! > _near! + 0.1;
+
+  double _along(double x, double z) =>
+      (x - _origin!.x) * _hx + (z - _origin!.z) * _hz;
+
+  // left = up × forward = (hz, -hx) on the floor plane.
+  double _across(double x, double z) =>
+      (x - _origin!.x) * _hz - (z - _origin!.z) * _hx;
+
+  /// Adds this scan's obstacle cells to the room memory. [seed] (collect):
+  /// the centre obstacle's distance; only its front cells start the memory.
+  void _remember(LidarScan scan, {double? seed}) {
+    final pose = scan.pose;
+    if (pose == null) return;
+    final hl = sqrt(pose.headX * pose.headX + pose.headZ * pose.headZ);
+    if (hl < 1e-6) return;
+    final hx = pose.headX / hl, hz = pose.headZ / hl;
+    if (_origin == null) {
+      if (seed == null) return;
+      _origin = pose;
+      _hx = hx;
+      _hz = hz;
+    }
+    final c = scan.cells;
+    for (var i = 0; i + 1 < c.length; i += 2) {
+      final f = c[i], s = c[i + 1];
+      if (seed != null &&
+          (s.abs() > LidarAnalysis.halfWidth ||
+              f < seed - 0.1 ||
+              f > seed + memoryReach)) {
+        continue;
+      }
+      final x = pose.x + hx * f + hz * s, z = pose.z + hz * f - hx * s;
+      final along = _along(x, z), across = _across(x, z);
+      if (_near == null) {
+        if (seed == null) continue;
+        _near = _far = along;
+        _acrossMin = _acrossMax = across;
+        continue;
+      }
+      if (seed != null) {
+        _near = min(_near!, along);
+        _far = max(_far!, along);
+        _acrossMin = min(_acrossMin, across);
+        _acrossMax = max(_acrossMax, across);
+        continue;
+      }
+      if (across < _acrossMin - memoryAcross ||
+          across > _acrossMax + memoryAcross ||
+          along < _near! - 0.1 ||
+          along > _far! + memoryReach) {
+        continue;
+      }
+      _far = max(_far!, along);
+    }
   }
 }
-

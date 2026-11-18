@@ -115,6 +115,11 @@ double distanceOf(LidarReading r) {
   return (r as LidarObstacle).distance;
 }
 
+/// A 20 cm thick wall running along the path, starting [x] metres to the
+/// side (world x: negative is the user's left).
+Box sideWall(double x) =>
+    Box(x < 0 ? x - 0.2 : x, 0, 0, x < 0 ? x : x + 0.2, 3, 10);
+
 /// A 50 cm wide, 90 cm tall chair across the centre corridor at [z].
 Box chair(double z) => Box(-0.25, 0, z, 0.25, 0.9, z + 0.4);
 
@@ -154,6 +159,7 @@ void sideLaneTests() {
   });
 
   test('an edge grazer before the obstacle blocks that lane', () {
+    // It also hides the floor behind it, so no gap there can be confirmed.
     final r = obstacleOf(
       LidarAnalysis().analyze(
         render(boxes: [chair(1.8), const Box(-0.33, 0, 1.0, -0.27, 0.8, 1.1)]),
@@ -162,6 +168,104 @@ void sideLaneTests() {
     expect(r.distance, closeTo(1.8, 0.1));
     expect(r.left, SideState.blocked);
     expect(r.right, SideState.clear);
+  });
+
+  test('obstacle cells are reported in phone coordinates', () {
+    final s = LidarAnalysis().analyzeScan(render(boxes: [chair(1.8)]));
+    final cells = s.cells;
+    expect(cells.length.isEven, isTrue);
+    var front = false;
+    for (var i = 0; i < cells.length; i += 2) {
+      final f = cells[i], side = cells[i + 1];
+      expect(
+        f,
+        inInclusiveRange(LidarAnalysis.minForward, LidarAnalysis.cellReach),
+      );
+      if (f >= 1.75 && f <= 1.95 && side.abs() <= 0.3) front = true;
+    }
+    expect(front, isTrue, reason: 'chair front face cells');
+    expect(
+      LidarAnalysis().analyzeScan(render()).cells,
+      isEmpty,
+      reason: 'floor alone has no obstacle cells',
+    );
+  });
+
+  test('a 35 cm gap in a 1 m aisle is too narrow', () {
+    final r = obstacleOf(
+      LidarAnalysis().analyze(
+        render(
+          boxes: [
+            sideWall(-0.5),
+            sideWall(0.5),
+            const Box(-0.15, 0, 1.0, 0.15, 0.4, 1.3),
+          ],
+        ),
+      ),
+    );
+    expect(r.left, SideState.blocked);
+    expect(r.right, SideState.blocked);
+  });
+
+  test('a gap beside an off-centre bag in a 1.2 m aisle is clear', () {
+    final r = obstacleOf(
+      LidarAnalysis().analyze(
+        render(
+          boxes: [
+            sideWall(-0.6),
+            sideWall(0.6),
+            const Box(-0.6, 0, 1.2, -0.15, 0.4, 1.5),
+          ],
+        ),
+      ),
+    );
+    expect(r.distance, closeTo(1.2, 0.1));
+    expect(r.right, SideState.clear);
+    expect(r.left, SideState.blocked);
+  });
+
+  test('gap widths are reported', () {
+    // 1 m aisle, bag 1.5 m ahead: ~35 cm each side, less what the bag hides.
+    final r = obstacleOf(
+      LidarAnalysis().analyze(
+        render(
+          boxes: [
+            sideWall(-0.5),
+            sideWall(0.5),
+            const Box(-0.15, 0, 1.5, 0.15, 0.4, 1.8),
+          ],
+        ),
+      ),
+    );
+    for (final g in [r.leftGap, r.rightGap]) {
+      expect(g, inInclusiveRange(0.2, 0.4));
+    }
+  });
+
+  test('no gap can be confirmed where the floor beside is out of view', () {
+    // Phone at 1.3 m tilted 15°: the floor 1 m ahead is below the image.
+    final r = obstacleOf(
+      LidarAnalysis().analyze(
+        render(boxes: [const Box(-0.15, 0, 1.0, 0.15, 0.4, 1.3)]),
+      ),
+    );
+    expect(r.leftGap, 0);
+    expect(r.left, SideState.unknown);
+  });
+
+  test('a free side reports a wide gap', () {
+    final r = obstacleOf(LidarAnalysis().analyze(render(boxes: [chair(1.8)])));
+    expect(r.rightGap, greaterThanOrEqualTo(0.45));
+  });
+
+  test('a gap narrower than 45 cm is not clear', () {
+    final r = obstacleOf(
+      LidarAnalysis().analyze(
+        render(boxes: [chair(1.8), const Box(0.6, 0, 1.6, 1.2, 1.0, 2.6)]),
+      ),
+    );
+    expect(r.right, SideState.blocked);
+    expect(r.left, SideState.clear);
   });
 
   test('diagnostics locate an obstacle at the left edge of the corridor', () {
@@ -489,9 +593,6 @@ void warningTests() {
     expect(ProximityPulse.fromDistance(0.3), 1);
   });
 
-  Box sideWall(double x) =>
-      Box(x < 0 ? x - 0.2 : x, 0, 0, x < 0 ? x : x + 0.2, 3, 10);
-
   test('corner: front and both sides are blocked', () {
     final s = LidarAnalysis().analyzeScan(
       render(boxes: [wall(1.2), sideWall(-0.7), sideWall(0.7)]),
@@ -647,26 +748,23 @@ void warningTests() {
   });
 
   group('LidarWarning wall threshold', () {
-    test(
-      'LidarWarning with wall: true warns only at 0.5 m with hysteresis to 0.6 m',
-      () {
-        final w = LidarWarning();
-        var t = DateTime(2026, 11, 13, 12, 0, 0);
+    test('LidarWarning with wall: true warns only at 0.5 m with hysteresis to 0.6 m', () {
+      final w = LidarWarning();
+      var t = DateTime(2026, 11, 13, 12, 0, 0);
 
-        AlertLevel step(double d, {bool wall = true}) {
-          t = t.add(const Duration(milliseconds: 100));
-          w.update(LidarObstacle(d), t, wall: wall);
-          t = t.add(const Duration(milliseconds: 100));
-          return w.update(LidarObstacle(d), t, wall: wall);
-        }
+      AlertLevel step(double d, {bool wall = true}) {
+        t = t.add(const Duration(milliseconds: 100));
+        w.update(LidarObstacle(d), t, wall: wall);
+        t = t.add(const Duration(milliseconds: 100));
+        return w.update(LidarObstacle(d), t, wall: wall);
+      }
 
-        expect(step(1.4, wall: true), AlertLevel.info);
-        expect(step(0.7, wall: true), AlertLevel.info);
-        expect(step(0.45, wall: true), AlertLevel.danger);
-        expect(step(0.55, wall: true), AlertLevel.danger);
-        expect(step(0.65, wall: true), AlertLevel.info);
-      },
-    );
+      expect(step(1.4, wall: true), AlertLevel.info);
+      expect(step(0.7, wall: true), AlertLevel.info);
+      expect(step(0.45, wall: true), AlertLevel.danger);
+      expect(step(0.55, wall: true), AlertLevel.danger);
+      expect(step(0.65, wall: true), AlertLevel.info);
+    });
 
     test('LidarWarning with wall: false at 0.9 m gives danger as before', () {
       final w = LidarWarning();
@@ -688,17 +786,11 @@ void warningTests() {
     test('remembers a clear side when the lane leaves the view', () {
       final latch = SideLatch();
       expect(
-        latch.update(
-          const LidarObstacle(2.0),
-          (left: blocked, right: clear),
-        ),
+        latch.update(const LidarObstacle(2.0), (left: blocked, right: clear)),
         (left: blocked, right: clear),
       );
       expect(
-        latch.update(
-          const LidarObstacle(1.0),
-          (left: unknown, right: unknown),
-        ),
+        latch.update(const LidarObstacle(1.0), (left: unknown, right: unknown)),
         (left: unknown, right: clear),
       );
     });
