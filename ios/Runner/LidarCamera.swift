@@ -344,6 +344,10 @@ final class LidarCameraPlugin: NSObject, FlutterPlugin, FlutterStreamHandler,
       "cx": Double(k.columns.2.x) * sx,
       "cy": Double(k.columns.2.y) * sy,
       "up": up,
+      // Phone on the floor plane of ARKit's world: position (x, z) and the
+      // horizontal viewing direction (the camera looks along -z).
+      "pos": [Double(t.columns.3.x), Double(t.columns.3.z)],
+      "head": [Double(-t.columns.2.x), Double(-t.columns.2.z)],
       "tracking": tracking,
       "thermal": thermal.rawValue,
     ])

@@ -294,6 +294,120 @@ void main() {
       expect(walk.onScan(at(2600), gone), WalkCue.stepLeft);
     });
 
+    group('with an ARKit pose', () {
+      // World heading +x; the user's right is world +z (left = up × forward).
+      LidarPose pose(double x, double z) =>
+          LidarPose(x: x, z: z, headX: 1, headZ: 0);
+      // Bag in the room: x 1.0–1.4 ahead, z -0.25–0.25 across.
+      const frontCells = [1.0, -0.2, 1.0, -0.1, 1.0, 0.0, 1.0, 0.1, 1.0, 0.2];
+      LidarScan scan(
+        LidarReading centre,
+        LidarPose p, [
+        List<double> c = const [],
+      ]) => LidarScan(
+        const LidarClear(),
+        centre,
+        const LidarClear(),
+        cells: c,
+        pose: p,
+      );
+
+      void stepRightWithPose() {
+        collect();
+        for (var i = 0; i < 5; i++) {
+          walk.onScan(
+            at(i * 100),
+            scan(
+              const LidarObstacle(1.0, rightGap: 0.3),
+              pose(0, 0),
+              frontCells,
+            ),
+          );
+        }
+        expect(walk.phase, WalkPhase.sidestep);
+        walk.onScan(at(600), scan(const LidarClear(), pose(0, 0.55)));
+        walk.onScan(at(700), scan(const LidarClear(), pose(0, 0.55)));
+        expect(walk.phase, WalkPhase.passing);
+      }
+
+      test('steps back only once past the far edge seen on the side face', () {
+        stepRightWithPose();
+        // From z 0.55 the bag's side face (z 0.25) is 0.3 m to the left.
+        const side = [0.4, 0.3, 0.5, 0.3, 0.6, 0.3, 0.7, 0.3, 0.8, 0.3];
+        expect(
+          walk.onScan(
+            at(1000),
+            scan(const LidarClear(), pose(0.6, 0.55), side),
+          ),
+          isNull,
+        );
+        expect(
+          walk.onScan(at(1500), scan(const LidarClear(), pose(1.0, 0.55))),
+          isNull,
+        );
+        // The old rule (side gone for a second) would step back here, beside the bag.
+        expect(
+          walk.onScan(at(2000), scan(const LidarClear(), pose(1.5, 0.55))),
+          isNull,
+        );
+        expect(
+          walk.onScan(at(2500), scan(const LidarClear(), pose(1.69, 0.55))),
+          isNull,
+        );
+        expect(
+          walk.onScan(at(3000), scan(const LidarClear(), pose(1.75, 0.55))),
+          WalkCue.stepLeft,
+        );
+        expect(walk.phase, WalkPhase.straight);
+      });
+
+      test('without the side face it assumes the obstacle is 0.6 m deep', () {
+        stepRightWithPose();
+        expect(
+          walk.onScan(at(1000), scan(const LidarClear(), pose(1.75, 0.55))),
+          isNull,
+        );
+        expect(
+          walk.onScan(at(1500), scan(const LidarClear(), pose(1.95, 0.55))),
+          WalkCue.stepLeft,
+        );
+      });
+
+      test('cells away from the obstacle do not move its far edge', () {
+        stepRightWithPose();
+        // A desk row 0.5 m further right (world z 1.05), reaching x 3.0.
+        const desk = [1.0, -0.5, 2.0, -0.5, 2.4, -0.5];
+        const side = [0.4, 0.3, 0.8, 0.3];
+        walk.onScan(
+          at(1000),
+          scan(const LidarClear(), pose(0.6, 0.55), [...side, ...desk]),
+        );
+        expect(
+          walk.onScan(at(1500), scan(const LidarClear(), pose(1.75, 0.55))),
+          WalkCue.stepLeft,
+        );
+      });
+
+      test('a frame without a pose decides nothing', () {
+        stepRightWithPose();
+        expect(
+          walk.onScan(
+            at(1000),
+            const LidarScan(LidarClear(), LidarClear(), LidarClear()),
+          ),
+          isNull,
+        );
+        expect(
+          walk.onScan(
+            at(2500),
+            const LidarScan(LidarClear(), LidarClear(), LidarClear()),
+          ),
+          isNull,
+        );
+        expect(walk.phase, WalkPhase.passing);
+      });
+    });
+
     test('a new danger while passing collects again', () {
       stepRightThenPass();
       expect(

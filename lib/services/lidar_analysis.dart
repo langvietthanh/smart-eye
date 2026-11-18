@@ -19,6 +19,7 @@ class LidarDepthFrame {
     required this.upZ,
     this.trackingAvailable = true,
     this.thermalState = 0,
+    this.pose,
   });
 
   final int width;
@@ -42,6 +43,23 @@ class LidarDepthFrame {
 
   /// ProcessInfo.ThermalState raw value: 0 nominal … 3 critical.
   final int thermalState;
+
+  /// Where ARKit puts the phone in the room, or null when not sent.
+  final LidarPose? pose;
+}
+
+/// The phone's place in the room from ARKit, on the floor plane: position
+/// [x], [z] (metres) and the horizontal viewing direction [headX], [headZ]
+/// (not normalised). With up = +y, "left" is (headZ, -headX).
+class LidarPose {
+  const LidarPose({
+    required this.x,
+    required this.z,
+    required this.headX,
+    required this.headZ,
+  });
+
+  final double x, z, headX, headZ;
 }
 
 sealed class LidarReading {
@@ -101,7 +119,13 @@ class LidarUnknown extends LidarReading {
 
 /// Readings for the corridors to the left, centre and right of the user.
 class LidarScan {
-  const LidarScan(this.left, this.center, this.right);
+  const LidarScan(
+    this.left,
+    this.center,
+    this.right, {
+    this.cells = const [],
+    this.pose,
+  });
 
   final LidarReading left, center, right;
 
@@ -110,6 +134,13 @@ class LidarScan {
     HPos.center => center,
     HPos.right => right,
   };
+
+  /// Occupied [LidarAnalysis.cellSize] cells around the user, flattened as
+  /// forward, side, forward, side… (phone coordinates, side > 0 = left).
+  final List<double> cells;
+
+  /// The frame's ARKit pose, to place [cells] in the room.
+  final LidarPose? pose;
 
   static const unknown = LidarScan(
     LidarUnknown(),
@@ -183,6 +214,13 @@ class LidarAnalysis {
   static const headroom = 0.4;
   static const minForward = 0.2;
   static const maxForward = 4.0;
+
+  /// Obstacle cells for the room memory of a bypass: this far ahead and to
+  /// each side, in cells this wide, each needing a few sampled hits.
+  static const cellReach = 3.0;
+  static const cellSideReach = 1.2;
+  static const cellSize = 0.1;
+  static const cellMinPoints = 2;
 
   /// Full-resolution points needed before something counts as an obstacle.
   static const minPoints = 150;
@@ -401,7 +439,40 @@ class LidarAnalysis {
         ),
       );
     }
-    return LidarScan(_nearest(left, needed), center, _nearest(right, needed));
+    // Obstacle cells around the user, for the bypass memory (room coords
+    // are worked out by WalkState from the frame's pose).
+    final cellHits = <int, int>{};
+    const sideCells = 1000;
+    for (var i = 0; i < count; i++) {
+      final forward = forwards[i], side = sides[i], height = heights[i];
+      if (forward < minForward ||
+          forward > cellReach ||
+          side.abs() > cellSideReach ||
+          height < low ||
+          height > headroom) {
+        continue;
+      }
+      final key =
+          (forward / cellSize).floor() * sideCells +
+          (side / cellSize).floor() +
+          sideCells ~/ 2;
+      cellHits[key] = (cellHits[key] ?? 0) + 1;
+    }
+    final cells = <double>[];
+    cellHits.forEach((key, hits) {
+      if (hits < cellMinPoints) return;
+      final fi = key ~/ sideCells, si = key % sideCells - sideCells ~/ 2;
+      cells
+        ..add((fi + 0.5) * cellSize)
+        ..add((si + 0.5) * cellSize);
+    });
+    return LidarScan(
+      _nearest(left, needed),
+      center,
+      _nearest(right, needed),
+      cells: cells,
+      pose: f.pose,
+    );
   }
 
   /// Nearest obstacle ahead, skipping a surface the user walks along rather

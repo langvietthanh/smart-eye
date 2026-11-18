@@ -1,3 +1,5 @@
+import 'dart:math';
+
 import '../models/scene_info.dart';
 import 'lidar_analysis.dart';
 
@@ -37,9 +39,22 @@ class WalkState {
   /// Frames with the way ahead open that end the sidestep.
   static const centreClearFrames = 2;
 
-  /// Old side out of sight this long before stepping back: a time estimate
-  /// of walking past the obstacle (no position tracking yet).
+  /// Without an ARKit pose: old side out of sight this long before stepping
+  /// back (a time estimate of walking past the obstacle).
   static const passDelay = Duration(seconds: 1);
+
+  /// With a pose: depth assumed until the obstacle's side face is seen
+  /// (LiDAR never sees its far edge from the front).
+  static const memoryDepth = 0.6;
+
+  /// Step back once this far past the obstacle's far edge.
+  static const passMargin = 0.3;
+
+  /// Room cells join the remembered obstacle only within this much of it
+  /// across, and up to [memoryReach] beyond its far edge, so a desk row
+  /// alongside does not stretch it.
+  static const memoryAcross = 0.15;
+  static const memoryReach = 0.6;
 
   static const collectTimeout = Duration(seconds: 2);
   static const sidestepTimeout = Duration(seconds: 5);
@@ -51,6 +66,13 @@ class WalkState {
   int _frames = 0, _leftVotes = 0, _rightVotes = 0;
   int _clearFrames = 0;
   DateTime? _goneSince;
+
+  // Room memory of the obstacle being bypassed, in a path frame fixed when
+  // it was first seen: along = metres ahead of that spot, across = left.
+  LidarPose? _origin;
+  double _hx = 0, _hz = 0;
+  double? _near, _far;
+  double _acrossMin = 0, _acrossMax = 0;
 
   WalkPhase get phase => _phase;
 
@@ -102,6 +124,7 @@ class WalkState {
           return WalkCue.goStraight;
         }
         if (centre is! LidarObstacle) return null;
+        _remember(scan, seed: centre.distance);
         _frames++;
         if (centre.leftGap >= sidestepGapMin - 1e-9) _leftVotes++;
         if (centre.rightGap >= sidestepGapMin - 1e-9) _rightVotes++;
@@ -111,6 +134,7 @@ class WalkState {
         _enter(WalkPhase.findWay);
         return WalkCue.findWay;
       case WalkPhase.sidestep:
+        _remember(scan);
         final centre = scan.center;
         final open =
             centre is LidarClear ||
@@ -121,6 +145,17 @@ class WalkState {
         return WalkCue.goStraight;
       case WalkPhase.passing:
         final oldSide = _stepSide == HPos.right ? HPos.left : HPos.right;
+        if (_origin != null) {
+          // ARKit knows where the user is: step back only once past the
+          // remembered far edge. No pose this frame: decide nothing.
+          final pose = scan.pose;
+          if (pose == null) return null;
+          _remember(scan);
+          final far = max(_far!, _near! + memoryDepth * (_sideSeen ? 0 : 1));
+          if (_along(pose.x, pose.z) < far + passMargin) return null;
+          _enter(WalkPhase.straight);
+          return oldSide == HPos.left ? WalkCue.stepLeft : WalkCue.stepRight;
+        }
         if (scan[oldSide] is LidarObstacle) {
           final wasGone = _goneSince != null;
           _goneSince = null;
@@ -197,6 +232,66 @@ class WalkState {
         phase == WalkPhase.findWay ||
         phase == WalkPhase.collect) {
       _stepSide = null;
+      _origin = null;
+      _near = _far = null;
+    }
+  }
+
+  /// The side face has been seen when cells reach past the front.
+  bool get _sideSeen => _far! > _near! + 0.1;
+
+  double _along(double x, double z) =>
+      (x - _origin!.x) * _hx + (z - _origin!.z) * _hz;
+
+  // left = up × forward = (hz, -hx) on the floor plane.
+  double _across(double x, double z) =>
+      (x - _origin!.x) * _hz - (z - _origin!.z) * _hx;
+
+  /// Adds this scan's obstacle cells to the room memory. [seed] (collect):
+  /// the centre obstacle's distance; only its front cells start the memory.
+  void _remember(LidarScan scan, {double? seed}) {
+    final pose = scan.pose;
+    if (pose == null) return;
+    final hl = sqrt(pose.headX * pose.headX + pose.headZ * pose.headZ);
+    if (hl < 1e-6) return;
+    final hx = pose.headX / hl, hz = pose.headZ / hl;
+    if (_origin == null) {
+      if (seed == null) return;
+      _origin = pose;
+      _hx = hx;
+      _hz = hz;
+    }
+    final c = scan.cells;
+    for (var i = 0; i + 1 < c.length; i += 2) {
+      final f = c[i], s = c[i + 1];
+      if (seed != null &&
+          (s.abs() > LidarAnalysis.halfWidth ||
+              f < seed - 0.1 ||
+              f > seed + memoryReach)) {
+        continue;
+      }
+      final x = pose.x + hx * f + hz * s, z = pose.z + hz * f - hx * s;
+      final along = _along(x, z), across = _across(x, z);
+      if (_near == null) {
+        if (seed == null) continue;
+        _near = _far = along;
+        _acrossMin = _acrossMax = across;
+        continue;
+      }
+      if (seed != null) {
+        _near = min(_near!, along);
+        _far = max(_far!, along);
+        _acrossMin = min(_acrossMin, across);
+        _acrossMax = max(_acrossMax, across);
+        continue;
+      }
+      if (across < _acrossMin - memoryAcross ||
+          across > _acrossMax + memoryAcross ||
+          along < _near! - 0.1 ||
+          along > _far! + memoryReach) {
+        continue;
+      }
+      _far = max(_far!, along);
     }
   }
 }

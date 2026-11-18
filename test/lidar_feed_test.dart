@@ -80,6 +80,20 @@ void main() {
     );
   });
 
+  test('ARKit pose parses when sent, else stays null', () {
+    final bytes = Float32List(8).buffer.asUint8List();
+    final frame = LidarFeed.depthFrame({
+      ...depthEvent(bytes),
+      'pos': [1.5, -2.0],
+      'head': [0.0, -1.0],
+    })!;
+    expect(frame.pose!.x, 1.5);
+    expect(frame.pose!.z, -2.0);
+    expect(frame.pose!.headX, 0.0);
+    expect(frame.pose!.headZ, -1.0);
+    expect(LidarFeed.depthFrame(depthEvent(bytes))!.pose, isNull);
+  });
+
   test('handle rotates like a sensor-90 back camera', () {
     final h = LidarHandle(1);
     expect(h.frameRotation, 90);

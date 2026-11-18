@@ -170,6 +170,27 @@ void sideLaneTests() {
     expect(r.right, SideState.clear);
   });
 
+  test('obstacle cells are reported in phone coordinates', () {
+    final s = LidarAnalysis().analyzeScan(render(boxes: [chair(1.8)]));
+    final cells = s.cells;
+    expect(cells.length.isEven, isTrue);
+    var front = false;
+    for (var i = 0; i < cells.length; i += 2) {
+      final f = cells[i], side = cells[i + 1];
+      expect(
+        f,
+        inInclusiveRange(LidarAnalysis.minForward, LidarAnalysis.cellReach),
+      );
+      if (f >= 1.75 && f <= 1.95 && side.abs() <= 0.3) front = true;
+    }
+    expect(front, isTrue, reason: 'chair front face cells');
+    expect(
+      LidarAnalysis().analyzeScan(render()).cells,
+      isEmpty,
+      reason: 'floor alone has no obstacle cells',
+    );
+  });
+
   test('a 35 cm gap in a 1 m aisle is too narrow', () {
     final r = obstacleOf(
       LidarAnalysis().analyze(
