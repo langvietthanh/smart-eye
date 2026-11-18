@@ -496,6 +496,33 @@ class _CameraScreenState extends State<CameraScreen>
         )) {
           _turns.reset();
         }
+      case WalkCue.turnBack:
+        if (_speech.sayNow(
+          turnBackText,
+          SpeechPriority.danger,
+          subject: 'path:turn',
+        )) {
+          _turns.reset();
+        }
+      case WalkCue.blocked:
+        final log = _eventLogger(TripEventType.danger, blockedText);
+        _speech.sayNow(
+          blockedText,
+          SpeechPriority.danger,
+          subject: 'path:turn',
+          onStart: () {
+            HapticFeedback.heavyImpact();
+            log();
+          },
+        );
+      case WalkCue.stepDone:
+        // Cuts into the step line: every extra step goes too far.
+        _speech.sayNow(
+          'Đi thẳng.',
+          SpeechPriority.danger,
+          subject: 'path:step',
+        );
+        _straightAt = now;
       case WalkCue.goStraight:
         _speech.dropSubject('path:turn');
         _speech.say(

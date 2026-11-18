@@ -96,14 +96,54 @@ void main() {
     expect(d.x.abs(), lessThan(0.15)); // back on the old line
   });
 
-  testWidgets('phone tilted 15°: no gap is seen once stopped, so find a way', (
+  // Held level (0°), a 42 cm bag leaves LiDAR's view under ~1.3 m, before
+  // any "Dừng lại!": the app asks for a slight downward tilt.
+  for (final pitch in [15.0, 30.0]) {
+    testWidgets('phone tilted $pitch°: demo classroom walked end to end', (
+      tester,
+    ) async {
+      Phone.pitchDeg = pitch;
+      addTearDown(() => Phone.pitchDeg = 15);
+      final d = await run(tester, named('Lớp học'), seconds: 60);
+      final said = d.heard.map((h) => h.text).toList();
+      expect(said.where((t) => t.startsWith('Bước ngang')).length, 4);
+      expect(said, isNot(contains(findWayTextForTest)));
+      expect(d.collisions, isEmpty);
+      expect(d.finished, isTrue);
+      expect(d.x.abs(), lessThan(0.2)); // back on the aisle's line
+    });
+  }
+
+  testWidgets('58 cm gap: not squeezed through, never walked back', (
     tester,
   ) async {
-    final d = await run(tester, named('Ghế giữa'), seconds: 12);
+    final d = await run(tester, named('Ghế chắn'), seconds: 40);
     final said = d.heard.map((h) => h.text).toList();
-    expect(said, contains('Dừng lại!'));
-    expect(said, contains(findWayTextForTest));
     expect(said.where((t) => t.startsWith('Bước ngang')), isEmpty);
+    expect(said, contains(findWayTextForTest));
+    expect(d.z, greaterThan(2.0));
+  });
+
+  testWidgets('chair in a wide corridor at 15°: stepped round, not turned', (
+    tester,
+  ) async {
+    final d = await run(tester, named('Ghế giữa'));
+    final said = d.heard.map((h) => h.text).toList();
+    expect(said.where((t) => t.startsWith('Bước ngang')).length, 2);
+    expect(d.collisions, isEmpty);
+    expect(d.finished, isTrue);
+  });
+
+  testWidgets('30 cm gaps: no squeezing in, never walked back', (tester) async {
+    final d = await run(tester, named('Lối hẹp'), seconds: 40);
+    final said = d.heard.map((h) => h.text).toList();
+    expect(said.where((t) => t.startsWith('Bước ngang')), isEmpty);
+    expect(said, contains(findWayTextForTest));
+    expect(said, contains('Xoay ngược lại.'));
+    expect(said, contains('Phía trước bị chặn. Dò gậy tìm lối khác.'));
+    expect(d.act, Act.blocked);
+    expect(d.z, greaterThan(2.0)); // still where it stopped, not back home
+    expect(d.collisions, isEmpty);
   });
 
   testWidgets('wall at the end: told to stop and turn', (tester) async {

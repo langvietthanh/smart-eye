@@ -13,7 +13,7 @@ import 'package:smart_eye/services/walk_state.dart';
 import 'sim_world.dart';
 
 /// What the simulated walker is doing.
-enum Act { walk, slow, stop, stepLeft, stepRight, turn, done }
+enum Act { walk, slow, stop, stepLeft, stepRight, turn, done, blocked }
 
 /// Forwards to the real voice and tells the walker what was said, exactly
 /// when the speech manager actually sends a line out.
@@ -59,7 +59,8 @@ class SimDriver {
 
   // Walker model: a careful walker with a cane.
   static const walkSpeed = 0.6, slowSpeed = 0.3; // m/s
-  static const stepWidth = 0.5; // one step aside, m
+  /// Sidesteps go on slowly until "Đi thẳng.", at most this far (m).
+  static const stepWidth = 0.8;
   static const turnRate = 35.0; // deg/s while finding a way
   static const bodyRadius = 0.22;
   static const lidarEvery = Duration(milliseconds: 100);
@@ -144,7 +145,8 @@ class SimDriver {
     _start = _now();
   }
 
-  bool get finished => act == Act.done;
+  /// Reached the end of the aisle, or told the way on is blocked.
+  bool get finished => act == Act.done || act == Act.blocked;
 
   /// Advances the walker by [dt] and runs LiDAR at ~10 Hz.
   void advance(Duration dt) {
@@ -197,11 +199,11 @@ class SimDriver {
         _forward(slowSpeed * s);
       case Act.stepLeft:
       case Act.stepRight:
-        final d = min(_stepLeftToGo, 0.5 * s); // a slow side step
+        final d = min(_stepLeftToGo, 0.35 * s); // slow, careful side steps
         _aside(act == Act.stepRight ? d : -d);
         _stepLeftToGo -= d;
         if (_stepLeftToGo <= 1e-6) {
-          // Back on the old line: carry on. Stepped aside: wait to be told.
+          // Never told to stop stepping: carry on if returning, else wait.
           act = _stepBack ? Act.walk : Act.stop;
           _stepBack = false;
         }
@@ -209,6 +211,7 @@ class SimDriver {
         yaw += _turnSign * turnRate * pi / 180 * s;
       case Act.stop:
       case Act.done:
+      case Act.blocked:
         break;
     }
   }
@@ -216,12 +219,17 @@ class SimDriver {
   /// The walker reacts to each line as it is spoken.
   void _heard(String text) {
     heard.add((at: _now().difference(_start), text: text));
-    if (!auto || act == Act.done) return;
-    if (text.startsWith('Bước ngang')) {
+    if (!auto || finished) return;
+    if (text.startsWith('Phía trước bị chặn')) {
+      act = Act.blocked; // stands still; going back is a choice it doesn't make
+    } else if (text.startsWith('Bước ngang')) {
       act = text.contains('phải') ? Act.stepRight : Act.stepLeft;
       _stepLeftToGo = stepWidth;
       _stepBack = _passingHeard;
       _passingHeard = false;
+    } else if (text.startsWith('Xoay ngược')) {
+      _turnSign = -_turnSign;
+      act = Act.turn;
     } else if (text.contains('Xoay')) {
       if (act != Act.turn) _turnSign = -_turnSign; // try the other way next
       act = Act.turn;
@@ -230,7 +238,7 @@ class SimDriver {
       _passingHeard = false;
     } else if (text.startsWith('Đi thẳng')) {
       if (walk.phase == WalkPhase.passing) _passingHeard = true;
-      if (act != Act.stepLeft && act != Act.stepRight) act = Act.walk;
+      act = Act.walk; // also ends a sidestep: far enough aside / back
     } else if (text.startsWith('Chậm lại') && act == Act.walk) {
       act = Act.slow;
     }
@@ -278,6 +286,19 @@ class SimDriver {
         )) {
           _turns.reset();
         }
+      case WalkCue.turnBack:
+        if (speech.sayNow(
+          turnBackText,
+          SpeechPriority.danger,
+          subject: 'path:turn',
+        )) {
+          _turns.reset();
+        }
+      case WalkCue.blocked:
+        speech.sayNow(blockedText, SpeechPriority.danger, subject: 'path:turn');
+      case WalkCue.stepDone:
+        speech.sayNow('Đi thẳng.', SpeechPriority.danger, subject: 'path:step');
+        _straightAt = now;
       case WalkCue.goStraight:
         speech.dropSubject('path:turn');
         speech.say(

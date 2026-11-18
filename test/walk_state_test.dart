@@ -1,3 +1,5 @@
+import 'dart:math';
+
 import 'package:flutter_test/flutter_test.dart';
 import 'package:smart_eye/models/scene_info.dart';
 import 'package:smart_eye/services/lidar_analysis.dart';
@@ -181,7 +183,7 @@ void main() {
 
     void stepRightThenPass() {
       collect();
-      feed(5, obstacle(rightGap: 0.3));
+      feed(5, obstacle(rightGap: 0.7));
       walk.onScan(
         at(600),
         const LidarScan(LidarClear(), LidarClear(), LidarClear()),
@@ -211,20 +213,20 @@ void main() {
     test('four of five frames with a right gap step right', () {
       collect();
       expect(feed(1, obstacle(rightGap: 0.1)), isNull);
-      expect(feed(3, obstacle(rightGap: 0.3), from: 100), isNull);
-      expect(walk.onScan(at(400), obstacle(rightGap: 0.3)), WalkCue.stepRight);
+      expect(feed(3, obstacle(rightGap: 0.7), from: 100), isNull);
+      expect(walk.onScan(at(400), obstacle(rightGap: 0.7)), WalkCue.stepRight);
       expect(walk.phase, WalkPhase.sidestep);
       expect(walk.stepSide, HPos.right);
     });
 
     test('both sides prefer right', () {
       collect();
-      expect(feed(5, obstacle(leftGap: 0.3, rightGap: 0.3)), WalkCue.stepRight);
+      expect(feed(5, obstacle(leftGap: 0.7, rightGap: 0.7)), WalkCue.stepRight);
     });
 
     test('a left gap steps left', () {
       collect();
-      expect(feed(5, obstacle(leftGap: 0.3)), WalkCue.stepLeft);
+      expect(feed(5, obstacle(leftGap: 0.7)), WalkCue.stepLeft);
       expect(walk.stepSide, HPos.left);
     });
 
@@ -236,15 +238,15 @@ void main() {
 
     test('unknown centre frames do not count', () {
       collect();
-      feed(4, obstacle(rightGap: 0.3));
+      feed(4, obstacle(rightGap: 0.7));
       expect(feed(3, LidarScan.unknown, from: 400), isNull);
       expect(walk.phase, WalkPhase.collect);
-      expect(walk.onScan(at(800), obstacle(rightGap: 0.3)), WalkCue.stepRight);
+      expect(walk.onScan(at(800), obstacle(rightGap: 0.7)), WalkCue.stepRight);
     });
 
     test('the obstacle leaving while collecting goes straight', () {
       collect();
-      feed(2, obstacle(rightGap: 0.3));
+      feed(2, obstacle(rightGap: 0.7));
       expect(
         walk.onScan(
           at(300),
@@ -257,7 +259,7 @@ void main() {
 
     test('centre clear two frames ends the sidestep', () {
       collect();
-      feed(5, obstacle(rightGap: 0.3));
+      feed(5, obstacle(rightGap: 0.7));
       const clear = LidarScan(LidarClear(), LidarClear(), LidarClear());
       expect(walk.onScan(at(600), clear), isNull);
       expect(walk.onScan(at(700), clear), WalkCue.goStraight);
@@ -266,8 +268,8 @@ void main() {
 
     test('an obstacle still close ahead keeps the sidestep going', () {
       collect();
-      feed(5, obstacle(rightGap: 0.3));
-      expect(feed(3, obstacle(rightGap: 0.3), from: 600), isNull);
+      feed(5, obstacle(rightGap: 0.7));
+      expect(feed(3, obstacle(rightGap: 0.7), from: 600), isNull);
       expect(walk.phase, WalkPhase.sidestep);
     });
 
@@ -318,7 +320,7 @@ void main() {
           walk.onScan(
             at(i * 100),
             scan(
-              const LidarObstacle(1.0, rightGap: 0.3),
+              const LidarObstacle(1.0, rightGap: 0.7),
               pose(0, 0),
               frontCells,
             ),
@@ -358,7 +360,56 @@ void main() {
           walk.onScan(at(3000), scan(const LidarClear(), pose(1.75, 0.55))),
           WalkCue.stepLeft,
         );
+        // "Đi thẳng." only once ARKit puts the user back on the old line.
+        expect(
+          walk.onScan(at(3500), scan(const LidarClear(), pose(1.9, 0.3))),
+          isNull,
+        );
+        expect(
+          walk.onScan(at(4000), scan(const LidarClear(), pose(2.0, 0.05))),
+          WalkCue.stepDone,
+        );
         expect(walk.phase, WalkPhase.straight);
+      });
+
+      test('the sidestep ends once the body clears the edge (pose)', () {
+        collect();
+        for (var i = 0; i < 5; i++) {
+          walk.onScan(
+            at(i * 100),
+            scan(
+              const LidarObstacle(1.0, rightGap: 0.7),
+              pose(0, 0),
+              frontCells,
+            ),
+          );
+        }
+        // Bag edge 0.2 m right of the line, 70 cm gap: stand in its middle,
+        // 0.35 m past the edge.
+        expect(
+          walk.onScan(at(600), scan(const LidarObstacle(1.0), pose(0, 0.5))),
+          isNull,
+        );
+        expect(
+          walk.onScan(at(700), scan(const LidarObstacle(1.0), pose(0, 0.56))),
+          WalkCue.stepDone,
+        );
+        expect(walk.phase, WalkPhase.passing);
+      });
+
+      test('a gap reaching across the walking line counts whole', () {
+        collect();
+        // Chair 0.2–0.5 m left of the line: 45 cm read on the right side
+        // plus the 20 cm between the line and the chair.
+        const chair = [1.0, 0.2, 1.0, 0.3, 1.0, 0.4];
+        WalkCue? cue;
+        for (var i = 0; i < 5; i++) {
+          cue = walk.onScan(
+            at(i * 100),
+            scan(const LidarObstacle(1.0, rightGap: 0.45), pose(0, 0), chair),
+          );
+        }
+        expect(cue, WalkCue.stepRight);
       });
 
       test('without the side face it assumes the obstacle is 0.6 m deep', () {
@@ -423,7 +474,7 @@ void main() {
         walk.onDanger(wall: false, sideOpen: false, canBypass: true),
         DangerAction.none,
       );
-      feed(5, obstacle(rightGap: 0.3));
+      feed(5, obstacle(rightGap: 0.7));
       expect(
         walk.onDanger(wall: false, sideOpen: false, canBypass: true),
         DangerAction.none,
@@ -442,10 +493,115 @@ void main() {
 
     test('sidestep timeout finds a way', () {
       collect();
-      feed(5, obstacle(rightGap: 0.3));
+      feed(5, obstacle(rightGap: 0.7));
       expect(
         walk.tick(at(5600), aheadOpen: false, turning: false, turnedDegrees: 0),
         WalkCue.findWay,
+      );
+    });
+  });
+
+  group('gap seen on the way up', () {
+    DateTime at(int ms) => t0.add(Duration(milliseconds: ms));
+    LidarScan ahead(double d, {double left = 0, double right = 0}) => LidarScan(
+      const LidarClear(),
+      LidarObstacle(d, leftGap: left, rightGap: right),
+      const LidarClear(),
+    );
+    WalkCue? collectAt(int from, LidarScan scan) {
+      walk.onDanger(wall: false, sideOpen: false, canBypass: true);
+      WalkCue? last;
+      for (var i = 0; i < 5; i++) {
+        last = walk.onScan(at(from + i * 100), scan);
+      }
+      return last;
+    }
+
+    test('steps into the gap seen at 1.5 m though it reads 0 up close', () {
+      walk.onScan(at(0), ahead(1.5, right: 0.7));
+      walk.onScan(at(500), ahead(1.0, right: 0.3));
+      expect(collectAt(1000, ahead(0.9)), WalkCue.stepRight);
+    });
+
+    test('a gap under 65 cm is not stepped into', () {
+      walk.onScan(at(0), ahead(1.5, right: 0.58));
+      expect(collectAt(500, ahead(0.9)), WalkCue.findWay);
+    });
+
+    test('a gap seen more than 3 s ago is not used', () {
+      walk.onScan(at(0), ahead(1.5, right: 0.7));
+      expect(collectAt(3500, ahead(0.9)), WalkCue.findWay);
+    });
+
+    test('a cleared way or another obstacle forgets the gap', () {
+      walk.onScan(at(0), ahead(1.5, right: 0.7));
+      walk.onScan(
+        at(100),
+        const LidarScan(LidarClear(), LidarClear(), LidarClear()),
+      );
+      expect(collectAt(200, ahead(0.9)), WalkCue.findWay);
+      walk.reset();
+      walk.onScan(at(1000), ahead(1.5, left: 0.7));
+      walk.onScan(at(1100), ahead(2.4)); // turned to something further
+      expect(collectAt(1200, ahead(0.9)), WalkCue.findWay);
+    });
+  });
+
+  group('finding a way stays ahead first', () {
+    DateTime at(int ms) => t0.add(Duration(milliseconds: ms));
+    LidarScan facing(double deg) {
+      final r = deg * pi / 180;
+      // ARKit heading: the camera looks along -z; turning right is +x.
+      return LidarScan(
+        const LidarClear(),
+        const LidarUnknown(),
+        const LidarClear(),
+        pose: LidarPose(x: 0, z: 0, headX: sin(r), headZ: -cos(r)),
+      );
+    }
+
+    WalkCue? tickOpen(int ms) =>
+        walk.tick(at(ms), aheadOpen: true, turning: true, turnedDegrees: 0);
+
+    setUp(() {
+      walk.onScan(at(0), facing(0));
+      walk.onDanger(wall: true, sideOpen: false, canBypass: false);
+    });
+
+    test('an open way within 100° is taken', () {
+      walk.onScan(at(100), facing(80));
+      tickOpen(100);
+      expect(tickOpen(400), WalkCue.goStraight);
+    });
+
+    test('past 100° one way: try the other side before turning back', () {
+      walk.onScan(at(100), facing(120));
+      expect(tickOpen(100), WalkCue.turnBack);
+      expect(tickOpen(500), isNull); // open behind, not taken yet
+      walk.onScan(at(600), facing(-60));
+      tickOpen(600);
+      expect(tickOpen(900), WalkCue.goStraight);
+    });
+
+    test('nothing open within 100° either side: blocked, never sent back', () {
+      walk.onScan(at(100), facing(120));
+      expect(tickOpen(100), WalkCue.turnBack);
+      // Open behind (170° round): not taken, not called "Đi thẳng.".
+      walk.onScan(at(400), facing(170));
+      expect(tickOpen(400), isNull);
+      expect(tickOpen(800), isNull);
+      walk.onScan(at(1000), facing(-110));
+      expect(tickOpen(1000), WalkCue.blocked);
+      expect(walk.phase, WalkPhase.straight);
+    });
+
+    test('without a pose the old rule holds', () {
+      final w = WalkState();
+      w.onDanger(wall: true, sideOpen: false, canBypass: false);
+      w.tick(at(0), aheadOpen: true, turning: true, turnedDegrees: 0);
+      expect(
+        w.tick(at(300), aheadOpen: true, turning: true, turnedDegrees: 0),
+        WalkCue.goStraight,
       );
     });
   });

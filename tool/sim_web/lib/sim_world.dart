@@ -111,14 +111,25 @@ List<Box> _room(double length) => [
 final presets = <Preset>[
   Preset(
     'Lớp học như ảnh demo',
-    'Lối giữa hai dãy bàn có người ngồi (~1 m). Một ghế bị kéo ra lối ở bên trái, '
-        'một ba lô dựng ở bên phải.',
+    'Lối giữa hai dãy bàn có người ngồi (~1 m). Một ghế bị kéo ra lối 30 cm ở '
+        'bên trái, một ba lô dựng ở bên phải: mỗi lần còn khe khoảng 70 cm.',
+    [
+      ..._room(9),
+      ..._row(-1, 0.5, 9),
+      ..._row(1, 0.5, 9),
+      const Box(Kind.chair, -0.5, 0, 3.6, -0.2, _chairH, 4.0),
+      const Box(Kind.bag, 0.2, 0, 6.2, 0.5, 0.42, 6.45),
+    ],
+  ),
+  Preset(
+    'Ghế chắn nửa lối (khe 58 cm)',
+    'Ghế kéo ra 42 cm, chỉ còn khe 58 cm: gần bằng vai. App không bảo lách '
+        'qua mà chuyển sang tìm lối.',
     [
       ..._room(9),
       ..._row(-1, 0.5, 9),
       ..._row(1, 0.5, 9),
       const Box(Kind.chair, -0.5, 0, 3.6, -0.08, _chairH, 4.0),
-      const Box(Kind.bag, 0.12, 0, 6.2, 0.45, 0.42, 6.45),
     ],
   ),
   Preset(

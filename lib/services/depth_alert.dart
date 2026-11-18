@@ -49,6 +49,12 @@ const findWayText = 'Dừng lại! Xoay người tìm lối.';
 /// Spoken periodically while turning during a trap / find-way phase.
 const turnOnText = 'Xoay tiếp.';
 
+/// Turned far enough one way with no way found: try the other side.
+const turnBackText = 'Xoay ngược lại.';
+
+/// No way on towards the goal on either side.
+const blockedText = 'Phía trước bị chặn. Dò gậy tìm lối khác.';
+
 /// Nối câu hai bên vào cảnh báo của YOLO, chỉ khi vật nằm ở giữa: với vật
 /// bên trái/phải, câu "bên ... trống" dễ mâu thuẫn với chính cảnh báo.
 String withSideClause(

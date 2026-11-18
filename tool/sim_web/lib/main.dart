@@ -487,6 +487,7 @@ class _SidePanel extends StatelessWidget {
     Act.stepRight => 'bước ngang phải',
     Act.turn => 'đang xoay',
     Act.done => 'đã tới cuối lối',
+    Act.blocked => 'đứng yên: lối phía trước bị chặn',
   };
 }
 
