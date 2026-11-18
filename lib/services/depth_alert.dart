@@ -43,8 +43,11 @@ SideState monoSide(double closeness, double columnLoad) {
       : SideState.unknown;
 }
 
+/// The find-way prompt once "Dừng lại!" was already said (no gap beside).
+const turnFindText = 'Xoay tìm lối.';
+
 /// The find-way prompt: obstacle ahead with no open way.
-const findWayText = 'Dừng lại! Xoay người tìm lối.';
+const findWayText = 'Dừng lại! $turnFindText';
 
 /// Spoken periodically while turning during a trap / find-way phase.
 const turnOnText = 'Xoay tiếp.';
@@ -54,22 +57,20 @@ const turnBackText = 'Xoay ngược lại.';
 
 /// Facing a wall: stop and turn, towards [turn] when LiDAR can tell.
 String wallTurnText(HPos? turn) => switch (turn) {
-  HPos.left => 'Dừng lại! Tường phía trước. Quay sang trái.',
-  HPos.right => 'Dừng lại! Tường phía trước. Quay sang phải.',
-  _ => 'Dừng lại! Tường phía trước. Xoay trái hoặc phải để tìm lối.',
+  HPos.left => 'Dừng lại! Tường phía trước. Quay trái.',
+  HPos.right => 'Dừng lại! Tường phía trước. Quay phải.',
+  _ => 'Dừng lại! Tường phía trước. $turnFindText',
 };
 
 /// Sidestep cue; [squeeze]: the gap is narrower than a comfortable step
-/// through, so the user turns their shoulders to pass.
+/// through. Short: the step is ended by "Đi thẳng." cutting in.
 String stepText(HPos side, {bool squeeze = false}) {
-  final way = side == HPos.right ? 'phải' : 'trái';
-  return squeeze
-      ? 'Khe hẹp. Bước ngang sang $way, nghiêng người lách qua.'
-      : 'Bước ngang sang $way.';
+  final step = 'Bước ngang sang ${side == HPos.right ? 'phải' : 'trái'}.';
+  return squeeze ? 'Khe hẹp. $step' : step;
 }
 
 /// No way on towards the goal on either side.
-const blockedText = 'Phía trước bị chặn. Dò gậy tìm lối khác.';
+const blockedText = 'Phía trước bị chặn.';
 
 /// Nối câu hai bên vào cảnh báo của YOLO, chỉ khi vật nằm ở giữa: với vật
 /// bên trái/phải, câu "bên ... trống" dễ mâu thuẫn với chính cảnh báo.

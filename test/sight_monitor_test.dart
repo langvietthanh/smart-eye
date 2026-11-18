@@ -81,7 +81,7 @@ void main() {
 
       SightProblem.noDepth.message,
 
-      'Không đo được khoảng cách. Đi chậm, dùng gậy.',
+      'Không đo được khoảng cách. Đi chậm.',
 
     );
     m.onDepth(at(1200), known: true);
@@ -102,11 +102,11 @@ void main() {
   test('aiming problems have updated message and stopsUser', () {
     expect(
       SightProblem.pointingDown.message,
-      'Dừng lại! Máy đang chĩa xuống sàn. Nâng máy lên.',
+      'Dừng lại! Nâng máy lên.',
     );
     expect(
       SightProblem.pointingUp.message,
-      'Dừng lại! Máy đang chĩa lên cao. Hạ máy xuống.',
+      'Dừng lại! Hạ máy xuống.',
     );
     expect(SightProblem.pointingDown.stopsUser, isTrue);
     expect(SightProblem.pointingUp.stopsUser, isTrue);

@@ -559,7 +559,7 @@ void main() {
       expect(WalkState.edgeOnly(const LidarObstacle(0.8)), isFalse);
       expect(
         stepText(HPos.right, squeeze: true),
-        'Khe hẹp. Bước ngang sang phải, nghiêng người lách qua.',
+        'Khe hẹp. Bước ngang sang phải.',
       );
       expect(stepText(HPos.left), 'Bước ngang sang trái.');
     });
@@ -703,12 +703,9 @@ void main() {
     test('spoken lines', () {
       expect(
         wallTurnText(HPos.right),
-        'Dừng lại! Tường phía trước. Quay sang phải.',
+        'Dừng lại! Tường phía trước. Quay phải.',
       );
-      expect(
-        wallTurnText(null),
-        'Dừng lại! Tường phía trước. Xoay trái hoặc phải để tìm lối.',
-      );
+      expect(wallTurnText(null), 'Dừng lại! Tường phía trước. Xoay tìm lối.');
     });
   });
 }

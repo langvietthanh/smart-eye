@@ -532,7 +532,7 @@ class _CameraScreenState extends State<CameraScreen>
         );
         _straightAt = now;
       case WalkCue.findWay:
-        _sayFindWay();
+        _sayFindWay(stopped: true);
       case WalkCue.stepRight:
       case WalkCue.stepLeft:
         _speech.sayNow(
@@ -548,10 +548,13 @@ class _CameraScreenState extends State<CameraScreen>
   }
 
   /// [wall]: say it is a wall, and which way to turn when LiDAR can tell.
-  void _sayFindWay({bool wall = false}) {
+  /// [stopped]: "Dừng lại!" was just said, so do not say it again.
+  void _sayFindWay({bool wall = false, bool stopped = false}) {
     final scan = _lidarScan;
     final text = wall && scan != null
         ? wallTurnText(WalkState.turnHint(scan))
+        : stopped
+        ? turnFindText
         : findWayText;
     final log = _eventLogger(TripEventType.danger, text);
     final spoken = _speech.sayNow(
@@ -1078,10 +1081,9 @@ class _CameraScreenState extends State<CameraScreen>
     _lastAlertAt = DateTime.now();
     if (isDanger) _lastDangerAt = _lastAlertAt;
     final text = switch (kind) {
-      StepKind.down => 'Dừng lại! Có bậc xuống phía trước. Dò bằng gậy.',
-      StepKind.up when isDanger =>
-        'Dừng lại! Bậc lên ngay phía trước. Dò bằng gậy.',
-      StepKind.up => 'Chú ý, phía trước có bậc lên. Đi chậm lại.',
+      StepKind.down => 'Dừng lại! Có bậc xuống.',
+      StepKind.up when isDanger => 'Dừng lại! Có bậc lên.',
+      StepKind.up => 'Chậm lại. Có bậc lên.',
     };
     final log = _eventLogger(
       isDanger ? TripEventType.danger : TripEventType.caution,

@@ -107,7 +107,7 @@ void main() {
       final d = await run(tester, named('Lớp học'), seconds: 60);
       final said = d.heard.map((h) => h.text).toList();
       expect(said.where((t) => t.startsWith('Bước ngang')).length, 4);
-      expect(said, isNot(contains(findWayTextForTest)));
+      expect(said.any((t) => t.contains(findWayTextForTest)), isFalse);
       expect(d.collisions, isEmpty);
       expect(d.finished, isTrue);
       expect(d.x.abs(), lessThan(0.2)); // back on the aisle's line
@@ -122,12 +122,9 @@ void main() {
       addTearDown(() => Phone.pitchDeg = 15);
       final d = await run(tester, named('Ghế chắn'), seconds: 45);
       final said = d.heard.map((h) => h.text).toList();
-      expect(
-        said,
-        contains('Khe hẹp. Bước ngang sang phải, nghiêng người lách qua.'),
-      );
+      expect(said, contains('Khe hẹp. Bước ngang sang phải.'));
       expect(said, contains('Bước ngang sang trái.'));
-      expect(said, isNot(contains(findWayTextForTest)));
+      expect(said.any((t) => t.contains(findWayTextForTest)), isFalse);
       expect(d.collisions, isEmpty);
       expect(d.finished, isTrue);
       expect(d.x.abs(), lessThan(0.15));
@@ -148,9 +145,9 @@ void main() {
     final d = await run(tester, named('Lối hẹp'), seconds: 40);
     final said = d.heard.map((h) => h.text).toList();
     expect(said.where((t) => t.startsWith('Bước ngang')), isEmpty);
-    expect(said, contains(findWayTextForTest));
+    expect(said.any((t) => t.contains(findWayTextForTest)), isTrue);
     expect(said, contains('Xoay ngược lại.'));
-    expect(said, contains('Phía trước bị chặn. Dò gậy tìm lối khác.'));
+    expect(said, contains('Phía trước bị chặn.'));
     expect(d.act, Act.blocked);
     expect(d.z, greaterThan(2.0)); // still where it stopped, not back home
     expect(d.collisions, isEmpty);
@@ -164,4 +161,5 @@ void main() {
   });
 }
 
-const findWayTextForTest = 'Dừng lại! Xoay người tìm lối.';
+// In both find-way lines, with or without "Dừng lại!" first.
+const findWayTextForTest = 'Xoay tìm lối.';

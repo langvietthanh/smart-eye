@@ -243,7 +243,7 @@ class NavigationGuide {
     final arrived = _observe(target, frame, lidar, now);
     if (arrived) {
       return _end(
-        'Đã tới. ${_capitalized(_nameVi)} ngay trước mặt. Dò bằng gậy.',
+        'Đã tới. ${_capitalized(_nameVi)} ngay trước mặt.',
         NavEnd.arrived,
       );
     }
@@ -313,7 +313,7 @@ class NavigationGuide {
         (box.bottom >= edgeBottom || box.height > edgeHeight) &&
         dx.abs() < edgeDx) {
       return _end(
-        '${_capitalized(_nameVi)} ngay trước mặt, rất gần. Dò bằng gậy.',
+        '${_capitalized(_nameVi)} ngay trước mặt, rất gần.',
         NavEnd.arrived,
       );
     }
@@ -322,7 +322,7 @@ class NavigationGuide {
         lidar is LidarObstacle &&
         lidar.distance <= lidarArrivalMeters) {
       return _end(
-        'Đã tới. ${_capitalized(_nameVi)} ngay trước mặt. Dò bằng gậy.',
+        'Đã tới. ${_capitalized(_nameVi)} ngay trước mặt.',
         NavEnd.arrived,
       );
     }

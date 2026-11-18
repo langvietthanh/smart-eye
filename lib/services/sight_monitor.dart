@@ -6,13 +6,11 @@ enum SightProblem { noResults, tooDark, pointingDown, pointingUp, noDepth }
 
 extension SightProblemText on SightProblem {
   String get message => switch (this) {
-    SightProblem.noResults =>
-      'Dừng lại! Camera không hoạt động, không thấy đường.',
-    SightProblem.tooDark => 'Dừng lại! Quá tối, không nhìn rõ.',
-    SightProblem.pointingDown =>
-      'Dừng lại! Máy đang chĩa xuống sàn. Nâng máy lên.',
-    SightProblem.pointingUp => 'Dừng lại! Máy đang chĩa lên cao. Hạ máy xuống.',
-    SightProblem.noDepth => 'Không đo được khoảng cách. Đi chậm, dùng gậy.',
+    SightProblem.noResults => 'Dừng lại! Camera không hoạt động.',
+    SightProblem.tooDark => 'Dừng lại! Quá tối.',
+    SightProblem.pointingDown => 'Dừng lại! Nâng máy lên.',
+    SightProblem.pointingUp => 'Dừng lại! Hạ máy xuống.',
+    SightProblem.noDepth => 'Không đo được khoảng cách. Đi chậm.',
   };
 
   /// Blind states stop the user; aiming problems only ask to adjust.

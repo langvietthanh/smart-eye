@@ -568,7 +568,7 @@ void main() {
   testWidgets('sayNow repeats a state line inside its cooldown', (
     tester,
   ) async {
-    // "Xoay tiếp." / "Dừng lại! Xoay người tìm lối." mark a state change: a
+    // "Xoay tiếp." / "Dừng lại! Xoay tìm lối." mark a state change: a
     // cooldown that silences them leaves the user turning with no guidance.
     final tts = FakeTts();
     final manager = managerFor(tester, tts);

@@ -229,9 +229,9 @@ class SimDriver {
       _passingHeard = false;
     } else if (text.contains('Tường phía trước')) {
       // Turn the way the app says; "Xoay trái hoặc phải" leaves it open.
-      if (text.contains('Quay sang phải')) {
+      if (text.contains('Quay phải')) {
         _turnSign = 1;
-      } else if (text.contains('Quay sang trái')) {
+      } else if (text.contains('Quay trái')) {
         _turnSign = -1;
       } else if (act != Act.turn) {
         _turnSign = -_turnSign;
@@ -318,7 +318,7 @@ class SimDriver {
         );
         _straightAt = now;
       case WalkCue.findWay:
-        _sayFindWay();
+        _sayFindWay(stopped: true);
       case WalkCue.stepRight:
       case WalkCue.stepLeft:
         speech.sayNow(
@@ -332,11 +332,13 @@ class SimDriver {
     }
   }
 
-  void _sayFindWay({bool wall = false}) {
+  void _sayFindWay({bool wall = false, bool stopped = false}) {
     final scan = lastScan;
     final spoken = speech.sayNow(
       wall && scan != null
           ? wallTurnText(WalkState.turnHint(scan))
+          : stopped
+          ? turnFindText
           : findWayText,
       SpeechPriority.danger,
       subject: 'path:findway',

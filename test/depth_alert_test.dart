@@ -4,7 +4,7 @@ import 'package:smart_eye/services/depth_alert.dart';
 
 void main() {
   test('constants have exact text', () {
-    expect(findWayText, 'Dừng lại! Xoay người tìm lối.');
+    expect(findWayText, 'Dừng lại! Xoay tìm lối.');
     expect(turnOnText, 'Xoay tiếp.');
   });
 

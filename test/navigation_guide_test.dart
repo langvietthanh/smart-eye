@@ -154,7 +154,7 @@ void main() {
     up(100, [chairAt(0.5, level: DistanceLevel.near)]);
     expect(
       up(200, [chairAt(0.5, level: DistanceLevel.near)])!.text,
-      'Đã tới. Ghế ngay trước mặt. Dò bằng gậy.',
+      'Đã tới. Ghế ngay trước mặt.',
     );
   });
 
@@ -291,7 +291,7 @@ void main() {
     test('tụt khỏi đáy khung khi near → tới nơi', () {
       up(0, [bigChair()]);
       final cue = up(200, [])!;
-      expect(cue.text, 'Ghế ngay trước mặt, rất gần. Dò bằng gậy.');
+      expect(cue.text, 'Ghế ngay trước mặt, rất gần.');
       expect(cue.force, true);
       expect(cue.end, NavEnd.arrived);
       expect(g.state, NavState.idle);
@@ -342,7 +342,7 @@ void main() {
     test('LiDAR ≤ 1 m khi đích biến mất sau near → tới nơi', () {
       up(0, [chairAt(0.5, level: DistanceLevel.near)]);
       final cue = up(200, [], lidar: const LidarObstacle(0.8))!;
-      expect(cue.text, 'Đã tới. Ghế ngay trước mặt. Dò bằng gậy.');
+      expect(cue.text, 'Đã tới. Ghế ngay trước mặt.');
       expect(cue.end, NavEnd.arrived);
       expect(cue.force, true);
     });
