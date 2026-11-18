@@ -114,17 +114,25 @@ void main() {
     });
   }
 
-  testWidgets('58 cm gap: not squeezed through, never walked back', (
-    tester,
-  ) async {
-    final d = await run(tester, named('Ghế chắn'), seconds: 40);
-    final said = d.heard.map((h) => h.text).toList();
-    expect(said.where((t) => t.startsWith('Bước ngang')), isEmpty);
-    expect(said, contains(findWayTextForTest));
-    expect(d.z, greaterThan(2.0));
-    // The 55 cm between two rows of desks is no way on any more.
-    expect(d.collisions, isEmpty);
-  });
+  for (final pitch in [15.0, 30.0]) {
+    testWidgets('58 cm gap at $pitch°: squeezed through, back on the line', (
+      tester,
+    ) async {
+      Phone.pitchDeg = pitch;
+      addTearDown(() => Phone.pitchDeg = 15);
+      final d = await run(tester, named('Ghế chắn'), seconds: 45);
+      final said = d.heard.map((h) => h.text).toList();
+      expect(
+        said,
+        contains('Khe hẹp. Bước ngang sang phải, nghiêng người lách qua.'),
+      );
+      expect(said, contains('Bước ngang sang trái.'));
+      expect(said, isNot(contains(findWayTextForTest)));
+      expect(d.collisions, isEmpty);
+      expect(d.finished, isTrue);
+      expect(d.x.abs(), lessThan(0.15));
+    });
+  }
 
   testWidgets('chair in a wide corridor at 15°: stepped round, not turned', (
     tester,

@@ -59,6 +59,15 @@ String wallTurnText(HPos? turn) => switch (turn) {
   _ => 'Dừng lại! Tường phía trước. Xoay trái hoặc phải để tìm lối.',
 };
 
+/// Sidestep cue; [squeeze]: the gap is narrower than a comfortable step
+/// through, so the user turns their shoulders to pass.
+String stepText(HPos side, {bool squeeze = false}) {
+  final way = side == HPos.right ? 'phải' : 'trái';
+  return squeeze
+      ? 'Khe hẹp. Bước ngang sang $way, nghiêng người lách qua.'
+      : 'Bước ngang sang $way.';
+}
+
 /// No way on towards the goal on either side.
 const blockedText = 'Phía trước bị chặn. Dò gậy tìm lối khác.';
 

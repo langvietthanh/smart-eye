@@ -52,6 +52,22 @@ class WalkState {
   /// It is taken from the walk up (see [approachNear]), where LiDAR sees it.
   static const sidestepGapMin = 2 * LidarAnalysis.coreHalfWidth + 0.10;
 
+  /// Narrower gaps down to this (shoulders) are squeezed through: the user
+  /// is told so and stood in the gap's middle, and the gap's sides do not
+  /// stop them ([edgeOnly]). Narrower than this, find a way instead.
+  static const squeezeGapMin = LidarAnalysis.gapMin;
+
+  /// While squeezing, an obstacle whose nearest hits are all at least this
+  /// far to one side of the walking line is the gap's side, not in the way.
+  static const squeezeEdge = 0.15;
+
+  /// Only the gap's sides ahead: nothing near the walking line.
+  static bool edgeOnly(LidarReading r) {
+    if (r is! LidarObstacle) return false;
+    final w = r.where;
+    return w != null && (w.sideMin > squeezeEdge || w.sideMax < -squeezeEdge);
+  }
+
   /// Gaps beside the obstacle ahead are remembered while it is this far
   /// away. After "Dừng lại!" (under ~1 m) the floor beside it has left
   /// LiDAR's view and the gap reads 0 (simulator, phone tilted 0–15°).
@@ -108,6 +124,7 @@ class WalkState {
   DateTime? _returningSince; // stepping back to the old line (pose only)
   double _bestLeft = 0, _bestRight = 0; // gaps used to pick the side
   double _stepGap = 0; // width of the gap stepped into
+  bool _squeeze = false;
 
   // Room memory of the obstacle being bypassed, in a path frame fixed when
   // it was first seen: along = metres ahead of that spot, across = left.
@@ -205,11 +222,16 @@ class WalkState {
             max(centre.rightGap, fresh ? _seenRight : 0.0) + reachRight;
         _bestLeft = max(_bestLeft, left);
         _bestRight = max(_bestRight, right);
-        if (left >= sidestepGapMin - 1e-9) _leftVotes++;
-        if (right >= sidestepGapMin - 1e-9) _rightVotes++;
+        if (left >= squeezeGapMin - 1e-9) _leftVotes++;
+        if (right >= squeezeGapMin - 1e-9) _rightVotes++;
         if (_frames < collectFrames) return null;
-        if (_rightVotes >= collectAgree) return _step(HPos.right, now);
-        if (_leftVotes >= collectAgree) return _step(HPos.left, now);
+        final rightOk = _rightVotes >= collectAgree;
+        final leftOk = _leftVotes >= collectAgree;
+        if (rightOk || leftOk) {
+          // The wider gap; right on a tie.
+          final right = rightOk && (!leftOk || _bestRight >= _bestLeft);
+          return _step(right ? HPos.right : HPos.left, now);
+        }
         _enter(WalkPhase.findWay);
         return WalkCue.findWay;
       case WalkPhase.sidestep:
@@ -336,12 +358,21 @@ class WalkState {
 
   /// How far past the obstacle's edge to stand: the middle of the gap,
   /// at least [stepClearance], at most a long step.
-  double get _stepOffset => max(stepClearance, min(_stepGap / 2, 0.45));
+  double get _stepOffset => _squeeze
+      // Its middle exactly (measured gaps read ~5 cm narrow).
+      ? max(0.23, _stepGap / 2 + 0.025)
+      : max(stepClearance, min(_stepGap / 2, 0.45));
+
+  /// Stepping into, or walking through, a gap narrower than
+  /// [sidestepGapMin]: say so, and let its sides by ([edgeOnly]).
+  bool get squeezing =>
+      _squeeze && (_phase == WalkPhase.sidestep || _phase == WalkPhase.passing);
 
   WalkCue _step(HPos side, DateTime now) {
     _stepGap = side == HPos.right ? _bestRight : _bestLeft;
     _enter(WalkPhase.sidestep, now);
     _stepSide = side;
+    _squeeze = _stepGap < sidestepGapMin - 1e-9;
     return side == HPos.right ? WalkCue.stepRight : WalkCue.stepLeft;
   }
 
@@ -359,6 +390,7 @@ class WalkState {
     if (phase == WalkPhase.straight ||
         phase == WalkPhase.findWay ||
         phase == WalkPhase.collect) {
+      _squeeze = false;
       _stepSide = null;
       _origin = null;
       _near = _far = null;

@@ -222,7 +222,7 @@ class SimDriver {
     if (!auto || finished) return;
     if (text.startsWith('Phía trước bị chặn')) {
       act = Act.blocked; // stands still; going back is a choice it doesn't make
-    } else if (text.startsWith('Bước ngang')) {
+    } else if (text.contains('Bước ngang')) {
       act = text.contains('phải') ? Act.stepRight : Act.stepLeft;
       _stepLeftToGo = stepWidth;
       _stepBack = _passingHeard;
@@ -322,9 +322,10 @@ class SimDriver {
       case WalkCue.stepRight:
       case WalkCue.stepLeft:
         speech.sayNow(
-          cue == WalkCue.stepRight
-              ? 'Bước ngang sang phải.'
-              : 'Bước ngang sang trái.',
+          stepText(
+            cue == WalkCue.stepRight ? HPos.right : HPos.left,
+            squeeze: walk.squeezing && walk.phase == WalkPhase.sidestep,
+          ),
           SpeechPriority.danger,
           subject: 'path:step',
         );
@@ -405,8 +406,10 @@ class SimDriver {
         'thông ≤ ${LidarAnalysis.maxForward.toStringAsFixed(0)} m',
       LidarUnknown() => 'không đo được',
     };
+    var level = _lidarWarning.update(reading, now, wall: _wall);
+    if (walk.squeezing && WalkState.edgeOnly(reading)) level = AlertLevel.info;
     _announceDepth(
-      _lidarWarning.update(reading, now, wall: _wall),
+      level,
       now,
       sides: speakableSides(
         _sides,

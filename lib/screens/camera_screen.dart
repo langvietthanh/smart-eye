@@ -536,9 +536,11 @@ class _CameraScreenState extends State<CameraScreen>
       case WalkCue.stepRight:
       case WalkCue.stepLeft:
         _speech.sayNow(
-          cue == WalkCue.stepRight
-              ? 'Bước ngang sang phải.'
-              : 'Bước ngang sang trái.',
+          stepText(
+            cue == WalkCue.stepRight ? HPos.right : HPos.left,
+            // Only the step in; the step back to the old line is plain.
+            squeeze: _walk.squeezing && _walk.phase == WalkPhase.sidestep,
+          ),
           SpeechPriority.danger,
           subject: 'path:step',
         );
@@ -985,10 +987,13 @@ class _CameraScreenState extends State<CameraScreen>
       atMs: _frameClock.elapsedMilliseconds,
     );
     _updatePulse();
-    _announceDepth(
-      _lidarWarning.update(reading, now, wall: _wall),
-      sides: _speakableSides(),
-    );
+    var level = _lidarWarning.update(reading, now, wall: _wall);
+    // Squeezing through a narrow gap its sides pass just outside the
+    // shoulders: only something near the walking line stops the user.
+    if (_walk.squeezing && WalkState.edgeOnly(reading)) {
+      level = AlertLevel.info;
+    }
+    _announceDepth(level, sides: _speakableSides());
   }
 
   static int _cm(double metres) => (metres * 100).round();

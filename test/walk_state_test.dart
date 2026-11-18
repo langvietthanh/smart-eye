@@ -524,9 +524,44 @@ void main() {
       expect(collectAt(1000, ahead(0.9)), WalkCue.stepRight);
     });
 
-    test('a gap under 65 cm is not stepped into', () {
-      walk.onScan(at(0), ahead(1.5, right: 0.58));
+    test('a gap of 45–65 cm is squeezed through', () {
+      walk.onScan(at(0), ahead(1.5, right: 0.53));
+      expect(collectAt(500, ahead(0.9)), WalkCue.stepRight);
+      expect(walk.squeezing, isTrue);
+    });
+
+    test('a gap narrower than shoulders: find a way', () {
+      walk.onScan(at(0), ahead(1.5, right: 0.4));
       expect(collectAt(500, ahead(0.9)), WalkCue.findWay);
+      expect(walk.squeezing, isFalse);
+    });
+
+    test('the wider gap is taken, without squeezing', () {
+      walk.onScan(at(0), ahead(1.5, left: 0.7, right: 0.5));
+      expect(collectAt(500, ahead(0.9)), WalkCue.stepLeft);
+      expect(walk.squeezing, isFalse);
+    });
+
+    test('while squeezing only the gap sides are let by', () {
+      LidarObstacle at(double from, double to) => LidarObstacle(
+        0.8,
+        where: (
+          sideMin: from,
+          sideMax: to,
+          heightMin: 0.2,
+          heightMax: 0.8,
+          phoneHeight: 1.3,
+        ),
+      );
+      expect(WalkState.edgeOnly(at(0.2, 0.4)), isTrue); // chair on the left
+      expect(WalkState.edgeOnly(at(-0.5, -0.2)), isTrue); // desk on the right
+      expect(WalkState.edgeOnly(at(-0.1, 0.3)), isFalse); // in the way
+      expect(WalkState.edgeOnly(const LidarObstacle(0.8)), isFalse);
+      expect(
+        stepText(HPos.right, squeeze: true),
+        'Khe hẹp. Bước ngang sang phải, nghiêng người lách qua.',
+      );
+      expect(stepText(HPos.left), 'Bước ngang sang trái.');
     });
 
     test('a gap seen more than 3 s ago is not used', () {

@@ -123,8 +123,8 @@ final presets = <Preset>[
   ),
   Preset(
     'Ghế chắn nửa lối (khe 58 cm)',
-    'Ghế kéo ra 42 cm, chỉ còn khe 58 cm: gần bằng vai. App không bảo lách '
-        'qua mà chuyển sang tìm lối.',
+    'Ghế kéo ra 42 cm, chỉ còn khe 58 cm: rộng hơn vai một chút. App bảo '
+        'bước vào giữa khe và nghiêng người lách qua.',
     [
       ..._room(9),
       ..._row(-1, 0.5, 9),
