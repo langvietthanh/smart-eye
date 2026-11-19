@@ -1220,7 +1220,8 @@ class _CameraScreenState extends State<CameraScreen>
 
     if (alert.pos == HPos.center) _blockage.watchAhead();
     // Sides: only fresh, never during a trap, only for a centre object.
-    final sides = _speakableSides();
+    // With LiDAR the side is picked after stopping ("Bước ngang sang …").
+    final sides = _useLidar ? _noSides : _speakableSides();
     final text = withSideClause(
       alert.message,
       pos: alert.pos,
