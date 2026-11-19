@@ -48,15 +48,12 @@ void main() {
     expect(walk.phase, WalkPhase.findWay);
   });
 
-  test('turning 30° prompts turn-on', () {
+  test('turning 50° prompts turn-on, 49° does not', () {
     walk.onDanger(wall: true, sideOpen: false, canBypass: false);
-    final cue = walk.tick(
-      t0,
-      aheadOpen: false,
-      turning: true,
-      turnedDegrees: 31,
-    );
-    expect(cue, WalkCue.turnOn);
+    WalkCue? tick(double deg) =>
+        walk.tick(t0, aheadOpen: false, turning: true, turnedDegrees: deg);
+    expect(tick(49), isNull);
+    expect(tick(50), WalkCue.turnOn);
   });
 
   test('turning frees after 0.3 s', () {

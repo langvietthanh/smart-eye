@@ -2,6 +2,7 @@ import 'dart:math';
 
 import '../models/scene_info.dart';
 import 'lidar_analysis.dart';
+import 'turn_tracker.dart';
 
 enum WalkPhase { straight, findWay, collect, sidestep, passing }
 
@@ -346,7 +347,7 @@ class WalkState {
       _openSince = null;
     }
 
-    if (turnedDegrees >= 30) {
+    if (turnedDegrees >= TurnTracker.stepDegrees) {
       return WalkCue.turnOn;
     }
 

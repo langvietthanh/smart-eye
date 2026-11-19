@@ -488,7 +488,7 @@ class _CameraScreenState extends State<CameraScreen>
       case null:
         return;
       case WalkCue.turnOn:
-        // Count the next 30° only once this prompt was really spoken.
+        // Count the next 50° only once this prompt was really spoken.
         if (_speech.sayNow(
           turnOnText,
           SpeechPriority.danger,

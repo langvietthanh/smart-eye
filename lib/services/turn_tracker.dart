@@ -3,7 +3,7 @@ import 'dart:math';
 /// Tracks rotation about the vertical (gravity-aligned) axis using gyroscope
 /// and accelerometer data. Pure Dart with no direct platform dependencies.
 class TurnTracker {
-  static const stepDegrees = 30.0;
+  static const stepDegrees = 50.0; // one "Xoay tiếp." per step
   static const turningRate = 15.0; // deg/s
   static const turningWindow = Duration(seconds: 1);
 
