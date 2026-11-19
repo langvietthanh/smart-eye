@@ -39,6 +39,10 @@ class TTSService {
         ],
         IosTextToSpeechAudioMode.voicePrompt,
       );
+      // Mặc định plugin tắt phiên âm thanh sau mỗi câu (vì có duckOthers).
+      // Khi một câu bị ngắt rồi câu mới đọc ngay, máy thật câm hẳn dù chữ vẫn
+      // hiện → giữ phiên âm thanh mở suốt lúc app chạy.
+      await _flutterTts.autoStopSharedSession(false);
     }
 
     try {
@@ -90,7 +94,11 @@ class TTSService {
   /// Dừng loa ngay lập tức (barge-in, tắt app, thoát màn hình)
   Future<void> stop() async {
     _finish();
-    await _flutterTts.stop();
+    // SpeechManager chờ lệnh này xong mới đọc câu sau: không được treo mãi.
+    await _flutterTts.stop().timeout(
+      const Duration(seconds: 1),
+      onTimeout: () => null,
+    );
   }
 
   void _finish() {

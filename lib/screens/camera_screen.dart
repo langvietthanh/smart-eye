@@ -524,7 +524,8 @@ class _CameraScreenState extends State<CameraScreen>
         );
         _straightAt = now;
       case WalkCue.goStraight:
-        _speech.dropSubject('path:turn');
+        // "Xoay tiếp." is about a second long: let it finish. Cutting it off
+        // here was the moment iOS went silent.
         _speech.say(
           'Đi thẳng.',
           SpeechPriority.guidance,
