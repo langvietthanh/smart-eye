@@ -16,6 +16,7 @@ import '../widgets/bounding_box_painter.dart';
 import '../services/caption_builder.dart';
 import '../services/command_parser.dart';
 import '../services/camera_feed.dart';
+import '../services/camera_inference_scheduler.dart';
 import '../services/depth_alert.dart';
 import '../services/depth_analysis.dart';
 import '../services/depth_service.dart';
@@ -99,8 +100,7 @@ class _CameraScreenState extends State<CameraScreen>
   bool _hasError = false;
 
   final Stopwatch _frameClock = Stopwatch()..start();
-  int _lastDetectionMs = -150;
-  static const int _minDetectionIntervalMs = 150;
+  final CameraInferenceScheduler _inferenceSchedule = CameraInferenceScheduler();
   static const int _maxFrameAgeMs = 750;
   final DateTime _frameEpoch = DateTime.now();
 
@@ -125,8 +125,6 @@ class _CameraScreenState extends State<CameraScreen>
   ({SideState left, SideState right}) _sides = _noSides;
   String _lidarStatus = '';
   int _lidarReadings = 0;
-  static const int _minDepthIntervalMs = 300;
-  int _lastDepthMs = -300;
   double? _boxProximity;
   ({double? proximity, int atMs})? _depthProximity;
   final ObjectTracker _tracker = ObjectTracker();
@@ -456,12 +454,15 @@ class _CameraScreenState extends State<CameraScreen>
   }
 
   void _resetBlockage() {
+    _walk.reset(); // invalidate queued episode callbacks before pumping speech
     _dropWalkMovement();
+    _speech.dropSubject('path:turn');
+    _speech.dropSubject('path:reminder');
+    _speech.dropSubject('path:findway');
     _stoppedWalkRevision = null;
     _findWayOwed = false;
     _stopOwed = false;
     _blockage.reset();
-    _walk.reset();
     _sideLatch.reset();
     _frontWarned = false;
   }
@@ -513,14 +514,9 @@ class _CameraScreenState extends State<CameraScreen>
       case null:
         return;
       case WalkCue.turnOn:
-        // Count the next 30° only once this prompt was really spoken.
-        if (_speech.sayNow(
-          turnOnText,
-          SpeechPriority.danger,
-          subject: 'path:turn',
-        )) {
-          _turns.reset();
-        }
+        _sayFindWayCue(turnOnText, subject: 'path:turn');
+      case WalkCue.findWayReminder:
+        _sayFindWayCue(findWayReminderText, subject: 'path:reminder');
       case WalkCue.goStraight:
         _queueWalkMovement(cue);
       case WalkCue.findWay:
@@ -543,6 +539,7 @@ class _CameraScreenState extends State<CameraScreen>
   void _queueWalkMovement(WalkCue cue) {
     _dropWalkMovement();
     _speech.dropSubject('path:turn');
+    _speech.dropSubject('path:reminder');
     _pendingWalkCue = (
       cue: cue,
       revision: _walk.revision,
@@ -602,6 +599,8 @@ class _CameraScreenState extends State<CameraScreen>
 
   void _sayFindWay() {
     _dropWalkMovement();
+    _speech.dropSubject('path:turn');
+    _speech.dropSubject('path:reminder');
     _findWayOwed = true;
     final revision = _walk.revision;
     final log = _eventLogger(TripEventType.danger, findWayText);
@@ -612,7 +611,7 @@ class _CameraScreenState extends State<CameraScreen>
       onStart: () {
         // sayNow can accept a request into the queue without starting TTS.
         // Only the current find-way episode may release its turn cues.
-        if (!_walk.markFindWayPromptStarted(revision)) return;
+        if (!_walk.markFindWayPromptStarted(revision, DateTime.now())) return;
         _findWayOwed = false;
         _turns.reset();
         HapticFeedback.heavyImpact();
@@ -635,6 +634,36 @@ class _CameraScreenState extends State<CameraScreen>
     _lastAlertAt = DateTime.now();
     _lastDangerAt = _lastAlertAt;
     _blockage.watchAhead();
+  }
+
+  /// Remind a stationary user too, but never replace a current safety line or
+  /// let a queued cue leak into the next obstacle episode.
+  void _sayFindWayCue(String text, {required String subject}) {
+    if (_speech.isBusy) return;
+    final revision = _walk.revision;
+    final log = _eventLogger(TripEventType.danger, text);
+    _speech.sayNow(
+      text,
+      SpeechPriority.danger,
+      subject: subject,
+      isStillValid: () =>
+          !_disposed &&
+          _walk.phase == WalkPhase.findWay &&
+          _walk.revision == revision &&
+          !_findWayOwed &&
+          _sight.check(DateTime.now()) == null &&
+          !_groundHazardAhead &&
+          !_blockage.openAhead(DateTime.now(), beyond: WalkState.exitBeyond),
+      onStart: () {
+        final now = DateTime.now();
+        if (!_walk.markFindWayCueStarted(revision, now)) return;
+        // A status reminder must not erase a slow turn's partial progress.
+        if (subject == 'path:turn') _turns.reset();
+        _lastAlertAt = now;
+        _lastDangerAt = now;
+        log();
+      },
+    );
   }
 
   /// Bypass step 2: "Dừng lại!" and start collecting frames. Like the
@@ -889,16 +918,22 @@ class _CameraScreenState extends State<CameraScreen>
     }
     _lastFrameRotation = rotation;
     _lastFrameOrientation = orientation;
-    _maybeRunDepth(controller, image, rotation);
-    if (_isDetecting) return;
-
     final now = _frameClock.elapsedMilliseconds;
-    if (now - _lastDetectionMs < _minDetectionIntervalMs) {
+    final work = _inferenceSchedule.take(
+      now,
+      busy: _isDetecting || _depth.busy,
+      depthAvailable: !_useLidar && _depth.isLoaded,
+      // ARKit colour events are already paced at capture time. Gating them
+      // again by arrival time can accidentally halve the detection cadence.
+      detectionPacedBySource: controller is LidarHandle,
+    );
+    if (work == null) return;
+    if (work == CameraInference.depth) {
+      _maybeRunDepth(controller, image, rotation);
       return;
     }
 
     _isDetecting = true;
-    _lastDetectionMs = now;
     final generation = _frameGeneration;
     final capturedAt = _frameEpoch.add(Duration(milliseconds: now));
 
@@ -943,12 +978,11 @@ class _CameraScreenState extends State<CameraScreen>
     }
   }
 
-  /// Depth runs in its own isolate at a lower rate than object detection.
+  /// The scheduler gives depth a fresh frame only while detection is idle.
+  /// Both model thread pools stay off the UI isolate and never overlap.
   void _maybeRunDepth(FeedHandle controller, CameraImage image, int rotation) {
-    if (!_depth.isLoaded || _depth.busy) return;
+    if (!_depth.isLoaded || _depth.busy || _isDetecting) return;
     final startedAt = _frameClock.elapsedMilliseconds;
-    if (startedAt - _lastDepthMs < _minDepthIntervalMs) return;
-    _lastDepthMs = startedAt;
     final generation = _frameGeneration;
     unawaited(
       _depth
@@ -1351,7 +1385,7 @@ class _CameraScreenState extends State<CameraScreen>
       onStart: () {
         _noteWarning();
         if (findWayRevision != null &&
-            _walk.markFindWayPromptStarted(findWayRevision)) {
+            _walk.markFindWayPromptStarted(findWayRevision, DateTime.now())) {
           _turns.reset();
         }
         if (isDanger) HapticFeedback.heavyImpact();

@@ -49,6 +49,10 @@ const findWayText = 'Dừng lại! Xoay người chậm để tìm lối khác.'
 /// Spoken periodically while turning during a trap / find-way phase.
 const turnOnText = 'Xoay tiếp.';
 
+/// The scene is still not confirmed open, even when the user is standing still.
+const findWayReminderText =
+    'Dừng lại! Chưa xác định được lối trống. Xoay người chậm để tìm lối khác.';
+
 /// Nối câu hai bên vào cảnh báo của YOLO, chỉ khi vật nằm ở giữa: với vật
 /// bên trái/phải, câu "bên ... trống" dễ mâu thuẫn với chính cảnh báo.
 String withSideClause(

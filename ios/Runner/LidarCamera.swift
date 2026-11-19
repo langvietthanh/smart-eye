@@ -7,7 +7,8 @@ import UIKit
 ///
 /// - Colour frames: `capturedImage` (YUV 420f, sensor landscape) scaled to
 ///   640×480 and sent as two planes; Dart builds a `CameraImage` from them and
-///   rotates like an Android back camera (sensor orientation 90).
+///   rotates like an Android back camera (sensor orientation 90). Preview
+///   stays at 30 Hz; AI colour events are capped separately at about 6.7 Hz.
 /// - Depth: `smoothedSceneDepth` (metres) + confidence + intrinsics scaled to
 ///   the depth resolution + world "up" in camera coordinates, ~10 Hz.
 /// - Preview: a BGRA `FlutterTexture` in the same sensor orientation.
@@ -19,6 +20,7 @@ final class LidarCameraPlugin: NSObject, FlutterPlugin, FlutterStreamHandler,
   static let frameWidth = 640
   static let frameHeight = 480
   static let frameInterval: TimeInterval = 1.0 / 30
+  static let colourEventInterval: TimeInterval = 0.15
   static let depthInterval: TimeInterval = 0.1
   static let hotDepthInterval: TimeInterval = 0.2
 
@@ -29,7 +31,7 @@ final class LidarCameraPlugin: NSObject, FlutterPlugin, FlutterStreamHandler,
   private var textureId: Int64?
 
   // Touched only on `queue`.
-  private var awaitingAck = false
+  private var colourEvents = LidarColourEventGate(interval: LidarCameraPlugin.colourEventInterval)
   private var lastFrameAt: TimeInterval = 0
   private var lastDepthAt: TimeInterval = 0
   private var conversion = vImage_YpCbCrToARGB()
@@ -89,7 +91,7 @@ final class LidarCameraPlugin: NSObject, FlutterPlugin, FlutterStreamHandler,
       stop()
       result(nil)
     case "ackFrame":
-      queue.async { self.awaitingAck = false }
+      queue.async { self.colourEvents.acknowledge() }
       result(nil)
     default:
       result(FlutterMethodNotImplemented)
@@ -118,7 +120,7 @@ final class LidarCameraPlugin: NSObject, FlutterPlugin, FlutterStreamHandler,
     config.worldAlignment = .gravity
     config.frameSemantics = [.smoothedSceneDepth]
     queue.async {
-      self.awaitingAck = false
+      self.colourEvents.reset()
       self.lastFrameAt = 0
       self.lastDepthAt = 0
     }
@@ -233,8 +235,12 @@ final class LidarCameraPlugin: NSObject, FlutterPlugin, FlutterStreamHandler,
 
     updatePreview(&dstY, &dstUV)
 
-    if awaitingAck { return }
-    awaitingAck = true
+    // Preview never waits for Dart's inference cadence. Avoid allocating and
+    // serializing colour planes beyond the AI's 150 ms cadence. Dart uses
+    // this native gate for LiDAR instead of gating again by receive time.
+    // Admission happens at capture time: a delayed ack drops frames rather
+    // than queuing an old image or releasing a burst of catch-up packets.
+    guard colourEvents.admit(at: frame.timestamp) else { return }
     send([
       "type": "frame",
       "width": w,
@@ -379,5 +385,30 @@ final class LidarCameraPlugin: NSObject, FlutterPlugin, FlutterStreamHandler,
       }
     }
     return data
+  }
+}
+
+/// Separate camera-preview cadence from the colour data consumed by AI.
+/// Accessed only on the AR session's serial queue.
+struct LidarColourEventGate {
+  let interval: TimeInterval
+  private var lastSentAt: TimeInterval?
+  private var awaitingAck = false
+
+  init(interval: TimeInterval) { self.interval = interval }
+
+  mutating func admit(at capturedAt: TimeInterval) -> Bool {
+    guard capturedAt.isFinite, capturedAt >= 0, !awaitingAck else { return false }
+    if let lastSentAt = lastSentAt, capturedAt - lastSentAt < interval { return false }
+    lastSentAt = capturedAt
+    awaitingAck = true
+    return true
+  }
+
+  mutating func acknowledge() { awaitingAck = false }
+
+  mutating func reset() {
+    lastSentAt = nil
+    awaitingAck = false
   }
 }

@@ -5,7 +5,15 @@ import 'lidar_analysis.dart';
 
 enum WalkPhase { straight, findWay, collect, sidestep, passing, returning }
 
-enum WalkCue { turnOn, goStraight, findWay, stepRight, stepLeft, stop }
+enum WalkCue {
+  turnOn,
+  goStraight,
+  findWay,
+  findWayReminder,
+  stepRight,
+  stepLeft,
+  stop,
+}
 
 enum DangerAction { none, stop, findWay }
 
@@ -16,6 +24,7 @@ class WalkState {
   static const exitBeyond = 1.5;
   static const turningSettle = Duration(milliseconds: 300);
   static const settle = Duration(seconds: 1);
+  static const findWayRepeat = Duration(seconds: 6);
   static const collectFrames = 5;
   static const collectAgree = 4;
   static const sidestepGapMin = LidarAnalysis.gapMin;
@@ -35,7 +44,7 @@ class WalkState {
   WalkPhase _phase = WalkPhase.straight;
   int _revision = 0;
   bool _findWayPromptStarted = false;
-  DateTime? _openSince, _phaseSince, _lastScanAt;
+  DateTime? _openSince, _phaseSince, _lastScanAt, _lastFindWayCueAt;
   HPos? _stepSide;
   int _frames = 0, _leftVotes = 0, _rightVotes = 0, _clearFrames = 0;
   double? _laneAcross;
@@ -54,9 +63,20 @@ class WalkState {
 
   /// A queued TTS request is not yet an instruction the user has heard.
   /// Rotation guidance starts only after the matching find-way prompt begins.
-  bool markFindWayPromptStarted(int revision) {
+  bool markFindWayPromptStarted(int revision, DateTime now) {
     if (_phase != WalkPhase.findWay || _revision != revision) return false;
     _findWayPromptStarted = true;
+    _lastFindWayCueAt = now;
+    return true;
+  }
+
+  /// Advance reminders only when the matching turn/status cue starts TTS.
+  /// Merely returning a cue from [tick] must not consume its reminder period.
+  bool markFindWayCueStarted(int revision, DateTime now) {
+    if (_phase != WalkPhase.findWay ||
+        _revision != revision ||
+        !_findWayPromptStarted) return false;
+    _lastFindWayCueAt = now;
     return true;
   }
 
@@ -227,10 +247,15 @@ class WalkState {
         _enter(WalkPhase.straight);
         return WalkCue.goStraight;
       }
+      return null;
     } else {
       _openSince = null;
     }
-    return turnedDegrees >= 30 ? WalkCue.turnOn : null;
+    if (turnedDegrees >= 30) return WalkCue.turnOn;
+    final lastCue = _lastFindWayCueAt;
+    return lastCue != null && now.difference(lastCue) >= findWayRepeat
+        ? WalkCue.findWayReminder
+        : null;
   }
 
   void reset() {
@@ -270,6 +295,7 @@ class WalkState {
     _phase = phase;
     _revision++;
     _findWayPromptStarted = false;
+    _lastFindWayCueAt = null;
     _phaseSince = now;
     _openSince = null;
     _frames = _leftVotes = _rightVotes = _clearFrames = 0;

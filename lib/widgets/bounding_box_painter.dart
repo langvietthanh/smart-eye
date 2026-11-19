@@ -99,7 +99,6 @@ class BoundingBoxPainter extends CustomPainter {
       );
       textPainter.paint(canvas, Offset(rect.left + 4, labelTop + 2));
       textPainter.dispose();
-      textPainter.dispose();
     }
   }
 

@@ -47,7 +47,7 @@ void main() {
 
   test('turning 30° prompts turn-on', () {
     walk.onDanger(wall: true, sideOpen: false, canBypass: false);
-    expect(walk.markFindWayPromptStarted(walk.revision), isTrue);
+    expect(walk.markFindWayPromptStarted(walk.revision, t0), isTrue);
     final cue = walk.tick(
       t0,
       aheadOpen: false,
@@ -59,7 +59,7 @@ void main() {
 
   test('turning frees after 0.3 s', () {
     walk.onDanger(wall: true, sideOpen: false, canBypass: false);
-    expect(walk.markFindWayPromptStarted(walk.revision), isTrue);
+    expect(walk.markFindWayPromptStarted(walk.revision, t0), isTrue);
     expect(
       walk.tick(t0, aheadOpen: true, turning: true, turnedDegrees: 0),
       isNull,
@@ -87,7 +87,7 @@ void main() {
 
   test('standing still needs a second', () {
     walk.onDanger(wall: true, sideOpen: false, canBypass: false);
-    expect(walk.markFindWayPromptStarted(walk.revision), isTrue);
+    expect(walk.markFindWayPromptStarted(walk.revision, t0), isTrue);
     walk.tick(t0, aheadOpen: true, turning: false, turnedDegrees: 0);
     expect(
       walk.tick(
@@ -112,7 +112,7 @@ void main() {
 
   test('a flicker restarts the wait', () {
     walk.onDanger(wall: true, sideOpen: false, canBypass: false);
-    expect(walk.markFindWayPromptStarted(walk.revision), isTrue);
+    expect(walk.markFindWayPromptStarted(walk.revision, t0), isTrue);
     walk.tick(t0, aheadOpen: true, turning: true, turnedDegrees: 0);
     walk.tick(
       t0.add(const Duration(milliseconds: 200)),
@@ -156,7 +156,7 @@ void main() {
       walk.tick(t0, aheadOpen: false, turning: true, turnedDegrees: 45),
       isNull,
     );
-    expect(walk.markFindWayPromptStarted(revision), isTrue);
+    expect(walk.markFindWayPromptStarted(revision, t0), isTrue);
     expect(
       walk.tick(t0, aheadOpen: false, turning: true, turnedDegrees: 45),
       WalkCue.turnOn,
@@ -171,7 +171,7 @@ void main() {
         DangerAction.findWay,
       );
       final firstRevision = walk.revision;
-      expect(walk.markFindWayPromptStarted(firstRevision), isTrue);
+      expect(walk.markFindWayPromptStarted(firstRevision, t0), isTrue);
       expect(
         walk.tick(t0, aheadOpen: true, turning: true, turnedDegrees: 0),
         isNull,
@@ -186,7 +186,7 @@ void main() {
         WalkCue.goStraight,
       );
       expect(walk.phase, WalkPhase.straight);
-      expect(walk.markFindWayPromptStarted(firstRevision), isFalse);
+      expect(walk.markFindWayPromptStarted(firstRevision, t0), isFalse);
 
       expect(
         walk.onDanger(wall: false, sideOpen: false, canBypass: false),
@@ -194,7 +194,7 @@ void main() {
       );
       expect(walk.phase, WalkPhase.findWay);
       expect(walk.revision, greaterThan(firstRevision));
-      expect(walk.markFindWayPromptStarted(firstRevision), isFalse);
+      expect(walk.markFindWayPromptStarted(firstRevision, t0), isFalse);
       expect(
         walk.tick(
           t0.add(const Duration(seconds: 2)),
@@ -204,7 +204,13 @@ void main() {
         ),
         isNull,
       );
-      expect(walk.markFindWayPromptStarted(walk.revision), isTrue);
+      expect(
+        walk.markFindWayPromptStarted(
+          walk.revision,
+          t0.add(const Duration(seconds: 2)),
+        ),
+        isTrue,
+      );
       expect(
         walk.tick(
           t0.add(const Duration(seconds: 2)),
@@ -229,6 +235,94 @@ void main() {
     expect(walk.phase, WalkPhase.findWay);
     walk.reset();
     expect(walk.phase, WalkPhase.straight);
+  });
+
+  group('find-way status reminders', () {
+    DateTime at(int ms) => t0.add(Duration(milliseconds: ms));
+
+    void start() {
+      walk.onDanger(wall: false, sideOpen: false, canBypass: false);
+      expect(walk.markFindWayPromptStarted(walk.revision, t0), isTrue);
+    }
+
+    WalkCue? blocked(int ms, {double degrees = 0}) => walk.tick(
+      at(ms),
+      aheadOpen: false,
+      turning: degrees > 0,
+      turnedDegrees: degrees,
+    );
+
+    test(
+      'standing still reminds after six seconds without authorizing motion',
+      () {
+        start();
+        expect(blocked(5999), isNull);
+        expect(blocked(6000), WalkCue.findWayReminder);
+        expect(walk.phase, WalkPhase.findWay);
+      },
+    );
+
+    test('an unstarted reminder stays due until TTS starts it', () {
+      start();
+      final revision = walk.revision;
+      expect(blocked(6000), WalkCue.findWayReminder);
+      expect(blocked(8000), WalkCue.findWayReminder);
+      expect(walk.markFindWayCueStarted(revision, at(8000)), isTrue);
+      expect(blocked(8000), isNull);
+      expect(blocked(13999), isNull);
+      expect(blocked(14000), WalkCue.findWayReminder);
+    });
+
+    test('no reminders before the first find-way prompt starts', () {
+      walk.onDanger(wall: false, sideOpen: false, canBypass: false);
+      expect(blocked(30000), isNull);
+      expect(walk.markFindWayCueStarted(walk.revision, at(30000)), isFalse);
+    });
+
+    test('turn cue takes precedence and restarts reminders when spoken', () {
+      start();
+      expect(blocked(6000, degrees: 35), WalkCue.turnOn);
+      expect(walk.markFindWayCueStarted(walk.revision, at(6000)), isTrue);
+      expect(blocked(11999), isNull);
+      expect(blocked(12000), WalkCue.findWayReminder);
+    });
+
+    test('settling open path does not emit a turn or status reminder', () {
+      start();
+      expect(
+        walk.tick(
+          at(6000),
+          aheadOpen: true,
+          turning: true,
+          turnedDegrees: 45,
+        ),
+        isNull,
+      );
+      expect(
+        walk.tick(
+          at(6300),
+          aheadOpen: true,
+          turning: true,
+          turnedDegrees: 45,
+        ),
+        WalkCue.goStraight,
+      );
+      expect(blocked(20000), isNull);
+      expect(walk.phase, WalkPhase.straight);
+    });
+
+    test('stale callbacks cannot change a new episode reminder clock', () {
+      start();
+      final oldRevision = walk.revision;
+      walk.reset();
+      walk.onDanger(wall: false, sideOpen: false, canBypass: false);
+      expect(walk.markFindWayPromptStarted(oldRevision, at(5000)), isFalse);
+      expect(walk.markFindWayCueStarted(oldRevision, at(5000)), isFalse);
+      expect(blocked(20000), isNull);
+      expect(walk.markFindWayPromptStarted(walk.revision, at(20000)), isTrue);
+      expect(walk.markFindWayCueStarted(oldRevision, at(25000)), isFalse);
+      expect(blocked(26000), WalkCue.findWayReminder);
+    });
   });
 
   group('detector alerts enter obstacle flow', () {
