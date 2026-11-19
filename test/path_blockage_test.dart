@@ -146,6 +146,7 @@ void main() {
     test('fresh visual danger prevents finding an exit from clear MiDaS', () {
       final walk = WalkState();
       walk.onDanger(wall: false, sideOpen: false, canBypass: false);
+      expect(walk.markFindWayPromptStarted(walk.revision), isTrue);
       p.watchAhead();
       for (var ms = 0; ms <= 2000; ms += 250) {
         p.onDetections(at(ms), none, alert: centerDanger);
