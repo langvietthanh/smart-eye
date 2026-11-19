@@ -1292,6 +1292,7 @@ class _CameraScreenState extends State<CameraScreen>
     int rotation,
   ) {
     final groundHazard = _isGroundHazardAlert(alert);
+    var startsFindWayOnWarning = false;
     if (_walk.phase != WalkPhase.straight && !groundHazard) return;
     _lastAlertAt = now;
     final isDanger = alert.level == AlertLevel.danger;
@@ -1321,10 +1322,13 @@ class _CameraScreenState extends State<CameraScreen>
       if (_walk.phase != WalkPhase.findWay) {
         _walk.reset();
         _walk.onDanger(wall: true, sideOpen: false, canBypass: false);
+        startsFindWayOnWarning = _walk.phase == WalkPhase.findWay;
       }
     } else if (isDanger) {
       _dropWalkMovement();
     }
+    final findWayRevision =
+        startsFindWayOnWarning ? _walk.revision : null;
     final priority = isDanger ? SpeechPriority.danger : SpeechPriority.caution;
     if (!_speech.canSay(priority, subject: alert.subject)) {
       return; // Đã báo / đang chờ đọc
@@ -1346,6 +1350,10 @@ class _CameraScreenState extends State<CameraScreen>
       subject: alert.subject,
       onStart: () {
         _noteWarning();
+        if (findWayRevision != null &&
+            _walk.markFindWayPromptStarted(findWayRevision)) {
+          _turns.reset();
+        }
         if (isDanger) HapticFeedback.heavyImpact();
         log();
       },
