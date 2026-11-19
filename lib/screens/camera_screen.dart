@@ -482,7 +482,9 @@ class _CameraScreenState extends State<CameraScreen>
         !_speech.isSubjectActive('path:stop')) {
       _sayStop();
     }
-    if (problem == null && !_groundHazardAhead) {
+    final waitingForFindWayPrompt =
+        _walk.phase == WalkPhase.findWay && _findWayOwed;
+    if (problem == null && !_groundHazardAhead && !waitingForFindWayPrompt) {
       _handleWalkCue(
         _walk.tick(
           now,
@@ -601,17 +603,25 @@ class _CameraScreenState extends State<CameraScreen>
   void _sayFindWay() {
     _dropWalkMovement();
     _findWayOwed = true;
+    final revision = _walk.revision;
     final log = _eventLogger(TripEventType.danger, findWayText);
     final spoken = _speech.sayNow(
       findWayText,
       SpeechPriority.danger,
       subject: 'path:findway',
       onStart: () {
+        // sayNow can accept a request into the queue without starting TTS.
+        // Only the current find-way episode may release its turn cues.
+        if (!_walk.markFindWayPromptStarted(revision)) return;
         _findWayOwed = false;
         _turns.reset();
         HapticFeedback.heavyImpact();
         log();
       },
+      isStillValid: () =>
+          !_disposed &&
+          _walk.phase == WalkPhase.findWay &&
+          _walk.revision == revision,
     );
     if (!spoken) {
       // Keep the find-way phase active until this safety prompt can be
@@ -620,7 +630,8 @@ class _CameraScreenState extends State<CameraScreen>
       _findWayOwed = true;
       return;
     }
-    _findWayOwed = false;
+    // Leave the prompt owed until onStart. A same-priority “Xoay tiếp.”
+    // must not replace this safety prompt while it is waiting in the TTS queue.
     _lastAlertAt = DateTime.now();
     _lastDangerAt = _lastAlertAt;
     _blockage.watchAhead();

@@ -34,6 +34,7 @@ class WalkState {
 
   WalkPhase _phase = WalkPhase.straight;
   int _revision = 0;
+  bool _findWayPromptStarted = false;
   DateTime? _openSince, _phaseSince, _lastScanAt;
   HPos? _stepSide;
   int _frames = 0, _leftVotes = 0, _rightVotes = 0, _clearFrames = 0;
@@ -50,6 +51,14 @@ class WalkState {
   HPos? get stepSide => _stepSide;
   bool get _bypassing =>
       _phase != WalkPhase.straight && _phase != WalkPhase.findWay;
+
+  /// A queued TTS request is not yet an instruction the user has heard.
+  /// Rotation guidance starts only after the matching find-way prompt begins.
+  bool markFindWayPromptStarted(int revision) {
+    if (_phase != WalkPhase.findWay || _revision != revision) return false;
+    _findWayPromptStarted = true;
+    return true;
+  }
 
   /// Detector warnings must enter the same avoidance flow as depth warnings;
   /// speech cooldowns and an empty column-load estimate cannot suppress it.
@@ -211,6 +220,7 @@ class WalkState {
       return null;
     }
     if (_phase != WalkPhase.findWay) return null;
+    if (!_findWayPromptStarted) return null;
     if (aheadOpen) {
       _openSince ??= now;
       if (now.difference(_openSince!) >= (turning ? turningSettle : settle)) {
@@ -259,6 +269,7 @@ class WalkState {
   void _enter(WalkPhase phase, [DateTime? now]) {
     _phase = phase;
     _revision++;
+    _findWayPromptStarted = false;
     _phaseSince = now;
     _openSince = null;
     _frames = _leftVotes = _rightVotes = _clearFrames = 0;

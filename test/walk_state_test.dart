@@ -47,6 +47,7 @@ void main() {
 
   test('turning 30° prompts turn-on', () {
     walk.onDanger(wall: true, sideOpen: false, canBypass: false);
+    expect(walk.markFindWayPromptStarted(walk.revision), isTrue);
     final cue = walk.tick(
       t0,
       aheadOpen: false,
@@ -58,6 +59,7 @@ void main() {
 
   test('turning frees after 0.3 s', () {
     walk.onDanger(wall: true, sideOpen: false, canBypass: false);
+    expect(walk.markFindWayPromptStarted(walk.revision), isTrue);
     expect(
       walk.tick(t0, aheadOpen: true, turning: true, turnedDegrees: 0),
       isNull,
@@ -85,6 +87,7 @@ void main() {
 
   test('standing still needs a second', () {
     walk.onDanger(wall: true, sideOpen: false, canBypass: false);
+    expect(walk.markFindWayPromptStarted(walk.revision), isTrue);
     walk.tick(t0, aheadOpen: true, turning: false, turnedDegrees: 0);
     expect(
       walk.tick(
@@ -109,6 +112,7 @@ void main() {
 
   test('a flicker restarts the wait', () {
     walk.onDanger(wall: true, sideOpen: false, canBypass: false);
+    expect(walk.markFindWayPromptStarted(walk.revision), isTrue);
     walk.tick(t0, aheadOpen: true, turning: true, turnedDegrees: 0);
     walk.tick(
       t0.add(const Duration(milliseconds: 200)),
@@ -142,6 +146,76 @@ void main() {
     );
     expect(walk.phase, WalkPhase.straight);
   });
+
+  test('queued find-way prompt blocks turn cues until TTS starts it', () {
+    walk.onDanger(wall: true, sideOpen: false, canBypass: false);
+    final revision = walk.revision;
+
+    // Rotation may already have accumulated while another warning is speaking.
+    expect(
+      walk.tick(t0, aheadOpen: false, turning: true, turnedDegrees: 45),
+      isNull,
+    );
+    expect(walk.markFindWayPromptStarted(revision), isTrue);
+    expect(
+      walk.tick(t0, aheadOpen: false, turning: true, turnedDegrees: 45),
+      WalkCue.turnOn,
+    );
+  });
+
+  test(
+    'each new obstacle after go-straight starts a fresh find-way episode',
+    () {
+      expect(
+        walk.onDanger(wall: true, sideOpen: false, canBypass: false),
+        DangerAction.findWay,
+      );
+      final firstRevision = walk.revision;
+      expect(walk.markFindWayPromptStarted(firstRevision), isTrue);
+      expect(
+        walk.tick(t0, aheadOpen: true, turning: true, turnedDegrees: 0),
+        isNull,
+      );
+      expect(
+        walk.tick(
+          t0.add(WalkState.turningSettle),
+          aheadOpen: true,
+          turning: true,
+          turnedDegrees: 0,
+        ),
+        WalkCue.goStraight,
+      );
+      expect(walk.phase, WalkPhase.straight);
+      expect(walk.markFindWayPromptStarted(firstRevision), isFalse);
+
+      expect(
+        walk.onDanger(wall: false, sideOpen: false, canBypass: false),
+        DangerAction.findWay,
+      );
+      expect(walk.phase, WalkPhase.findWay);
+      expect(walk.revision, greaterThan(firstRevision));
+      expect(walk.markFindWayPromptStarted(firstRevision), isFalse);
+      expect(
+        walk.tick(
+          t0.add(const Duration(seconds: 2)),
+          aheadOpen: false,
+          turning: true,
+          turnedDegrees: 45,
+        ),
+        isNull,
+      );
+      expect(walk.markFindWayPromptStarted(walk.revision), isTrue);
+      expect(
+        walk.tick(
+          t0.add(const Duration(seconds: 2)),
+          aheadOpen: false,
+          turning: true,
+          turnedDegrees: 45,
+        ),
+        WalkCue.turnOn,
+      );
+    },
+  );
 
   test('straight ignores ticks', () {
     expect(
