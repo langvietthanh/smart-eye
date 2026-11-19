@@ -451,6 +451,28 @@ void main() {
       );
       expect(mover, AlertLevel.danger);
     });
+
+    test('a chair the user walks up to is still capped by LiDAR', () {
+      final chair = HazardEngine.lidarCapped(
+        AlertLevel.danger,
+        ObjectInfo(
+          track: TrackedObject(
+            id: 3,
+            classId: 0,
+            labelEn: 'chair',
+            labelVi: 'ghế',
+            box: Rect.zero,
+            score: 0.9,
+          ),
+          pos: HPos.center,
+          distance: DistanceLevel.near,
+          category: ObjectCategory.obstacle,
+          approaching: true,
+        ),
+        centre(const LidarObstacle(2.6)),
+      );
+      expect(chair, AlertLevel.info); // iPhone test: "Dừng lại!" at 2.6 m
+    });
   });
 
   group('HazardEngine câu cảnh báo mới', () {

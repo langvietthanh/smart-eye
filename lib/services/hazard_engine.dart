@@ -42,7 +42,9 @@ class HazardEngine {
   /// object's side or ahead: none within [LidarWarning.cautionExit] → no
   /// warning, none within [LidarWarning.dangerExit] → at most caution.
   /// Unchanged where LiDAR cannot vouch: no reading, ground hazards (below
-  /// its floor band), vehicles and anything approaching (it may close in).
+  /// its floor band), vehicles and anything that may move towards the user.
+  /// A chair or table "approaching" is only the user walking up to it, which
+  /// LiDAR measures: uncapped, a growing box said "Dừng lại!" at 2.6 m.
   static AlertLevel lidarCapped(
     AlertLevel level,
     ObjectInfo object,
@@ -50,7 +52,7 @@ class HazardEngine {
   ) {
     if (lidar == null ||
         level == AlertLevel.info ||
-        object.approaching ||
+        (object.approaching && object.category != ObjectCategory.obstacle) ||
         object.category == ObjectCategory.groundHazard ||
         object.category == ObjectCategory.vehicle) {
       return level;

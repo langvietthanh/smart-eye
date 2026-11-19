@@ -42,6 +42,17 @@ void main() {
     expect(tracker.turningAt(t0.add(const Duration(milliseconds: 1000))), isFalse);
   });
 
+  test('swaying back and forth is not turning', () {
+    for (var i = 0; i < 10; i++) {
+      final at = t0.add(Duration(milliseconds: 400 * i));
+      final sign = i.isEven ? 1.0 : -1.0;
+      for (var ms = 0; ms < 400; ms += 20) {
+        tracker.onGyro(at.add(Duration(milliseconds: ms)), 0, sign * 0.5236, 0);
+      }
+    }
+    expect(tracker.degrees, lessThan(10.0)); // absolute sum would be ~120°
+  });
+
   test('standing still never completes a step', () {
     feedGyro(durationMs: 10000);
     expect(tracker.degrees, 0.0);

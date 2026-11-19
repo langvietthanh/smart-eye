@@ -56,6 +56,20 @@ void main() {
     expect(tick(50), WalkCue.turnOn);
   });
 
+  test('"Xoay tiếp." at most every 3 s, however fast the turn', () {
+    walk.onDanger(wall: true, sideOpen: false, canBypass: false);
+    WalkCue? tickAt(int ms) => walk.tick(
+      t0.add(Duration(milliseconds: ms)),
+      aheadOpen: false,
+      turning: true,
+      turnedDegrees: 60,
+    );
+    expect(tickAt(0), WalkCue.turnOn);
+    expect(tickAt(1000), isNull);
+    expect(tickAt(2900), isNull);
+    expect(tickAt(3000), WalkCue.turnOn);
+  });
+
   test('turning frees after 0.3 s', () {
     walk.onDanger(wall: true, sideOpen: false, canBypass: false);
     expect(

@@ -83,6 +83,10 @@ class WalkState {
   /// take the way back, walking the user back to the start, not the goal.
   static const maxSearchTurn = 100.0;
 
+  /// At most one "Xoay tiếp." per this, however fast the user turns: 50°
+  /// steps came about once a second on an iPhone, one line after another.
+  static const turnOnEvery = Duration(seconds: 3);
+
   /// Frames with the way ahead open that end the sidestep.
   static const centreClearFrames = 2;
 
@@ -117,6 +121,7 @@ class WalkState {
 
   WalkPhase _phase = WalkPhase.straight;
   DateTime? _openSince;
+  DateTime? _turnOnAt;
   DateTime? _phaseSince;
   HPos? _stepSide;
   int _frames = 0, _leftVotes = 0, _rightVotes = 0;
@@ -319,6 +324,7 @@ class WalkState {
       if (_firstSide == 0) {
         _firstSide = turned.sign;
         _openSince = null;
+        _turnOnAt = now; // no "Xoay tiếp." right after "Xoay ngược lại."
         return WalkCue.turnBack;
       }
       if (turned.sign != _firstSide) {
@@ -347,7 +353,10 @@ class WalkState {
       _openSince = null;
     }
 
-    if (turnedDegrees >= TurnTracker.stepDegrees) {
+    final last = _turnOnAt;
+    if (turnedDegrees >= TurnTracker.stepDegrees &&
+        (last == null || now.difference(last) >= turnOnEvery)) {
+      _turnOnAt = now;
       return WalkCue.turnOn;
     }
 
