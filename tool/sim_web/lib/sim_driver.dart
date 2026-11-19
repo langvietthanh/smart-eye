@@ -230,7 +230,7 @@ class SimDriver {
   void _heard(String text) {
     heard.add((at: _now().difference(_start), text: text));
     if (!auto || finished) return;
-    if (text.startsWith('Phía trước bị chặn')) {
+    if (text.contains('Phía trước bị chặn')) {
       act = Act.blocked; // stands still; going back is a choice it doesn't make
     } else if (text.contains('Bước ngang')) {
       act = text.contains('phải') ? Act.stepRight : Act.stepLeft;

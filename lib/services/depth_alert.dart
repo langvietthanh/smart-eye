@@ -69,8 +69,8 @@ String stepText(HPos side, {bool squeeze = false}) {
   return squeeze ? 'Khe hẹp. $step' : step;
 }
 
-/// No way on towards the goal on either side.
-const blockedText = 'Phía trước bị chặn.';
+/// No way on towards the goal on either side: stop turning, stand still.
+const blockedText = 'Dừng lại! Phía trước bị chặn.';
 
 /// Nối câu hai bên vào cảnh báo của YOLO, chỉ khi vật nằm ở giữa: với vật
 /// bên trái/phải, câu "bên ... trống" dễ mâu thuẫn với chính cảnh báo.

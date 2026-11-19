@@ -148,7 +148,7 @@ void main() {
     expect(said.where((t) => t.startsWith('Bước ngang')), isEmpty);
     expect(said.any((t) => t.contains(findWayTextForTest)), isTrue);
     expect(said, contains('Xoay ngược lại.'));
-    expect(said, contains('Phía trước bị chặn.'));
+    expect(said, contains('Dừng lại! Phía trước bị chặn.'));
     expect(d.act, Act.blocked);
     expect(d.z, greaterThan(2.0)); // still where it stopped, not back home
     expect(d.collisions, isEmpty);

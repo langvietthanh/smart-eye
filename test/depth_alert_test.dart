@@ -6,6 +6,7 @@ void main() {
   test('constants have exact text', () {
     expect(findWayText, 'Dừng lại! Xoay tìm lối.');
     expect(turnOnText, 'Xoay tiếp.');
+    expect(blockedText, 'Dừng lại! Phía trước bị chặn.');
   });
 
   group('depthAlertText', () {
