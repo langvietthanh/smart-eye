@@ -578,12 +578,13 @@ class _CameraScreenState extends State<CameraScreen>
     _blockage.watchAhead();
   }
 
-  /// Bypass step 2: "Dừng lại!" and start collecting frames. Like the
-  /// find-way line, it never sits silently in a bypass phase.
-  void _sayStop() {
-    final log = _eventLogger(TripEventType.danger, 'Dừng lại!');
+  /// Bypass step 2: "Dừng lại!" (or YOLO's line naming the obstacle) and
+  /// start collecting frames. Like the find-way line, it never sits silently
+  /// in a bypass phase.
+  void _sayStop({String text = 'Dừng lại!', Future<Uint8List?>? jpeg}) {
+    final log = _eventLogger(TripEventType.danger, text, jpeg: jpeg);
     final spoken = _speech.sayNow(
-      'Dừng lại!',
+      text,
       SpeechPriority.danger,
       subject: 'path:stop',
       onStart: () {
@@ -1212,6 +1213,21 @@ class _CameraScreenState extends State<CameraScreen>
     _lastAlertAt = now;
     final isDanger = alert.level == AlertLevel.danger;
     if (!isDanger && alert.pos == HPos.center && _aheadOpen()) return;
+    if (isDanger && _lidarObstacleAhead()) {
+      // Start the bypass with this line as the stop. Said on its own it
+      // stopped the user short of LiDAR's dangerEnter (1.0 m) with the way
+      // not open (obstacle within exitClearBeyond), so neither "Bước ngang"
+      // nor "Đi thẳng." ever came (simulator: chair ahead at 1.2 m).
+      switch (_walk.onDanger(wall: _wall, sideOpen: false, canBypass: true)) {
+        case DangerAction.findWay:
+          _sayFindWay(wall: _wall);
+        case DangerAction.stop:
+          _sayStop(text: alert.message, jpeg: _captureMemory(image, rotation));
+        case DangerAction.none:
+          break;
+      }
+      return;
+    }
     final priority = isDanger ? SpeechPriority.danger : SpeechPriority.caution;
     if (!_speech.canSay(priority, subject: alert.subject)) {
       return; // Đã báo / đang chờ đọc
@@ -1471,6 +1487,13 @@ class _CameraScreenState extends State<CameraScreen>
       _speech.alertActive;
 
   LidarReading? _freshLidarCenter() => _freshLidarScan()?.center;
+
+  /// LiDAR measures an obstacle ahead, near enough that the way is not open.
+  bool _lidarObstacleAhead() {
+    final ahead = _sightProblem == null ? _freshLidarScan()?.center : null;
+    return ahead is LidarObstacle &&
+        ahead.distance <= PathBlockage.exitClearBeyond;
+  }
 
   LidarScan? _freshLidarScan() =>
       _useLidar &&

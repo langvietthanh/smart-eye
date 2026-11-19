@@ -1,9 +1,12 @@
 import 'dart:async';
 import 'dart:math';
 
+import 'package:smart_eye/models/Recognition.dart';
 import 'package:smart_eye/models/scene_info.dart';
 import 'package:smart_eye/services/depth_alert.dart';
+import 'package:smart_eye/services/hazard_engine.dart';
 import 'package:smart_eye/services/lidar_analysis.dart';
+import 'package:smart_eye/services/object_tracker.dart';
 import 'package:smart_eye/services/path_blockage.dart';
 import 'package:smart_eye/services/speech_manager.dart';
 import 'package:smart_eye/services/tts_service.dart';
@@ -44,8 +47,8 @@ class _HeardTts implements TTSService {
 /// CameraScreen on feat/arkit-bypass-memory) on frames ray-cast from a
 /// virtual room, and moves a walker who follows what the app says.
 ///
-/// Not simulated: YOLO (no camera image), MiDaS, the sight monitor and
-/// navigation. Keep this in step with CameraScreen's LiDAR path.
+/// YOLO is simulated from the room's boxes ([detect]); not simulated: MiDaS,
+/// the sight monitor and navigation. Keep this in step with CameraScreen.
 class SimDriver {
   SimDriver({required TTSService tts, DateTime Function()? now, Preset? preset})
     : _now = now ?? DateTime.now,
@@ -78,6 +81,10 @@ class SimDriver {
   final SideLatch _sideLatch = SideLatch();
   final WallLatch _wallLatch = WallLatch();
   final TurnTracker _turns = TurnTracker();
+  final ObjectTracker _tracker = ObjectTracker();
+  final HazardEngine _engine = HazardEngine();
+  SceneAssessment scene = SceneAssessment.empty;
+  List<Recognition> lastDetections = const [];
   static const _noSides = (left: SideState.unknown, right: SideState.unknown);
   ({SideState left, SideState right}) _sides = _noSides;
   int _sidesAtMs = -1;
@@ -132,6 +139,9 @@ class SimDriver {
     _sideLatch.reset();
     _wallLatch.reset();
     _turns.reset();
+    _tracker.reset();
+    scene = SceneAssessment.empty;
+    lastDetections = const [];
     _sides = _noSides;
     _sidesAtMs = -1;
     _wall = false;
@@ -268,6 +278,74 @@ class SimDriver {
     _handleWalkCue(walk.onScan(now, scan), now);
     _evaluateBlockage(now);
     _onLidarReading(scan.center, now);
+    _detectTick(now);
+  }
+
+  /// CameraScreen._runPipeline on a simulated YOLO frame (one per LiDAR
+  /// frame; the real detector runs at a similar rate).
+  void _detectTick(DateTime now) {
+    lastDetections = detect(preset.boxes, x, z, yaw);
+    final tracks = _tracker.update(lastDetections, cameraFrame, now);
+    final next = _engine.assess(tracks, cameraFrame, lidar: lastScan);
+    blockage.onDetections(now, next.columnLoad);
+    _evaluateBlockage(now);
+    speech.retainAlerts(
+      subject: next.alert?.subject,
+      text: next.alert?.message,
+      priority: switch (next.alert?.level) {
+        AlertLevel.danger => SpeechPriority.danger,
+        AlertLevel.caution => SpeechPriority.caution,
+        _ => null,
+      },
+    );
+    scene = next;
+    final alert = next.alert;
+    if (alert != null) _handleAlert(alert, now);
+  }
+
+  /// CameraScreen._handleAlert. With LiDAR no side clause: the side is
+  /// picked after stopping ("Bước ngang sang …").
+  void _handleAlert(HazardAlert alert, DateTime now) {
+    if (walk.phase != WalkPhase.straight) return;
+    final isDanger = alert.level == AlertLevel.danger;
+    if (!isDanger &&
+        alert.pos == HPos.center &&
+        blockage.aheadOpenSettled(now)) {
+      return;
+    }
+    final ahead = lastScan?.center;
+    if (isDanger &&
+        ahead is LidarObstacle &&
+        ahead.distance <= PathBlockage.exitClearBeyond) {
+      switch (walk.onDanger(wall: _wall, sideOpen: false, canBypass: true)) {
+        case DangerAction.findWay:
+          _sayFindWay(wall: _wall);
+        case DangerAction.stop:
+          _sayStop(text: alert.message);
+        case DangerAction.none:
+          break;
+      }
+      return;
+    }
+    final priority = isDanger ? SpeechPriority.danger : SpeechPriority.caution;
+    if (!speech.canSay(priority, subject: alert.subject)) return;
+    if (alert.pos == HPos.center) blockage.watchAhead();
+    speech.say(
+      alert.message,
+      priority,
+      subject: alert.subject,
+      onStart: () {
+        if (!blockage.aheadOpenSettled(_now())) _frontWarned = true;
+      },
+    );
+  }
+
+  /// What YOLO says now, for the side panel.
+  String get yoloStatus {
+    final alert = scene.alert;
+    if (alert != null) return alert.message;
+    final n = lastDetections.length;
+    return n == 0 ? 'không thấy vật' : '$n vật, không cảnh báo';
   }
 
   void _evaluateBlockage(DateTime now) {
@@ -310,7 +388,7 @@ class SimDriver {
         speech.sayNow('Đi thẳng.', SpeechPriority.danger, subject: 'path:step');
         _straightAt = now;
       case WalkCue.goStraight:
-        speech.dropSubject('path:turn');
+        // As on the phone: "Xoay tiếp." finishes first.
         speech.say(
           'Đi thẳng.',
           SpeechPriority.guidance,
@@ -351,12 +429,8 @@ class SimDriver {
     blockage.watchAhead();
   }
 
-  void _sayStop() {
-    if (!speech.sayNow(
-      'Dừng lại!',
-      SpeechPriority.danger,
-      subject: 'path:stop',
-    )) {
+  void _sayStop({String text = 'Dừng lại!'}) {
+    if (!speech.sayNow(text, SpeechPriority.danger, subject: 'path:stop')) {
       walk.reset();
     }
   }
@@ -449,7 +523,10 @@ class SimDriver {
       }
     }
     // With LiDAR the side is picked after stopping ("Bước ngang sang …").
-    final text = depthAlertText(depthLevel: level);
+    final text = depthAlertText(
+      depthLevel: level,
+      detectorLevel: scene.alert?.level,
+    );
     if (text == null) return;
     if (!isDanger && blockage.aheadOpenSettled(now)) return;
     final priority = isDanger ? SpeechPriority.danger : SpeechPriority.caution;

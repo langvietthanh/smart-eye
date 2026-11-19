@@ -51,7 +51,7 @@ Future<SimDriver> run(WidgetTester tester, Preset p, {int seconds = 45}) async {
     d.advance(const Duration(milliseconds: 50));
   }
   // Let the last line and the speech manager's timers finish.
-  await tester.pump(const Duration(seconds: 6));
+  await tester.pump(const Duration(seconds: 10));
   // ignore: avoid_print
   print(
     '${p.name}: z=${d.z.toStringAsFixed(2)} x=${d.x.toStringAsFixed(2)} '
@@ -86,7 +86,8 @@ void main() {
     addTearDown(() => Phone.pitchDeg = 15);
     final d = await run(tester, named('Ghế dính'));
     final said = d.heard.map((h) => h.text).toList();
-    expect(said, contains('Dừng lại!'));
+    // The stop is LiDAR's "Dừng lại!" or YOLO's, naming the chair.
+    expect(said.where((t) => t.startsWith('Dừng lại!')), isNotEmpty);
     expect(said.where((t) => t.startsWith('Bước ngang')).toList(), [
       'Bước ngang sang phải.',
       'Bước ngang sang trái.',

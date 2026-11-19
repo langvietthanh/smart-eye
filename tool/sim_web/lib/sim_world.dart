@@ -1,7 +1,10 @@
 import 'dart:math';
 import 'dart:typed_data';
+import 'dart:ui';
 
+import 'package:smart_eye/models/Recognition.dart';
 import 'package:smart_eye/services/lidar_analysis.dart';
+import 'package:smart_eye/utils/label_catalog.dart';
 
 /// What a box stands for: only colours and labels depend on it.
 enum Kind { desk, chair, person, bag, wall, pillar }
@@ -39,6 +42,12 @@ class Box {
       if (tMin > tMax) return null;
     }
     return tMin > 0 ? tMin : null;
+  }
+
+  /// Beyond [Phone.range]: too small for YOLO in a real image.
+  static bool _far(Box b, double x, double z) {
+    final dx = x.clamp(b.x0, b.x1) - x, dz = z.clamp(b.z0, b.z1) - z;
+    return dx * dx + dz * dz > Phone.range * Phone.range;
   }
 
   /// Footprint overlaps a body of [radius] at (x, z); low things (< 15 cm,
@@ -245,4 +254,76 @@ LidarDepthFrame castFrame(List<Box> boxes, double x, double z, double yaw) {
     // Sim world (x right, z forward) → ARKit world (x right, -z forward).
     pose: LidarPose(x: x, z: -z, headX: sin(yaw), headZ: -cos(yaw)),
   );
+}
+
+/// COCO labels YOLO gives these kinds; walls, pillars and bags (a backpack
+/// is not an obstacle class) are not named.
+const yoloLabels = {
+  Kind.chair: 'chair',
+  Kind.desk: 'dining table',
+  Kind.person: 'person',
+};
+
+/// The camera image YOLO sees: portrait, the depth frame's lens turned
+/// upright, so a box in it lines up with the depth view.
+const cameraFrame = Size(Phone.h * 1.0, Phone.w * 1.0);
+
+/// What YOLO would box from (x, z) facing [yaw]: each named box projected
+/// into [cameraFrame]. No occlusion (YOLO also boxes a chair half hidden by
+/// a desk); boxes with a corner behind the camera are left out.
+List<Recognition> detect(List<Box> boxes, double x, double z, double yaw) {
+  final p = Phone.pitchDeg * pi / 180;
+  List<double> yawed(List<double> v) => [
+    v[0] * cos(yaw) + v[2] * sin(yaw),
+    v[1],
+    -v[0] * sin(yaw) + v[2] * cos(yaw),
+  ];
+  final look = yawed([0.0, -sin(p), cos(p)]);
+  final right = yawed([1.0, 0.0, 0.0]);
+  final up = yawed([0.0, cos(p), sin(p)]);
+  double dot(List<double> a, List<double> b) =>
+      a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+  final out = <Recognition>[];
+  for (final b in boxes) {
+    final label = yoloLabels[b.kind];
+    if (label == null) continue;
+    var l = double.infinity, t = double.infinity;
+    var r = double.negativeInfinity, btm = double.negativeInfinity;
+    var behind = false;
+    for (final cx in [b.x0, b.x1]) {
+      for (final cy in [b.y0, b.y1]) {
+        for (final cz in [b.z0, b.z1]) {
+          final d = [cx - x, cy - Phone.height, cz - z];
+          final depth = dot(d, look);
+          if (depth < 0.1) behind = true;
+          if (behind) continue;
+          final u = dot(d, right) / depth * Phone.focal + cameraFrame.width / 2;
+          final v = -dot(d, up) / depth * Phone.focal + cameraFrame.height / 2;
+          l = min(l, u);
+          r = max(r, u);
+          t = min(t, v);
+          btm = max(btm, v);
+        }
+      }
+    }
+    if (behind || Box._far(b, x, z)) continue;
+    final rect = Rect.fromLTRB(
+      l,
+      t,
+      r,
+      btm,
+    ).intersect(Offset.zero & cameraFrame);
+    // A sliver at the image edge is not recognised.
+    if (rect.width < 4 || rect.height < 4) continue;
+    out.add(
+      Recognition(
+        b.kind.index,
+        labelVi[label] ?? label,
+        0.9,
+        rect,
+        labelEn: label,
+      ),
+    );
+  }
+  return out;
 }

@@ -409,9 +409,12 @@ class _SidePanel extends StatelessWidget {
                 SizedBox(
                   width: 96,
                   height: 128,
-                  child: depth == null
-                      ? const ColoredBox(color: Colors.black)
-                      : RawImage(image: depth, fit: BoxFit.fill),
+                  child: CustomPaint(
+                    foregroundPainter: _YoloPainter(sim),
+                    child: depth == null
+                        ? const ColoredBox(color: Colors.black)
+                        : RawImage(image: depth, fit: BoxFit.fill),
+                  ),
                 ),
                 const SizedBox(width: 12),
                 Expanded(
@@ -429,6 +432,7 @@ class _SidePanel extends StatelessWidget {
                           style: const TextStyle(fontWeight: FontWeight.w700),
                         ),
                         Text('LiDAR: ${sim.lidarStatus}'),
+                        Text('YOLO: ${sim.yoloStatus}'),
                         Text('Hướng: ${sim.blockedLabel}'),
                         Text('Người ảo: ${_act(sim.act)}'),
                         Text(
@@ -439,7 +443,8 @@ class _SidePanel extends StatelessWidget {
                           ),
                         ),
                         const Text(
-                          'Ảnh: độ sâu LiDAR ảo (gần = đỏ)',
+                          'Ảnh: độ sâu LiDAR ảo (gần = đỏ), khung YOLO, '
+                          'vạch chia 3 cột trái/giữa/phải',
                           style: TextStyle(color: _muted, fontSize: 11),
                         ),
                       ],
@@ -594,4 +599,40 @@ class _MapPainter extends CustomPainter {
 
   @override
   bool shouldRepaint(covariant _MapPainter old) => true;
+}
+
+/// YOLO boxes and the thirds that decide left / centre / right, over the
+/// depth view (same lens, so they line up).
+class _YoloPainter extends CustomPainter {
+  _YoloPainter(this.sim);
+  final SimDriver sim;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final k = size.width / cameraFrame.width;
+    final thirds = Paint()
+      ..color = Colors.white38
+      ..strokeWidth = 1;
+    for (final f in [1 / 3, 2 / 3]) {
+      canvas.drawLine(
+        Offset(size.width * f, 0),
+        Offset(size.width * f, size.height),
+        thirds,
+      );
+    }
+    final box = Paint()
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 1.5
+      ..color = Colors.lightGreenAccent;
+    for (final d in sim.lastDetections) {
+      final r = d.location;
+      canvas.drawRect(
+        Rect.fromLTRB(r.left * k, r.top * k, r.right * k, r.bottom * k),
+        box,
+      );
+    }
+  }
+
+  @override
+  bool shouldRepaint(_YoloPainter old) => true;
 }
